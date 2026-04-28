@@ -3,7 +3,6 @@
 import { useState, useTransition } from "react";
 
 import { Button } from "@/components/ui/Button";
-import { publicEnv } from "@/lib/env";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
 export function GoogleSignInButton({ next }: { next?: string }) {
@@ -14,7 +13,10 @@ export function GoogleSignInButton({ next }: { next?: string }) {
     setError(null);
     startTransition(async () => {
       const supabase = createSupabaseBrowserClient();
-      const redirectTo = new URL("/auth/callback", publicEnv.NEXT_PUBLIC_SITE_URL);
+      // window.location.origin matches whatever URL the user is actually on
+      // (localhost, preview deployment, production), so OAuth always returns
+      // to the same deployment that initiated it.
+      const redirectTo = new URL("/auth/callback", window.location.origin);
       if (next) redirectTo.searchParams.set("next", next);
 
       const { error: oauthError } = await supabase.auth.signInWithOAuth({
