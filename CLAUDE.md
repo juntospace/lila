@@ -73,10 +73,10 @@ This file is the canonical reference for Claude Code (and any AI assistant) work
 │   ├── notifications/            # Email (Resend), WhatsApp, Slack adapters
 │   └── utils/
 ├── emails/                       # React Email templates
-├── db/
-│   ├── migrations/               # SQL migrations (Supabase CLI)
-│   ├── seed/                     # Seed scripts for local + staging
-│   └── policies/                 # RLS policies, one file per table
+├── supabase/                     # Supabase CLI workspace (config + migrations + seed)
+│   ├── config.toml               # Local Supabase stack config
+│   ├── migrations/               # Forward-only SQL migrations (table + RLS in one file)
+│   └── seed.sql                  # Local + initial seed (allowlist, sample data)
 ├── public/                       # Static assets
 ├── docs/
 │   ├── api/                      # OpenAPI spec, partner integration guide
@@ -313,13 +313,14 @@ The public API is a **first-class product**, not an afterthought. Treat any chan
 ## 8. Data Layer (Supabase / PostgreSQL)
 
 ### 8.1 Migrations
-- Every schema change is a SQL migration in `db/migrations/`, named `YYYYMMDDHHMM_short_description.sql`.
+- Every schema change is a SQL migration in `supabase/migrations/`, named `YYYYMMDDHHMMSS_short_description.sql` (Supabase CLI convention — 14-digit timestamp).
 - Migrations are **forward-only**. To revert, write a new migration.
-- Apply via `supabase db push` in CI; never edit the schema in the dashboard for tracked environments.
+- Apply via `pnpm db:push` (wraps `supabase db push`) in CI and locally; never edit the schema in the dashboard for tracked environments.
+- Each migration includes the table **and its RLS policies** in the same file so a table never lands without protection. (The CLI applies one file at a time, in order, and we want creation + policy as an atomic step.)
 
 ### 8.2 RLS
 - **Every table has RLS enabled.** No exceptions. A migration that creates a table without RLS fails review.
-- Policies live in `db/policies/<table>.sql`, one file per table, easy to diff.
+- RLS policies live alongside their table in the same `supabase/migrations/*.sql` file. A subsequent policy change ships as a new migration.
 - Service-role key is used **only** in server code, never exposed to the browser or to API consumers.
 
 ### 8.3 Schema conventions

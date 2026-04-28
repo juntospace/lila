@@ -1,8 +1,0 @@
--- RLS for operator_allowlist.
--- Read access for any authenticated user is intentionally NOT granted —
--- the allowlist is consulted only by RLS on user_profiles inserts and by
--- service-role admin tooling. No anon, no authenticated SELECT.
---
--- (No policies created here. With RLS enabled and no policies, all access
--- via the anon/authenticated roles is denied. The service role bypasses
--- RLS for admin-side allowlist management.)

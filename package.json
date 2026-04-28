@@ -7,7 +7,12 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "db:link": "supabase link",
+    "db:push": "supabase db push",
+    "db:reset": "supabase db reset",
+    "db:diff": "supabase db diff -f",
+    "db:types": "supabase gen types typescript --linked --schema public > lib/supabase/types.generated.ts"
   },
   "dependencies": {
     "@radix-ui/react-label": "^2.1.8",
