@@ -4,5 +4,8 @@
 insert into public.operator_allowlist (email, role)
 values
   ('antonio@somosjunto.com', 'admin'),
+  ('ronel@somosjunto.com',   'admin'),
+  ('darwins@somosjunto.com', 'admin'),
+  ('cesar@somosjunto.com',   'admin'),
   ('ajromeroesclusa@gmail.com', 'admin')
 on conflict (email) do nothing;
