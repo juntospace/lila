@@ -12,7 +12,7 @@
     "db:push": "supabase db push",
     "db:reset": "supabase db reset",
     "db:diff": "supabase db diff -f",
-    "db:types": "supabase gen types typescript --linked --schema public > lib/supabase/types.generated.ts"
+    "db:types": "supabase gen types typescript --linked --schema public | sed '/^Initialising/d' > lib/supabase/types.generated.ts"
   },
   "dependencies": {
     "@radix-ui/react-label": "^2.1.8",

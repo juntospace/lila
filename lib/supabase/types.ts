@@ -1,73 +1,17 @@
-// Generated types live here once `pnpm db:types` is wired up.
-// Until then, hand-typed shapes for the tables we depend on.
+import type { Database, Enums } from "@/lib/supabase/types.generated";
 
-export type Database = {
-  public: {
-    Views: Record<string, never>;
-    Functions: Record<string, never>;
-    Enums: {
-      operator_role: OperatorRole;
-      operator_language: OperatorLanguage;
-      operator_status: OperatorStatus;
-    };
-    CompositeTypes: Record<string, never>;
-    Tables: {
-      user_profiles: {
-        Row: {
-          id: string;
-          email: string;
-          full_name: string | null;
-          phone: string | null;
-          role: OperatorRole;
-          language: OperatorLanguage;
-          notification_prefs: NotificationPrefs;
-          status: OperatorStatus;
-          created_at: string;
-          updated_at: string;
-        };
-        Insert: {
-          id: string;
-          email: string;
-          full_name?: string | null;
-          phone?: string | null;
-          role?: OperatorRole;
-          language?: OperatorLanguage;
-          notification_prefs?: NotificationPrefs;
-          status?: OperatorStatus;
-        };
-        Update: Partial<{
-          full_name: string | null;
-          phone: string | null;
-          role: OperatorRole;
-          language: OperatorLanguage;
-          notification_prefs: NotificationPrefs;
-          status: OperatorStatus;
-        }>;
-        Relationships: [];
-      };
-      operator_allowlist: {
-        Row: {
-          email: string;
-          role: OperatorRole;
-          invited_by: string | null;
-          created_at: string;
-        };
-        Insert: {
-          email: string;
-          role?: OperatorRole;
-          invited_by?: string | null;
-        };
-        Update: Partial<{ role: OperatorRole }>;
-        Relationships: [];
-      };
-    };
-  };
-};
+export type { Database } from "@/lib/supabase/types.generated";
 
-export type OperatorRole = "agent" | "loan_officer" | "risk_analyst" | "admin";
-export type OperatorLanguage = "en" | "es";
-export type OperatorStatus = "active" | "disabled";
+export type OperatorRole = Enums<"operator_role">;
+export type OperatorLanguage = Enums<"operator_language">;
+export type OperatorStatus = Enums<"operator_status">;
 
+/**
+ * Shape contract for the `user_profiles.notification_prefs` jsonb column.
+ * The DB stores it as raw json; this is the row-level invariant the app
+ * reads/writes through. Add a key here, add a default below, ship a migration
+ * that backfills existing rows.
+ */
 export type NotificationPrefs = {
   email_application_assigned: boolean;
   email_decision_required: boolean;
@@ -81,3 +25,9 @@ export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {
   email_daily_digest: false,
   whatsapp_urgent: false,
 };
+
+/** Concrete row type with notification_prefs narrowed to NotificationPrefs. */
+export type UserProfileRow = Omit<
+  Database["public"]["Tables"]["user_profiles"]["Row"],
+  "notification_prefs"
+> & { notification_prefs: NotificationPrefs };

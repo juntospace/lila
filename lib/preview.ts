@@ -1,6 +1,6 @@
 import {
   DEFAULT_NOTIFICATION_PREFS,
-  type Database,
+  type UserProfileRow,
 } from "@/lib/supabase/types";
 import type { OperatorSession } from "@/lib/auth/guard";
 
@@ -13,9 +13,7 @@ export function isPreviewMode() {
   return process.env.LILA_PREVIEW_MODE === "1";
 }
 
-type Profile = Database["public"]["Tables"]["user_profiles"]["Row"];
-
-export const PREVIEW_PROFILE: Profile = {
+export const PREVIEW_PROFILE: UserProfileRow = {
   id: "00000000-0000-0000-0000-000000000000",
   email: "preview@junto.app",
   full_name: "Vero Preview",

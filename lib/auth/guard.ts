@@ -3,16 +3,21 @@ import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import {
   DEFAULT_NOTIFICATION_PREFS,
-  type Database,
+  type NotificationPrefs,
+  type UserProfileRow,
 } from "@/lib/supabase/types";
-
-type UserProfile = Database["public"]["Tables"]["user_profiles"]["Row"];
 
 export type OperatorSession = {
   userId: string;
   email: string;
-  profile: UserProfile;
+  profile: UserProfileRow;
 };
+
+function narrowPrefs(value: unknown): NotificationPrefs {
+  // Defensive: if a row predates a key, fall back to the current default.
+  const v = (value ?? {}) as Partial<NotificationPrefs>;
+  return { ...DEFAULT_NOTIFICATION_PREFS, ...v };
+}
 
 /**
  * Guard for any operator-only page. Redirects to /login if not authenticated,
@@ -60,7 +65,11 @@ export async function requireOperator(): Promise<OperatorSession> {
       redirect("/login?error=not_allowlisted");
     }
 
-    return { userId: user.id, email: user.email, profile: created };
+    return {
+      userId: user.id,
+      email: user.email,
+      profile: { ...created, notification_prefs: narrowPrefs(created.notification_prefs) },
+    };
   }
 
   if (profile.status === "disabled") {
@@ -68,5 +77,9 @@ export async function requireOperator(): Promise<OperatorSession> {
     redirect("/login?error=disabled");
   }
 
-  return { userId: user.id, email: user.email, profile };
+  return {
+    userId: user.id,
+    email: user.email,
+    profile: { ...profile, notification_prefs: narrowPrefs(profile.notification_prefs) },
+  };
 }

@@ -10,9 +10,9 @@ import {
   updateProfile,
   type ProfileActionState,
 } from "@/app/profile/actions";
-import type { Database, NotificationPrefs } from "@/lib/supabase/types";
+import type { NotificationPrefs, UserProfileRow } from "@/lib/supabase/types";
 
-type Profile = Database["public"]["Tables"]["user_profiles"]["Row"];
+type Profile = UserProfileRow;
 
 const NOTIFICATIONS: Array<{
   name: keyof NotificationPrefs;
