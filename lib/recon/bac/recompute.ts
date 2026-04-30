@@ -1,18 +1,32 @@
 // Account-wide recompute: pair every unpaired DA in the account, then
-// reconcile each PR's state against (a) link presence and (b) file-clock
-// cutoff. Same logic for DAs (link present → rejected, otherwise pending_pair).
+// reconcile each PR/DA's state against link presence + file-clock cutoff.
 //
-// Used by:
-//   - The ingest pipeline at the end of every upload (replaces the previous
-//     "pair only newly-inserted DAs" loop, which depended on the truncated
-//     upsert response).
-//   - A standalone "Recompute" admin action so ops can heal bad state in
-//     place without re-uploading.
-//   - The "Delete upload" action, after the file's rows + links are wiped.
+// Used by the ingest pipeline at the end of every upload, by the standalone
+// "Recompute" admin action, and by deleteUpload after wiping a file.
 //
-// Idempotency: every step is safe to rerun. The pairing insert handles
-// PK conflicts as "already paired"; state UPDATEs only fire when the row
-// changes; the file-clock pass uses the current max(posted_at).
+// Implementation note — why we DON'T rely on PostgREST embedded relations:
+//
+// Earlier versions of this code used `recon_links!fk(...)` embeds to check
+// "is this PR/DA already paired". That looked elegant but had two problems:
+//
+//   1. PostgREST returns embedded relations as a single OBJECT (not array)
+//      for 1-to-1 joins — both recon_links FKs are 1-to-1 here (pr_txn_id
+//      PK, da_txn_id UNIQUE). Reading .length on an object is undefined,
+//      which silently treats every paired row as unpaired (PR #7 was a fix
+//      for that exact case).
+//
+//   2. Even after handling object-vs-array, the embed reflects only the
+//      committed state at query time. Across many sequential HTTP requests
+//      in a tight loop (one per DA), there are corner cases — connection
+//      pooling, transaction visibility — where the just-inserted link
+//      isn't visible yet, and the next iteration tries to pair against an
+//      already-paired PR.
+//
+// We pre-fetch all recon_links for the account into in-memory Sets at the
+// start of recompute and use those Sets as the sole source of truth for
+// pairing eligibility. After each successful link insert we mutate the
+// Sets so subsequent iterations see the new link immediately, with no
+// dependency on embed shape or read-after-write timing.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -22,22 +36,6 @@ import { parseDvtoDescription } from "./parser";
 const SUPABASE_PAGE_LIMIT = 1000;
 const SUPABASE_PAGE_SAFETY_CAP = 200_000;
 const ID_CHUNK = 200;
-
-// PostgREST returns embedded relations as a single object (not an array)
-// when the join is one-to-one — i.e., when the FK column has a UNIQUE
-// or PRIMARY KEY constraint. Both recon_links FKs (pr_txn_id PK,
-// da_txn_id UNIQUE) hit that case, so the embed comes back as an object
-// or null, never as an array.
-//
-// Treating it as an array (and reading .length) silently returns
-// `undefined`, which compares as false against any number — so a paired
-// row would be reported as unlinked, and recompute would never mark
-// anything as 'rejected'. This helper normalizes both shapes.
-function hasEmbeddedRow(rel: unknown): boolean {
-  if (rel == null) return false;
-  if (Array.isArray(rel)) return rel.length > 0;
-  return true;
-}
 
 export interface RecomputeStats {
   reversalsPaired: number;
@@ -59,27 +57,34 @@ export async function recomputeAccount(
   // 0. Self-healing reparse: re-run parseDvtoDescription against any DA
   //    with a null return_code. The parser regex has been broadened over
   //    time (RCZO support, looser separator), so previously unparseable
-  //    descriptions might extract cleanly now. Running this before
-  //    pairing means previously-stranded DAs get a payer name and
-  //    become pairable in the same recompute pass.
+  //    descriptions might extract cleanly now.
   const dasReparsed = await reparseUnparsedDAs(supabase, accountId);
 
-  // 1. Pair every unpaired DA in the account. We discover unpaired DAs by
-  //    paginating through recon_transactions and excluding any whose id is
-  //    already a da_txn_id in recon_links — relying solely on the upsert
-  //    response was the bug ops hit (response capped at 1000).
-  const unpairedDAs = await fetchUnpairedDAs(supabase, accountId);
+  // 1. Pre-fetch every existing recon_links row for this account into
+  //    in-memory Sets. These are mutated as we pair more DAs and used by
+  //    the candidates filter, the unpaired-DA discovery, and the final
+  //    state recompute — single source of truth.
+  const { linkedPrIds, linkedDaIds } = await fetchLinkedTxnIds(supabase, accountId);
+
+  // 2. Pair every unpaired DA. tryPairDA mutates the Sets on success so
+  //    the next iteration's eligibility check sees the new link.
+  const unpairedDAs = await fetchUnpairedDAs(supabase, accountId, linkedDaIds);
   let reversalsPaired = 0;
   let reversalsUnpaired = 0;
   for (const da of unpairedDAs) {
-    const outcome = await tryPairDA(supabase, accountId, da, uploadedBy ?? null);
+    const outcome = await tryPairDA(
+      supabase,
+      accountId,
+      da,
+      uploadedBy ?? null,
+      linkedPrIds,
+      linkedDaIds,
+    );
     if (outcome === "paired") reversalsPaired++;
     else reversalsUnpaired++;
   }
 
-  // 2. Re-evaluate state of every PR + DA based on (link presence,
-  //    confirmable_after vs cutoff). This corrects PRs that were wrongly
-  //    auto-confirmed when the upsert response missed their would-be DA.
+  // 3. File-clock cutoff = max posted_at across the account.
   const { data: maxRow } = await supabase
     .from("recon_transactions")
     .select("posted_at")
@@ -87,11 +92,11 @@ export async function recomputeAccount(
     .order("posted_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-
   const cutoff = maxRow?.posted_at ? fileClockCutoff(maxRow.posted_at as string) : null;
 
-  const prStats = await recomputePRStates(supabase, accountId, cutoff);
-  const daStats = await recomputeDAStates(supabase, accountId);
+  // 4. Recompute PR + DA states from the Sets.
+  const prStats = await recomputePRStates(supabase, accountId, cutoff, linkedPrIds);
+  const daStats = await recomputeDAStates(supabase, accountId, linkedDaIds);
 
   return {
     reversalsPaired,
@@ -103,6 +108,17 @@ export async function recomputeAccount(
     daPendingPair: daStats.pendingPair,
     dasReparsed,
   };
+}
+
+// =============================================================
+// Internals
+// =============================================================
+
+interface DAForPairing {
+  id: string;
+  posted_at: string;
+  debit_minor: string;
+  payer_name_raw: string | null;
 }
 
 async function reparseUnparsedDAs(
@@ -129,9 +145,8 @@ async function reparseUnparsedDAs(
         .from("recon_transactions")
         .update({
           return_code: parsed.returnCode,
-          // Preserve a previously-stored payer name if the regex captured
-          // less than what's already there.
-          payer_name_raw: (row.payer_name_raw as string | null) ?? parsed.payerNameRaw ?? null,
+          payer_name_raw:
+            (row.payer_name_raw as string | null) ?? parsed.payerNameRaw ?? null,
         })
         .eq("id", row.id);
       if (upErr) throw upErr;
@@ -143,29 +158,67 @@ async function reparseUnparsedDAs(
   return updated;
 }
 
-// =============================================================
-// Internals
-// =============================================================
+/**
+ * Walk every recon_links row whose PR or DA lives in this account and build
+ * Sets of their ids. We can't filter recon_links by account_id directly
+ * (no such column), so we first list the account's txn ids and then chunk
+ * a join via .in() against pr_txn_id and da_txn_id.
+ */
+async function fetchLinkedTxnIds(
+  supabase: SupabaseClient,
+  accountId: string,
+): Promise<{ linkedPrIds: Set<string>; linkedDaIds: Set<string> }> {
+  const linkedPrIds = new Set<string>();
+  const linkedDaIds = new Set<string>();
 
-interface DAForPairing {
-  id: string;
-  posted_at: string;
-  debit_minor: string;
-  payer_name_raw: string | null;
+  const txnIds: string[] = [];
+  let cursor = 0;
+  while (cursor < SUPABASE_PAGE_SAFETY_CAP) {
+    const { data, error } = await supabase
+      .from("recon_transactions")
+      .select("id")
+      .eq("account_id", accountId)
+      .order("id", { ascending: true })
+      .range(cursor, cursor + SUPABASE_PAGE_LIMIT - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    for (const r of data) txnIds.push(r.id as string);
+    if (data.length < SUPABASE_PAGE_LIMIT) break;
+    cursor += SUPABASE_PAGE_LIMIT;
+  }
+
+  // Two passes (pr_txn_id and da_txn_id) so we catch links where this
+  // account owns the PR side, the DA side, or both. Cross-account links
+  // shouldn't normally exist, but the explicit pass is defensive.
+  for (const side of ["pr_txn_id", "da_txn_id"] as const) {
+    for (let i = 0; i < txnIds.length; i += ID_CHUNK) {
+      const chunk = txnIds.slice(i, i + ID_CHUNK);
+      const { data, error } = await supabase
+        .from("recon_links")
+        .select("pr_txn_id, da_txn_id")
+        .in(side, chunk);
+      if (error) throw error;
+      for (const l of data ?? []) {
+        linkedPrIds.add(l.pr_txn_id as string);
+        linkedDaIds.add(l.da_txn_id as string);
+      }
+    }
+  }
+
+  return { linkedPrIds, linkedDaIds };
 }
 
 async function fetchUnpairedDAs(
   supabase: SupabaseClient,
   accountId: string,
+  linkedDaIds: Set<string>,
 ): Promise<DAForPairing[]> {
   const all: DAForPairing[] = [];
   let cursor = 0;
   while (cursor < SUPABASE_PAGE_SAFETY_CAP) {
     const { data, error } = await supabase
       .from("recon_transactions")
-      .select(
-        "id, posted_at, debit_minor, payer_name_raw, recon_links!recon_links_da_txn_id_fkey(da_txn_id)",
-      )
+      .select("id, posted_at, debit_minor, payer_name_raw")
       .eq("account_id", accountId)
       .eq("code", "DA")
       .order("id", { ascending: true })
@@ -173,7 +226,7 @@ async function fetchUnpairedDAs(
     if (error) throw error;
     if (!data || data.length === 0) break;
     for (const row of data) {
-      if (!hasEmbeddedRow(row.recon_links)) {
+      if (!linkedDaIds.has(row.id as string)) {
         all.push({
           id: row.id as string,
           posted_at: row.posted_at as string,
@@ -193,26 +246,32 @@ async function tryPairDA(
   accountId: string,
   da: DAForPairing,
   uploadedBy: string | null,
+  linkedPrIds: Set<string>,
+  linkedDaIds: Set<string>,
 ): Promise<"paired" | "unpaired"> {
   if (!da.payer_name_raw) return "unpaired";
   const daAmount = BigInt(da.debit_minor);
 
-  // Candidates are PRs in this account with the same credit amount and
-  // pending state. We also pull link presence so we can skip already-paired
-  // ones in JS (ON CONFLICT-style protection comes from the DB anyway).
+  // Candidates: every PR in this account with the same credit amount.
+  // We add a deterministic secondary sort on id so repeated runs over the
+  // same data make the same pairings (matters when many same-day same-name
+  // PRs share an amount, e.g. Karla 10/10/10).
   const { data: candidates, error } = await supabase
     .from("recon_transactions")
-    .select(
-      "id, posted_at, credit_minor, description, recon_links!recon_links_pr_txn_id_fkey(pr_txn_id)",
-    )
+    .select("id, posted_at, credit_minor, description")
     .eq("account_id", accountId)
     .eq("code", "PR")
     .eq("credit_minor", daAmount.toString())
-    .order("posted_at", { ascending: true });
+    .order("posted_at", { ascending: true })
+    .order("id", { ascending: true });
   if (error) throw error;
 
+  // Eligible = not already paired in our in-memory Set. The Set is mutated
+  // synchronously after every successful link insert, so the next DA
+  // iteration sees the latest pairing without depending on PostgREST
+  // embed shape or read-after-write visibility.
   const eligible: PRCandidate[] = (candidates ?? [])
-    .filter((c) => !hasEmbeddedRow(c.recon_links))
+    .filter((c) => !linkedPrIds.has(c.id as string))
     .map((c, idx) => ({
       id: c.id as string,
       postedAt: c.posted_at as string,
@@ -238,9 +297,14 @@ async function tryPairDA(
     matched_by: uploadedBy,
   });
   if (linkErr) {
-    if (linkErr.code === "23505") return "unpaired"; // race lost; somebody else paired
+    // 23505 = unique violation. The DB is the ultimate source of truth, so
+    // if we lost a race (or our Set was stale), back out cleanly.
+    if (linkErr.code === "23505") return "unpaired";
     throw linkErr;
   }
+
+  linkedPrIds.add(match.id);
+  linkedDaIds.add(da.id);
   return "paired";
 }
 
@@ -248,15 +312,18 @@ async function recomputePRStates(
   supabase: SupabaseClient,
   accountId: string,
   cutoff: string | null,
+  linkedPrIds: Set<string>,
 ): Promise<{ confirmed: number; rejected: number; pending: number }> {
-  const buckets = { confirmed: [] as string[], rejected: [] as string[], pending: [] as string[] };
+  const buckets = {
+    confirmed: [] as string[],
+    rejected: [] as string[],
+    pending: [] as string[],
+  };
   let cursor = 0;
   while (cursor < SUPABASE_PAGE_SAFETY_CAP) {
     const { data, error } = await supabase
       .from("recon_transactions")
-      .select(
-        "id, confirmable_after, recon_links!recon_links_pr_txn_id_fkey(pr_txn_id)",
-      )
+      .select("id, confirmable_after")
       .eq("account_id", accountId)
       .eq("code", "PR")
       .order("id", { ascending: true })
@@ -264,16 +331,17 @@ async function recomputePRStates(
     if (error) throw error;
     if (!data || data.length === 0) break;
     for (const pr of data) {
-      if (hasEmbeddedRow(pr.recon_links)) {
-        buckets.rejected.push(pr.id as string);
+      const id = pr.id as string;
+      if (linkedPrIds.has(id)) {
+        buckets.rejected.push(id);
       } else if (
         cutoff &&
         pr.confirmable_after &&
         (pr.confirmable_after as string) <= cutoff
       ) {
-        buckets.confirmed.push(pr.id as string);
+        buckets.confirmed.push(id);
       } else {
-        buckets.pending.push(pr.id as string);
+        buckets.pending.push(id);
       }
     }
     if (data.length < SUPABASE_PAGE_LIMIT) break;
@@ -292,13 +360,14 @@ async function recomputePRStates(
 async function recomputeDAStates(
   supabase: SupabaseClient,
   accountId: string,
+  linkedDaIds: Set<string>,
 ): Promise<{ rejected: number; pendingPair: number }> {
   const buckets = { rejected: [] as string[], pending_pair: [] as string[] };
   let cursor = 0;
   while (cursor < SUPABASE_PAGE_SAFETY_CAP) {
     const { data, error } = await supabase
       .from("recon_transactions")
-      .select("id, recon_links!recon_links_da_txn_id_fkey(da_txn_id)")
+      .select("id")
       .eq("account_id", accountId)
       .eq("code", "DA")
       .order("id", { ascending: true })
@@ -306,11 +375,9 @@ async function recomputeDAStates(
     if (error) throw error;
     if (!data || data.length === 0) break;
     for (const da of data) {
-      if (hasEmbeddedRow(da.recon_links)) {
-        buckets.rejected.push(da.id as string);
-      } else {
-        buckets.pending_pair.push(da.id as string);
-      }
+      const id = da.id as string;
+      if (linkedDaIds.has(id)) buckets.rejected.push(id);
+      else buckets.pending_pair.push(id);
     }
     if (data.length < SUPABASE_PAGE_LIMIT) break;
     cursor += SUPABASE_PAGE_LIMIT;
