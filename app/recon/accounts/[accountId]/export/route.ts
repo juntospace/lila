@@ -84,6 +84,16 @@ export async function GET(
 
   // Lookup DVTO codes + raw descriptions for rejected PRs (description is
   // the legacy fallback when the parser regex didn't extract a code).
+  //
+  // We chunk both .in() lookups in batches of 200 ids:
+  //   - Supabase JS caps a single response at 1000 rows, and an unchunked
+  //     query against thousands of rejected PRs comes back truncated.
+  //   - PostgREST encodes .in() values into the URL; with thousands of
+  //     UUIDs the URL exceeds the gateway's length limit and the request
+  //     either fails outright or silently drops trailing ids.
+  // The visible bug was: large-range exports had blank DVTO/Reason
+  // columns for ~all rows past the first ~1000.
+  const ID_CHUNK = 200;
   const rejectedPrIds = credits
     .filter((r) => r.code === "PR" && r.state === "rejected")
     .map((r) => r.id);
@@ -91,29 +101,44 @@ export async function GET(
     string,
     { code: string | null; description: string | null }
   >();
+
   if (rejectedPrIds.length > 0) {
-    const { data: links } = await supabase
-      .from("recon_links")
-      .select("pr_txn_id, da_txn_id")
-      .in("pr_txn_id", rejectedPrIds);
-    const daIds = (links ?? []).map((l) => l.da_txn_id);
-    let daById = new Map<string, { return_code: string | null; description: string | null }>();
-    if (daIds.length > 0) {
-      const { data: das } = await supabase
+    const allLinks: { pr_txn_id: string; da_txn_id: string }[] = [];
+    for (let i = 0; i < rejectedPrIds.length; i += ID_CHUNK) {
+      const chunk = rejectedPrIds.slice(i, i + ID_CHUNK);
+      const { data: links, error: linksErr } = await supabase
+        .from("recon_links")
+        .select("pr_txn_id, da_txn_id")
+        .in("pr_txn_id", chunk);
+      if (linksErr) {
+        return NextResponse.json({ error: linksErr.message }, { status: 500 });
+      }
+      if (links) allLinks.push(...links);
+    }
+
+    const daById = new Map<
+      string,
+      { return_code: string | null; description: string | null }
+    >();
+    const daIds = allLinks.map((l) => l.da_txn_id);
+    for (let i = 0; i < daIds.length; i += ID_CHUNK) {
+      const chunk = daIds.slice(i, i + ID_CHUNK);
+      const { data: das, error: dasErr } = await supabase
         .from("recon_transactions")
         .select("id, return_code, description")
-        .in("id", daIds);
-      daById = new Map(
-        (das ?? []).map((d) => [
-          d.id,
-          {
-            return_code: d.return_code as string | null,
-            description: d.description as string | null,
-          },
-        ]),
-      );
+        .in("id", chunk);
+      if (dasErr) {
+        return NextResponse.json({ error: dasErr.message }, { status: 500 });
+      }
+      for (const d of das ?? []) {
+        daById.set(d.id, {
+          return_code: d.return_code as string | null,
+          description: d.description as string | null,
+        });
+      }
     }
-    for (const link of links ?? []) {
+
+    for (const link of allLinks) {
       const da = daById.get(link.da_txn_id);
       reasonByPrId.set(link.pr_txn_id, {
         code: da?.return_code ?? null,
