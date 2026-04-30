@@ -129,20 +129,67 @@ describe('parseBACSheet', () => {
     expect(() => parseBACSheet([['hello', 'world']])).toThrow(BACParseError);
   });
 
-  it.each(['Cuenta', 'No. de Cuenta', 'No Cuenta', 'N° Cuenta', 'Núm. Cuenta', 'Número de Cuenta'])(
-    'accepts "%s" as the account-number label',
-    (label) => {
-      const sheet = minimalBACSheet.map((row) => row.slice());
-      sheet[2] = [label, '100412600', null, null, null, null, null, null, null, null];
-      const result = parseBACSheet(sheet);
-      expect(result.header.accountNumber).toBe('100412600');
-      expect(result.warnings).not.toContain('Account number not found in header preamble.');
-    },
-  );
+  it.each([
+    'Cuenta',
+    'No. de Cuenta',
+    'No Cuenta',
+    'N° Cuenta',
+    'Núm. Cuenta',
+    'Número de Cuenta',
+    'Producto',
+  ])('accepts "%s" as the account-number label', (label) => {
+    const sheet = minimalBACSheet.map((row) => row.slice());
+    sheet[2] = [label, '100412600', null, null, null, null, null, null, null, null];
+    const result = parseBACSheet(sheet);
+    expect(result.header.accountNumber).toBe('100412600');
+    expect(result.warnings).not.toContain('Account number not found in header preamble.');
+  });
 
   it('still rejects "Estado de Cuenta" as the account-number label', () => {
     const result = parseBACSheet(minimalBACSheet);
     // "Estado de Cuenta" sits at row 0 as the doc title — must not capture it.
     expect(result.header.accountNumber).toBe('100412600');
+  });
+
+  it('parses real BAC layout: Nombre/Producto/Saldo en Libros', () => {
+    // Mirrors the actual BAC export header (col 0 left side, col 4 right).
+    // Saldo Inicial 100.00 + Crédito 50.50 - Débito 0 = Saldo en Libros 150.50
+    const sheet: (string | null)[][] = [
+      [null, null, null, null, null, null, null, null, null, null],
+      ['DETALLE DE MOVIMIENTOS DEL PERÍODO', null, null, null, null, null, null, null, null, null],
+      [null, null, null, null, null, null, null, null, null, null],
+      ['Encabezado', null, null, null, null, null, null, null, null, null],
+      ['Nombre', 'JUNTO SOLUCIONES, S.A.', null, null, 'Saldo Inicial', null, null, '100.00', null, null],
+      ['Producto', '100412600', null, 'USD', 'Saldo en Libros', null, null, '150.50', null, null],
+      ['Fecha', '22/04/2026  09:57:29', null, null, 'Retenidos y diferidos', null, null, '0.00', null, null],
+      ['Mensaje', null, null, null, 'Saldo Disponible', null, null, '150.50', null, null],
+      [null, null, null, null, null, null, null, null, null, null],
+      ['Fecha', 'Referencia', null, 'Código', 'Descripción', null, 'Débitos', 'Créditos', 'Balance', null],
+      ['05/04/2026', 'REF001', null, 'PR', 'Tef DCD de Jorge Miguel Diaz P', null, '', '50.50', '150.50', null],
+    ];
+    const result = parseBACSheet(sheet);
+    expect(result.header.accountNumber).toBe('100412600');
+    expect(result.header.accountHolder).toBe('JUNTO SOLUCIONES, S.A.');
+    expect(result.header.saldoInicialMinor).toBe(10000n);
+    expect(result.header.saldoFinalMinor).toBe(15050n);
+    expect(result.integrity.ok).toBe(true);
+    expect(result.warnings).not.toContain('Account number not found in header preamble.');
+  });
+
+  it('extracts leading digits when Producto cell merges number + currency', () => {
+    const sheet = minimalBACSheet.map((row) => row.slice());
+    sheet[2] = ['Producto', '100412600    USD', null, null, null, null, null, null, null, null];
+    const result = parseBACSheet(sheet);
+    expect(result.header.accountNumber).toBe('100412600');
+  });
+
+  it('does not match "Saldo Disponible" as saldoFinal', () => {
+    const sheet = minimalBACSheet.map((row) => row.slice());
+    // Replace Saldo Final with Saldo Disponible — should leave saldoFinalMinor at 0
+    // and integrity.ok=false, but no false-positive on the regex.
+    sheet[6] = ['Saldo Disponible', '999.00', null, null, null, null, null, null, null, null];
+    const result = parseBACSheet(sheet);
+    expect(result.header.saldoFinalMinor).toBe(0n);
+    expect(result.integrity.ok).toBe(false);
   });
 });

@@ -219,16 +219,24 @@ function readPreambleHeader(
   dateRangeStart: string | null;
   dateRangeEnd: string | null;
 } {
-  // Anchor at start so the doc title "Estado de Cuenta" doesn't false-match
-  // the account-number label "Cuenta". The optional prefix accepts BAC's
-  // common label variants: "Cuenta", "No. Cuenta", "No. de Cuenta",
-  // "N° Cuenta", "Núm. Cuenta", "Número de Cuenta".
+  // Anchor at start so doc titles like "Estado de Cuenta" or "Saldo
+  // Disponible" don't false-match field labels.
+  //
+  // Label variants seen in real BAC exports:
+  //   accountNumber  → "Producto" (the canonical BAC label) / "Cuenta" /
+  //                    "No. de Cuenta" / "N° Cuenta" / "Núm. Cuenta" /
+  //                    "Número de Cuenta"
+  //   accountHolder  → "Nombre" / "Cliente" / "Titular"
+  //   saldoFinal     → "Saldo Final" / "Saldo en Libros" (the book balance —
+  //                    we deliberately do NOT match "Saldo Disponible" since
+  //                    that subtracts retenidos/diferidos)
   const labels = {
-    accountNumber: /^(n[uú]m\.?|n[uú]mero|no\.?|n°|nro\.?)?\s*(de\s+)?cuenta\b/i,
+    accountNumber:
+      /^(producto|cuenta|(?:n[uú]m\.?|n[uú]mero|no\.?|n°|nro\.?)\s*(?:de\s+)?cuenta)\b/i,
     accountHolder: /^(nombre|cliente|titular)\b/i,
     currency: /^(moneda|currency)\b/i,
     saldoInicial: /^saldo\s+inicial\b/i,
-    saldoFinal: /^saldo\s+final\b/i,
+    saldoFinal: /^saldo\s+(final|en\s+libros)\b/i,
     desde: /^(desde|inicio|from)\b/i,
     hasta: /^(hasta|fin|to)\b/i,
     periodo: /^per[ií]odo\b/i,
@@ -259,7 +267,13 @@ function readPreambleHeader(
 
       if (!accountNumber && labels.accountNumber.test(text) && !/saldo/i.test(text)) {
         const v = asString(valueAfter(r, c));
-        if (v) accountNumber = v.replace(/\s+/g, '');
+        if (v) {
+          // BAC's "Producto" cell sometimes embeds the currency after the
+          // number ("100412600    USD"). Take the leading digit run when
+          // present; otherwise drop whitespace and use as-is.
+          const leadingDigits = v.match(/^\s*(\d{4,})/)?.[1];
+          accountNumber = leadingDigits ?? v.replace(/\s+/g, '');
+        }
       } else if (!accountHolder && labels.accountHolder.test(text)) {
         const v = asString(valueAfter(r, c));
         if (v) accountHolder = v;
