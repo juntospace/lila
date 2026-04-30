@@ -24,6 +24,7 @@ type RecentUpload = {
   uploaded_at: string;
   original_filename: string | null;
   account_id: string;
+  uploaded_by: string | null;
   status: string;
   rows_total: number;
   rows_new: number;
@@ -46,7 +47,7 @@ export default async function ReconUploadPage() {
     supabase
       .from("recon_uploads")
       .select(
-        "id, uploaded_at, original_filename, account_id, status, rows_total, rows_new, rows_duplicate, date_range_start, date_range_end, integrity_ok",
+        "id, uploaded_at, original_filename, account_id, uploaded_by, status, rows_total, rows_new, rows_duplicate, date_range_start, date_range_end, integrity_ok",
       )
       .order("uploaded_at", { ascending: false })
       .limit(10),
@@ -55,6 +56,26 @@ export default async function ReconUploadPage() {
   const activeAccounts: Account[] = accounts ?? [];
   const recentUploads: RecentUpload[] = recents ?? [];
   const accountById = new Map(activeAccounts.map((a) => [a.id, a]));
+
+  // Look up uploader names. recon_uploads.uploaded_by is auth.users(id), and
+  // user_profiles.id mirrors that (1:1), so a single .in() against
+  // user_profiles is the cheapest path.
+  const uploaderIds = Array.from(
+    new Set(recentUploads.map((u) => u.uploaded_by).filter((v): v is string => Boolean(v))),
+  );
+  const uploaderById = new Map<string, { full_name: string | null; email: string }>();
+  if (uploaderIds.length > 0) {
+    const { data: profiles } = await supabase
+      .from("user_profiles")
+      .select("id, full_name, email")
+      .in("id", uploaderIds);
+    for (const p of profiles ?? []) {
+      uploaderById.set(p.id as string, {
+        full_name: p.full_name as string | null,
+        email: p.email as string,
+      });
+    }
+  }
 
   return (
     <OperatorShell session={session}>
@@ -134,6 +155,7 @@ export default async function ReconUploadPage() {
                   <thead className="text-left text-xs uppercase tracking-wide text-fg-subtle">
                     <tr>
                       <th className="pb-3 pr-4">Uploaded</th>
+                      <th className="pb-3 pr-4">By</th>
                       <th className="pb-3 pr-4">Account</th>
                       <th className="pb-3 pr-4">File</th>
                       <th className="pb-3 pr-4">Range</th>
@@ -150,6 +172,13 @@ export default async function ReconUploadPage() {
                         <tr key={u.id} className="text-fg">
                           <td className="py-3 pr-4 text-xs text-fg-muted">
                             {new Date(u.uploaded_at).toLocaleString()}
+                          </td>
+                          <td className="py-3 pr-4 text-xs text-fg-muted">
+                            {(() => {
+                              const up = u.uploaded_by ? uploaderById.get(u.uploaded_by) : null;
+                              if (!up) return "—";
+                              return up.full_name ?? up.email.split("@")[0];
+                            })()}
                           </td>
                           <td className="py-3 pr-4">
                             <Link

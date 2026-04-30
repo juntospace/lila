@@ -71,6 +71,10 @@ describe('parseDvtoDescription', () => {
     ['DVTO AC0123-MARIA LOPEZ', 'AC0123', 'MARIA LOPEZ'],
     ['dvto am04-jorge', 'AM04', 'jorge'],
     ['DVTO 1234-NUM CODE', '1234', 'NUM CODE'],
+    // RCZO ("rechazo") is the second BAC prefix for the same kind of row.
+    ['RCZO AM04-GRUPO RECA S A 20000', 'AM04', 'GRUPO RECA S A 20000'],
+    ['RCZO AC01-CARLOS GEOVANY SANJ', 'AC01', 'CARLOS GEOVANY SANJ'],
+    ['rczo am04 maria lopez', 'AM04', 'maria lopez'],
   ])('extracts code+name from %j', (desc, code, name) => {
     expect(parseDvtoDescription(desc)).toEqual({
       returnCode: code,

@@ -139,16 +139,15 @@ describe("pickFifoMatchPR", () => {
     expect(match?.id).toBe("p1");
   });
 
-  it("rejects PRs whose posted_at is after the DA", () => {
+  it("matches a PR whose posted_at is after the DA (BAC sometimes shows the DA first)", () => {
     const candidates: PRCandidate[] = [
       { id: "p1", postedAt: "2026-04-08", rowIndex: 0, creditMinor: 5050n, description: desc("Jorge Miguel Diaz P") },
     ];
-    expect(
-      pickFifoMatchPR(
-        { amountMinor: 5050n, payerNameRaw: "JORGE MIGUEL DIAZ P", postedAt: "2026-04-06" },
-        candidates,
-      ),
-    ).toBeNull();
+    const match = pickFifoMatchPR(
+      { amountMinor: 5050n, payerNameRaw: "JORGE MIGUEL DIAZ P", postedAt: "2026-04-06" },
+      candidates,
+    );
+    expect(match?.id).toBe("p1");
   });
 
   it("rejects on amount mismatch", () => {
