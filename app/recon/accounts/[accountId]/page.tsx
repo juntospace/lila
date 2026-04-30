@@ -9,8 +9,10 @@ import { Input } from "@/components/ui/Input";
 import { Label } from "@/components/ui/Label";
 import { requireReconWriter } from "@/lib/auth/guard";
 import { extractPRPayerName, reasonForDvtoCode } from "@/lib/recon/bac";
-import { formatDate, formatMinorUSD } from "@/lib/recon/format";
+import { formatDate, formatMinorUSD, lastWorkingDays } from "@/lib/recon/format";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+
+import { BackfillButton } from "./backfill-button";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +24,7 @@ type SearchParams = {
   perPage?: string;
   sort?: string;
   dir?: string;
+  range?: string; // "all" overrides the last-2-working-days default
 };
 
 const STATES = ["all", "pending", "confirmed", "rejected"] as const;
@@ -38,8 +41,8 @@ const SORTABLE = {
 type SortKey = keyof typeof SORTABLE;
 const SORT_KEYS = Object.keys(SORTABLE) as SortKey[];
 
-const PER_PAGE_DEFAULT = 50;
-const PER_PAGE_OPTIONS = [25, 50, 100, 250];
+const PER_PAGE_DEFAULT = 20;
+const PER_PAGE_OPTIONS = [20, 50, 100, 250];
 
 function asState(v: string | undefined): StateFilter {
   return (STATES as readonly string[]).includes(v ?? "")
@@ -78,12 +81,13 @@ export default async function AccountDetailPage({
   const sp = await searchParams;
 
   const stateFilter = asState(sp.state);
-  const from = isoOrUndefined(sp.from);
-  const to = isoOrUndefined(sp.to);
+  const explicitFrom = isoOrUndefined(sp.from);
+  const explicitTo = isoOrUndefined(sp.to);
   const sort = asSortKey(sp.sort);
   const dir = asDir(sp.dir);
   const perPage = asInt(sp.perPage, PER_PAGE_DEFAULT, 1, 500);
   const page = asInt(sp.page, 1, 1);
+  const showAll = sp.range === "all";
 
   const supabase = await createSupabaseServerClient();
 
@@ -94,6 +98,29 @@ export default async function AccountDetailPage({
     .single();
 
   if (!account) notFound();
+
+  // Resolve the date range in effect:
+  //   1. URL has explicit from/to → honor those.
+  //   2. URL has range=all → no date filter.
+  //   3. Otherwise default to the last 2 working days anchored to this
+  //      account's most-recent posted_at (or today if no data yet).
+  let defaultRange: { from: string; to: string } | null = null;
+  if (!explicitFrom && !explicitTo && !showAll) {
+    const { data: maxRow } = await supabase
+      .from("recon_transactions")
+      .select("posted_at")
+      .eq("account_id", accountId)
+      .order("posted_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const ref = maxRow?.posted_at
+      ? new Date(`${maxRow.posted_at}T00:00:00Z`)
+      : new Date();
+    defaultRange = lastWorkingDays(ref, 2);
+  }
+  const from = explicitFrom ?? defaultRange?.from;
+  const to = explicitTo ?? defaultRange?.to;
+  const usingDefault = !explicitFrom && !explicitTo && !showAll;
 
   // Aggregate totals don't depend on pagination — query them with their
   // own narrow projection so the page row count is independent.
@@ -136,31 +163,54 @@ export default async function AccountDetailPage({
   const totalPages = Math.max(1, Math.ceil(total / perPage));
   const safePage = Math.min(page, totalPages);
 
-  // Reasons for rejected PRs (only for rows on this page).
+  // Reasons for rejected PRs on this page. We fetch BOTH the parsed
+  // return_code and the raw description so the UI can fall back to the
+  // description when the regex didn't extract a code (some legacy DA rows
+  // landed before the parser was broadened).
   const rejectedPrIds = credits
     .filter((r) => r.code === "PR" && r.state === "rejected")
     .map((r) => r.id);
-  const reasonByPrId = new Map<string, { code: string | null }>();
+  const reasonByPrId = new Map<
+    string,
+    { code: string | null; description: string | null }
+  >();
   if (rejectedPrIds.length > 0) {
     const { data: links } = await supabase
       .from("recon_links")
       .select("pr_txn_id, da_txn_id")
       .in("pr_txn_id", rejectedPrIds);
     const daIds = (links ?? []).map((l) => l.da_txn_id);
-    let daById = new Map<string, { return_code: string | null }>();
+    let daById = new Map<string, { return_code: string | null; description: string | null }>();
     if (daIds.length > 0) {
       const { data: das } = await supabase
         .from("recon_transactions")
-        .select("id, return_code")
+        .select("id, return_code, description")
         .in("id", daIds);
-      daById = new Map((das ?? []).map((d) => [d.id, { return_code: d.return_code }]));
+      daById = new Map(
+        (das ?? []).map((d) => [
+          d.id,
+          { return_code: d.return_code, description: d.description },
+        ]),
+      );
     }
     for (const link of links ?? []) {
+      const da = daById.get(link.da_txn_id);
       reasonByPrId.set(link.pr_txn_id, {
-        code: daById.get(link.da_txn_id)?.return_code ?? null,
+        code: da?.return_code ?? null,
+        description: da?.description ?? null,
       });
     }
   }
+
+  // Surface a one-time hint if any rejected DAs in the system still have a
+  // null return_code — the operator can backfill them via the button.
+  const { count: nullDaCount } = await supabase
+    .from("recon_transactions")
+    .select("id", { count: "exact", head: true })
+    .eq("account_id", accountId)
+    .eq("code", "DA")
+    .is("return_code", null);
+  const showBackfillHint = (nullDaCount ?? 0) > 0;
 
   const totalsByState = (totalsRows ?? []).reduce(
     (acc, r) => {
@@ -234,6 +284,17 @@ export default async function AccountDetailPage({
         <Stat label="Rejected" tone="warning" {...totalsByState.rejected} />
       </section>
 
+      {showBackfillHint && (
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded border border-warning/40 bg-warning-subtle px-4 py-3 text-sm text-fg">
+          <div>
+            <strong className="text-warning">DVTO codes not yet extracted</strong>{" "}
+            for {nullDaCount} reversal row{nullDaCount === 1 ? "" : "s"} on this
+            account. Re-parse to populate them.
+          </div>
+          <BackfillButton accountId={accountId} />
+        </div>
+      )}
+
       <Card className="mt-8">
         <CardHeader className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -280,12 +341,37 @@ export default async function AccountDetailPage({
                 <Filter className="h-4 w-4" />
                 Apply
               </Button>
-              {(stateFilter !== "all" || from || to) && (
+              {(stateFilter !== "all" || explicitFrom || explicitTo || showAll) && (
                 <Button asChild variant="ghost" size="sm">
-                  <Link href={`/recon/accounts/${accountId}`}>Clear</Link>
+                  <Link href={`/recon/accounts/${accountId}`}>Reset</Link>
                 </Button>
               )}
             </div>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-fg-subtle">
+            <span>
+              {usingDefault
+                ? `Showing the last 2 working days (${from} → ${to}). `
+                : showAll
+                  ? "Showing all history. "
+                  : "Custom range. "}
+            </span>
+            {!showAll && (
+              <Link
+                href={`/recon/accounts/${accountId}?range=all${stateFilter !== "all" ? `&state=${stateFilter}` : ""}`}
+                className="text-brand-300 hover:text-brand-200"
+              >
+                Show all history
+              </Link>
+            )}
+            {showAll && (
+              <Link
+                href={`/recon/accounts/${accountId}${stateFilter !== "all" ? `?state=${stateFilter}` : ""}`}
+                className="text-brand-300 hover:text-brand-200"
+              >
+                Back to last 2 working days
+              </Link>
+            )}
           </div>
           {/* Preserve sort + perPage when re-applying filters */}
           {sort !== "posted_at" && <input type="hidden" name="sort" value={sort} />}
@@ -317,14 +403,25 @@ export default async function AccountDetailPage({
                 <tbody className="divide-y divide-border-subtle">
                   {credits.map((row) => {
                     const reason = reasonByPrId.get(row.id);
-                    const reasonText =
-                      row.state === "rejected"
-                        ? `${reason?.code ?? "—"} · ${reasonForDvtoCode(reason?.code).label}`
-                        : row.state === "pending" && row.confirmable_after
-                          ? `Confirmable after ${formatDate(
-                              (row.confirmable_after as string).slice(0, 10),
-                            )}`
-                          : "—";
+                    let reasonText: string;
+                    if (row.state === "rejected") {
+                      if (reason?.code) {
+                        reasonText = `${reason.code} · ${reasonForDvtoCode(reason.code).label}`;
+                      } else if (reason?.description) {
+                        // Legacy fallback: the parser regex missed this DA's
+                        // code, so surface the raw description so the operator
+                        // still has actionable context.
+                        reasonText = reason.description;
+                      } else {
+                        reasonText = "—";
+                      }
+                    } else if (row.state === "pending" && row.confirmable_after) {
+                      reasonText = `Confirmable after ${formatDate(
+                        (row.confirmable_after as string).slice(0, 10),
+                      )}`;
+                    } else {
+                      reasonText = "—";
+                    }
                     const payer =
                       (row.payer_name_raw as string | null) ??
                       extractPRPayerName(row.description as string) ??

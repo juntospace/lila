@@ -62,6 +62,21 @@ describe('parseDvtoDescription', () => {
   it('returns empty object for non-DVTO text', () => {
     expect(parseDvtoDescription('Tef DCD de Maria Lopez')).toEqual({});
   });
+
+  it.each([
+    [' DVTO AM04-JORGE MIGUEL DIAZ P', 'AM04', 'JORGE MIGUEL DIAZ P'],
+    ['DVTO  AM04-JORGE MIGUEL DIAZ P', 'AM04', 'JORGE MIGUEL DIAZ P'],
+    ['DVTO AM04 - JORGE MIGUEL DIAZ P', 'AM04', 'JORGE MIGUEL DIAZ P'],
+    ['DVTO AM04 JORGE MIGUEL DIAZ P', 'AM04', 'JORGE MIGUEL DIAZ P'],
+    ['DVTO AC0123-MARIA LOPEZ', 'AC0123', 'MARIA LOPEZ'],
+    ['dvto am04-jorge', 'AM04', 'jorge'],
+    ['DVTO 1234-NUM CODE', '1234', 'NUM CODE'],
+  ])('extracts code+name from %j', (desc, code, name) => {
+    expect(parseDvtoDescription(desc)).toEqual({
+      returnCode: code,
+      payerNameRaw: name,
+    });
+  });
 });
 
 describe('parseBACSheet', () => {

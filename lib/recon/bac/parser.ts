@@ -129,10 +129,15 @@ export function parseSpanishDate(v: Cell): string | null {
 }
 
 // "DVTO AM04-JORGE MIGUEL DIAZ P" → { returnCode: 'AM04', payerNameRaw: '...' }.
+//
+// Real BAC exports vary more than the synthetic fixture: leading whitespace,
+// optional space around the dash, en/em dashes, mixed-case codes, and codes
+// that aren't strictly two-letters-two-digits — we've seen alphanumerics 2–8
+// chars long. Be permissive on the code shape and on the separator.
 export function parseDvtoDescription(
   desc: string,
 ): { returnCode?: string; payerNameRaw?: string } {
-  const m = desc.match(/^DVTO\s+([A-Z]{1,3}\d{1,3})[\s\-–—]+(.*)$/i);
+  const m = desc.match(/^\s*DVTO\s+([A-Z0-9]{2,8})\s*[\-–—:.]?\s*(.+)$/i);
   if (!m) return {};
   return { returnCode: m[1].toUpperCase(), payerNameRaw: m[2].trim() };
 }
