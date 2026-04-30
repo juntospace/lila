@@ -56,33 +56,61 @@ export async function GET(
   }
   const credits = rows ?? [];
 
-  // Lookup DVTO codes for rejected PRs.
+  // Lookup DVTO codes + raw descriptions for rejected PRs (description is
+  // the legacy fallback when the parser regex didn't extract a code).
   const rejectedPrIds = credits
     .filter((r) => r.code === "PR" && r.state === "rejected")
     .map((r) => r.id);
-  const reasonByPrId = new Map<string, string | null>();
+  const reasonByPrId = new Map<
+    string,
+    { code: string | null; description: string | null }
+  >();
   if (rejectedPrIds.length > 0) {
     const { data: links } = await supabase
       .from("recon_links")
       .select("pr_txn_id, da_txn_id")
       .in("pr_txn_id", rejectedPrIds);
     const daIds = (links ?? []).map((l) => l.da_txn_id);
-    let daById = new Map<string, string | null>();
+    let daById = new Map<string, { return_code: string | null; description: string | null }>();
     if (daIds.length > 0) {
       const { data: das } = await supabase
         .from("recon_transactions")
-        .select("id, return_code")
+        .select("id, return_code, description")
         .in("id", daIds);
-      daById = new Map((das ?? []).map((d) => [d.id, d.return_code as string | null]));
+      daById = new Map(
+        (das ?? []).map((d) => [
+          d.id,
+          {
+            return_code: d.return_code as string | null,
+            description: d.description as string | null,
+          },
+        ]),
+      );
     }
     for (const link of links ?? []) {
-      reasonByPrId.set(link.pr_txn_id, daById.get(link.da_txn_id) ?? null);
+      const da = daById.get(link.da_txn_id);
+      reasonByPrId.set(link.pr_txn_id, {
+        code: da?.return_code ?? null,
+        description: da?.description ?? null,
+      });
     }
   }
 
   const sheetData = credits.map((r) => {
-    const reasonCode = r.state === "rejected" ? reasonByPrId.get(r.id) ?? null : null;
-    const reason = reasonForDvtoCode(reasonCode);
+    const reason = r.state === "rejected" ? reasonByPrId.get(r.id) : undefined;
+    const reasonCode = reason?.code ?? null;
+    let reasonDetail = "";
+    if (r.state === "rejected") {
+      if (reasonCode) {
+        reasonDetail = reasonForDvtoCode(reasonCode).label;
+      } else if (reason?.description) {
+        reasonDetail = reason.description;
+      }
+    } else if (r.state === "pending" && r.confirmable_after) {
+      reasonDetail = `Confirmable after ${formatDate(
+        (r.confirmable_after as string).slice(0, 10),
+      )}`;
+    }
     return {
       Date: formatDate(r.posted_at as string),
       Code: r.code,
@@ -94,14 +122,7 @@ export async function GET(
       Currency: r.currency,
       Status: r.state,
       "DVTO code": reasonCode ?? "",
-      "Reason / detail":
-        r.state === "rejected"
-          ? reason.label
-          : r.state === "pending" && r.confirmable_after
-            ? `Confirmable after ${formatDate(
-                (r.confirmable_after as string).slice(0, 10),
-              )}`
-            : "",
+      "Reason / detail": reasonDetail,
       Reference: (r.rail_native_ref as string) ?? "",
       Description: (r.description as string) ?? "",
     };

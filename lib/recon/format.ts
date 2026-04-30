@@ -34,3 +34,26 @@ export function formatDate(iso: string | null | undefined): string {
   if (!m) return iso;
   return `${m[3]}/${m[2]}/${m[1]}`;
 }
+
+/**
+ * Walk back from `ref` (a UTC midnight Date) collecting the most recent
+ * `n` weekdays (Mon–Fri). Returns the inclusive [from, to] range covering
+ * those days, both as ISO YYYY-MM-DD. No holiday calendar yet.
+ *
+ * Example: ref=2026-04-07 (Tue), n=2 → { from: '2026-04-06', to: '2026-04-07' }
+ */
+export function lastWorkingDays(ref: Date, n: number): { from: string; to: string } {
+  if (n < 1) throw new Error("lastWorkingDays: n must be >= 1");
+  const dates: Date[] = [];
+  const cursor = new Date(Date.UTC(ref.getUTCFullYear(), ref.getUTCMonth(), ref.getUTCDate()));
+  while (dates.length < n) {
+    const dow = cursor.getUTCDay();
+    if (dow !== 0 && dow !== 6) dates.push(new Date(cursor));
+    cursor.setUTCDate(cursor.getUTCDate() - 1);
+  }
+  dates.sort((a, b) => a.getTime() - b.getTime());
+  return {
+    from: dates[0].toISOString().slice(0, 10),
+    to: dates[dates.length - 1].toISOString().slice(0, 10),
+  };
+}
