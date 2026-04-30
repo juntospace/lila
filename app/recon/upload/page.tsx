@@ -6,6 +6,7 @@ import { requireReconWriter } from "@/lib/auth/guard";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 import { AddAccountForm } from "./add-account-form";
+import { DeleteUploadButton } from "./delete-upload-button";
 import { UploadForm } from "./upload-form";
 
 export const dynamic = "force-dynamic";
@@ -138,7 +139,8 @@ export default async function ReconUploadPage() {
                       <th className="pb-3 pr-4">Range</th>
                       <th className="pb-3 pr-4 text-right">Rows</th>
                       <th className="pb-3 pr-4">Integrity</th>
-                      <th className="pb-3">Status</th>
+                      <th className="pb-3 pr-4">Status</th>
+                      <th className="pb-3 sr-only">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border-subtle">
@@ -172,8 +174,14 @@ export default async function ReconUploadPage() {
                           <td className="py-3 pr-4">
                             <IntegrityBadge ok={u.integrity_ok} />
                           </td>
-                          <td className="py-3">
+                          <td className="py-3 pr-4">
                             <StatusBadge status={u.status} />
+                          </td>
+                          <td className="py-3">
+                            <DeleteUploadButton
+                              uploadId={u.id}
+                              filename={u.original_filename}
+                            />
                           </td>
                         </tr>
                       );

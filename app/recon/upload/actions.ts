@@ -11,6 +11,7 @@ import {
   parseBACSheet,
   type IngestResult,
 } from "@/lib/recon/bac";
+import { recomputeAccount } from "@/lib/recon/bac/recompute";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 // =============================================================
@@ -208,6 +209,7 @@ export async function uploadStatement(
   }
 
   revalidatePath("/recon/upload");
+  revalidatePath(`/recon/accounts/${account.id}`);
   return {
     status: "success",
     message: result.fileWasDuplicate
@@ -218,4 +220,103 @@ export async function uploadStatement(
       accountLabel: `${account.account_number} · ${account.holder_name}`,
     },
   };
+}
+
+// =============================================================
+// deleteUpload
+// =============================================================
+
+export type DeleteUploadResult = {
+  status: "ok" | "error";
+  message?: string;
+  rowsDeleted?: number;
+  linksDeleted?: number;
+};
+
+/**
+ * Wipe an upload's transactions + links, then run a full account recompute
+ * so any PRs whose linked DA was just deleted (or that were file-clock-
+ * confirmed because of this file's posted_at advancing the cutoff) settle
+ * back to the correct state.
+ *
+ * Use cases: a file was manipulated before upload, an ingest finished in a
+ * bad state, or ops want to re-run with newer code.
+ */
+export async function deleteUpload(uploadId: string): Promise<DeleteUploadResult> {
+  await requireReconWriter();
+  const supabase = await createSupabaseServerClient();
+
+  const { data: upload, error: lookupErr } = await supabase
+    .from("recon_uploads")
+    .select("id, account_id, original_filename")
+    .eq("id", uploadId)
+    .maybeSingle();
+  if (lookupErr) return { status: "error", message: lookupErr.message };
+  if (!upload) return { status: "error", message: "Upload not found." };
+
+  const accountId = upload.account_id as string;
+  const ID_CHUNK = 200;
+  const PAGE = 1000;
+
+  // 1. Collect every transaction id from this upload (paginated).
+  const txnIds: string[] = [];
+  let cursor = 0;
+  while (cursor < 200_000) {
+    const { data, error } = await supabase
+      .from("recon_transactions")
+      .select("id")
+      .eq("upload_id", uploadId)
+      .order("id", { ascending: true })
+      .range(cursor, cursor + PAGE - 1);
+    if (error) return { status: "error", message: error.message };
+    if (!data || data.length === 0) break;
+    for (const r of data) txnIds.push(r.id as string);
+    if (data.length < PAGE) break;
+    cursor += PAGE;
+  }
+
+  // 2. Delete recon_links referencing any of these txn ids (chunked, both
+  //    sides — a link can have its PR or its DA in this upload).
+  let linksDeleted = 0;
+  for (const side of ["pr_txn_id", "da_txn_id"] as const) {
+    for (let i = 0; i < txnIds.length; i += ID_CHUNK) {
+      const chunk = txnIds.slice(i, i + ID_CHUNK);
+      const { data: deleted, error } = await supabase
+        .from("recon_links")
+        .delete()
+        .in(side, chunk)
+        .select("pr_txn_id");
+      if (error) return { status: "error", message: error.message };
+      linksDeleted += deleted?.length ?? 0;
+    }
+  }
+
+  // 3. Delete the transactions themselves.
+  const { error: txnErr } = await supabase
+    .from("recon_transactions")
+    .delete()
+    .eq("upload_id", uploadId);
+  if (txnErr) return { status: "error", message: txnErr.message };
+
+  // 4. Delete the upload row.
+  const { error: upErr } = await supabase.from("recon_uploads").delete().eq("id", uploadId);
+  if (upErr) return { status: "error", message: upErr.message };
+
+  // 5. Recompute the account so PRs whose linked DA just disappeared, or
+  //    that were auto-confirmed via file-clock past this file's range,
+  //    settle back to the correct state given the remaining data.
+  try {
+    await recomputeAccount(supabase, accountId);
+  } catch (err) {
+    return {
+      status: "error",
+      message: `Deletion completed but recompute failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    };
+  }
+
+  revalidatePath("/recon/upload");
+  revalidatePath(`/recon/accounts/${accountId}`);
+  return { status: "ok", rowsDeleted: txnIds.length, linksDeleted };
 }

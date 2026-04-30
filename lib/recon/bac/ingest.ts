@@ -17,11 +17,9 @@ import {
   classifyBACRow,
   computeFileSha256,
   computeRowHash,
-  fileClockCutoff,
-  pickFifoMatchPR,
-  type PRCandidate,
 } from "./classify";
 import type { BACParseResult } from "./parser";
+import { recomputeAccount } from "./recompute";
 
 export interface IngestArgs {
   supabase: SupabaseClient;
@@ -174,144 +172,35 @@ export async function ingestBACFile(args: IngestArgs): Promise<IngestResult> {
     };
   });
 
-  const { data: insertedRows, error: txnErr } = await supabase
-    .from("recon_transactions")
-    .upsert(txnsToInsert, { onConflict: "account_id,row_hash", ignoreDuplicates: true })
-    .select("id, posted_at, code, debit_minor, credit_minor, payer_name_raw, description");
-
-  if (txnErr) {
-    await markUploadFailed(supabase, uploadId, txnErr.message);
-    throw txnErr;
+  // Insert in chunks of 500 — keeps any single PostgREST request under
+  // the body-size limit, and we don't rely on the .select() response to
+  // discover newly-inserted rows (Supabase JS caps responses at 1000,
+  // which silently dropped DAs from the pairing loop on large uploads).
+  const INSERT_CHUNK = 500;
+  let rowsNew = 0;
+  for (let i = 0; i < txnsToInsert.length; i += INSERT_CHUNK) {
+    const chunk = txnsToInsert.slice(i, i + INSERT_CHUNK);
+    const { data: inserted, error: txnErr } = await supabase
+      .from("recon_transactions")
+      .upsert(chunk, { onConflict: "account_id,row_hash", ignoreDuplicates: true })
+      .select("id");
+    if (txnErr) {
+      await markUploadFailed(supabase, uploadId, txnErr.message);
+      throw txnErr;
+    }
+    rowsNew += inserted?.length ?? 0;
   }
-
-  const rowsNew = insertedRows?.length ?? 0;
   const rowsDuplicate = rows.length - rowsNew;
 
-  // ----- DA → PR pairing for newly-inserted reversals ----------------------
-  const newDARows = (insertedRows ?? []).filter((r) => r.code === "DA");
-  let reversalsPaired = 0;
-  let reversalsUnpaired = 0;
-
-  for (const da of newDARows) {
-    const payer = da.payer_name_raw as string | null;
-    if (!payer) {
-      reversalsUnpaired++;
-      continue;
-    }
-    const daAmount = BigInt(da.debit_minor as string);
-
-    // Pull live unmatched-PR candidates (cheap because of the partial index
-    // recon_transactions_pairing_idx). We filter by amount in SQL to keep
-    // the working set tiny.
-    const { data: candidates } = await supabase
-      .from("recon_transactions")
-      .select("id, posted_at, credit_minor, description, recon_links!recon_links_pr_txn_id_fkey(pr_txn_id)")
-      .eq("account_id", accountId)
-      .eq("code", "PR")
-      .eq("state", "pending")
-      .eq("credit_minor", daAmount.toString())
-      .order("posted_at", { ascending: true });
-
-    const eligible: PRCandidate[] = (candidates ?? [])
-      .filter((c) => {
-        const links = c.recon_links as { pr_txn_id: string }[] | null;
-        return !links || links.length === 0;
-      })
-      .map((c, idx) => ({
-        id: c.id as string,
-        postedAt: c.posted_at as string,
-        rowIndex: idx,
-        creditMinor: BigInt(c.credit_minor as string),
-        description: c.description as string,
-      }));
-
-    const match = pickFifoMatchPR(
-      {
-        amountMinor: daAmount,
-        payerNameRaw: payer,
-        postedAt: da.posted_at as string,
-      },
-      eligible,
-    );
-
-    if (!match) {
-      reversalsUnpaired++;
-      continue;
-    }
-
-    const { error: linkErr } = await supabase.from("recon_links").insert({
-      pr_txn_id: match.id,
-      da_txn_id: da.id as string,
-      match_strategy: "auto_fifo_name_amount",
-      matched_by: uploadedBy ?? null,
-    });
-
-    // If another DA already paired against this PR, the PK conflict means
-    // we just lost the race; leave this DA as pending_pair for ops review.
-    if (linkErr) {
-      if (linkErr.code === "23505") {
-        reversalsUnpaired++;
-        continue;
-      }
-      await markUploadFailed(supabase, uploadId, linkErr.message);
-      throw linkErr;
-    }
-
-    await supabase
-      .from("recon_transactions")
-      .update({ state: "rejected" })
-      .eq("id", match.id);
-
-    await supabase
-      .from("recon_transactions")
-      .update({ state: "rejected" })
-      .eq("id", da.id);
-
-    reversalsPaired++;
-  }
-
-  // ----- File-clock advancement: confirm aged-out pending PRs --------------
-  const { data: maxRow } = await supabase
-    .from("recon_transactions")
-    .select("posted_at")
-    .eq("account_id", accountId)
-    .order("posted_at", { ascending: false })
-    .limit(1)
-    .single();
-
-  let prsConfirmedThisRun = 0;
-  if (maxRow?.posted_at) {
-    const cutoff = fileClockCutoff(maxRow.posted_at as string);
-
-    // Confirm any pending PR whose 24h window has lapsed against the cutoff
-    // and that has no recon_links row pointing at it.
-    const { data: toConfirm } = await supabase
-      .from("recon_transactions")
-      .select("id, recon_links!recon_links_pr_txn_id_fkey(pr_txn_id)")
-      .eq("account_id", accountId)
-      .eq("code", "PR")
-      .eq("state", "pending")
-      .lte("confirmable_after", cutoff);
-
-    const eligibleIds = (toConfirm ?? [])
-      .filter((r) => {
-        const links = r.recon_links as { pr_txn_id: string }[] | null;
-        return !links || links.length === 0;
-      })
-      .map((r) => r.id as string);
-
-    if (eligibleIds.length > 0) {
-      const { error: confErr } = await supabase
-        .from("recon_transactions")
-        .update({ state: "confirmed" })
-        .in("id", eligibleIds);
-      if (confErr) {
-        await markUploadFailed(supabase, uploadId, confErr.message);
-        throw confErr;
-      }
-      prsConfirmedThisRun = eligibleIds.length;
-    }
-  }
+  // ----- Pair every unpaired DA + re-evaluate state (paginated) ------------
+  // Recompute is paginated end-to-end so it's correct for accounts with
+  // tens of thousands of rows. Self-healing: even if a previous ingest
+  // left DAs unpaired (the upsert-response-cap bug), running a fresh
+  // ingest now picks them up and corrects PR/DA states.
+  const recomputeStats = await recomputeAccount(supabase, accountId, uploadedBy ?? null);
+  const reversalsPaired = recomputeStats.reversalsPaired;
+  const reversalsUnpaired = recomputeStats.reversalsUnpaired;
+  const prsConfirmedThisRun = recomputeStats.prsConfirmed;
 
   // ----- Finalize the upload row -------------------------------------------
   await supabase

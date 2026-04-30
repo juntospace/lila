@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { requireReconWriter } from "@/lib/auth/guard";
 import { parseDvtoDescription } from "@/lib/recon/bac";
+import { recomputeAccount, type RecomputeStats } from "@/lib/recon/bac/recompute";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 export type BackfillResult = {
@@ -52,4 +53,37 @@ export async function backfillDvtoCodes(
 
   revalidatePath(`/recon/accounts/${accountId}`);
   return { status: "ok", scanned: candidates?.length ?? 0, updated };
+}
+
+// =============================================================
+// recomputeAccountAction
+// =============================================================
+
+export type RecomputeActionResult = {
+  status: "ok" | "error";
+  message?: string;
+  stats?: RecomputeStats;
+};
+
+/**
+ * Pair every unpaired DA in the account and re-evaluate PR/DA states
+ * against link presence + file-clock cutoff. Idempotent. Use to heal bad
+ * state from earlier ingests that hit the upsert-response 1000-row cap.
+ */
+export async function recomputeAccountAction(
+  accountId: string,
+): Promise<RecomputeActionResult> {
+  const session = await requireReconWriter();
+  const supabase = await createSupabaseServerClient();
+
+  try {
+    const stats = await recomputeAccount(supabase, accountId, session.userId);
+    revalidatePath(`/recon/accounts/${accountId}`);
+    return { status: "ok", stats };
+  } catch (err) {
+    return {
+      status: "error",
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
