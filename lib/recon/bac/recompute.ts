@@ -22,6 +22,22 @@ const SUPABASE_PAGE_LIMIT = 1000;
 const SUPABASE_PAGE_SAFETY_CAP = 200_000;
 const ID_CHUNK = 200;
 
+// PostgREST returns embedded relations as a single object (not an array)
+// when the join is one-to-one — i.e., when the FK column has a UNIQUE
+// or PRIMARY KEY constraint. Both recon_links FKs (pr_txn_id PK,
+// da_txn_id UNIQUE) hit that case, so the embed comes back as an object
+// or null, never as an array.
+//
+// Treating it as an array (and reading .length) silently returns
+// `undefined`, which compares as false against any number — so a paired
+// row would be reported as unlinked, and recompute would never mark
+// anything as 'rejected'. This helper normalizes both shapes.
+function hasEmbeddedRow(rel: unknown): boolean {
+  if (rel == null) return false;
+  if (Array.isArray(rel)) return rel.length > 0;
+  return true;
+}
+
 export interface RecomputeStats {
   reversalsPaired: number;
   reversalsUnpaired: number;
@@ -107,8 +123,7 @@ async function fetchUnpairedDAs(
     if (error) throw error;
     if (!data || data.length === 0) break;
     for (const row of data) {
-      const links = row.recon_links as { da_txn_id: string }[] | null;
-      if (!links || links.length === 0) {
+      if (!hasEmbeddedRow(row.recon_links)) {
         all.push({
           id: row.id as string,
           posted_at: row.posted_at as string,
@@ -147,10 +162,7 @@ async function tryPairDA(
   if (error) throw error;
 
   const eligible: PRCandidate[] = (candidates ?? [])
-    .filter((c) => {
-      const links = c.recon_links as { pr_txn_id: string }[] | null;
-      return !links || links.length === 0;
-    })
+    .filter((c) => !hasEmbeddedRow(c.recon_links))
     .map((c, idx) => ({
       id: c.id as string,
       postedAt: c.posted_at as string,
@@ -202,9 +214,13 @@ async function recomputePRStates(
     if (error) throw error;
     if (!data || data.length === 0) break;
     for (const pr of data) {
-      const hasLink = ((pr.recon_links as { pr_txn_id: string }[] | null) ?? []).length > 0;
-      if (hasLink) buckets.rejected.push(pr.id as string);
-      else if (cutoff && pr.confirmable_after && (pr.confirmable_after as string) <= cutoff) {
+      if (hasEmbeddedRow(pr.recon_links)) {
+        buckets.rejected.push(pr.id as string);
+      } else if (
+        cutoff &&
+        pr.confirmable_after &&
+        (pr.confirmable_after as string) <= cutoff
+      ) {
         buckets.confirmed.push(pr.id as string);
       } else {
         buckets.pending.push(pr.id as string);
@@ -240,9 +256,11 @@ async function recomputeDAStates(
     if (error) throw error;
     if (!data || data.length === 0) break;
     for (const da of data) {
-      const hasLink = ((da.recon_links as { da_txn_id: string }[] | null) ?? []).length > 0;
-      if (hasLink) buckets.rejected.push(da.id as string);
-      else buckets.pending_pair.push(da.id as string);
+      if (hasEmbeddedRow(da.recon_links)) {
+        buckets.rejected.push(da.id as string);
+      } else {
+        buckets.pending_pair.push(da.id as string);
+      }
     }
     if (data.length < SUPABASE_PAGE_LIMIT) break;
     cursor += SUPABASE_PAGE_LIMIT;
