@@ -37,3 +37,5 @@ export type {
 export { ingestBACFile } from './ingest';
 
 export type { IngestArgs, IngestResult } from './ingest';
+
+export { reasonForDvtoCode } from './dvto-reasons';

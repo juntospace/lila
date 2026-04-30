@@ -128,4 +128,21 @@ describe('parseBACSheet', () => {
   it('throws on a sheet with no recognizable column-header row', () => {
     expect(() => parseBACSheet([['hello', 'world']])).toThrow(BACParseError);
   });
+
+  it.each(['Cuenta', 'No. de Cuenta', 'No Cuenta', 'N° Cuenta', 'Núm. Cuenta', 'Número de Cuenta'])(
+    'accepts "%s" as the account-number label',
+    (label) => {
+      const sheet = minimalBACSheet.map((row) => row.slice());
+      sheet[2] = [label, '100412600', null, null, null, null, null, null, null, null];
+      const result = parseBACSheet(sheet);
+      expect(result.header.accountNumber).toBe('100412600');
+      expect(result.warnings).not.toContain('Account number not found in header preamble.');
+    },
+  );
+
+  it('still rejects "Estado de Cuenta" as the account-number label', () => {
+    const result = parseBACSheet(minimalBACSheet);
+    // "Estado de Cuenta" sits at row 0 as the doc title — must not capture it.
+    expect(result.header.accountNumber).toBe('100412600');
+  });
 });

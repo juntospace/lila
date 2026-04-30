@@ -220,9 +220,11 @@ function readPreambleHeader(
   dateRangeEnd: string | null;
 } {
   // Anchor at start so the doc title "Estado de Cuenta" doesn't false-match
-  // the account-number label "Cuenta". Trailing colon/whitespace tolerated.
+  // the account-number label "Cuenta". The optional prefix accepts BAC's
+  // common label variants: "Cuenta", "No. Cuenta", "No. de Cuenta",
+  // "N° Cuenta", "Núm. Cuenta", "Número de Cuenta".
   const labels = {
-    accountNumber: /^(n[uú]mero\s+de\s+)?cuenta\b/i,
+    accountNumber: /^(n[uú]m\.?|n[uú]mero|no\.?|n°|nro\.?)?\s*(de\s+)?cuenta\b/i,
     accountHolder: /^(nombre|cliente|titular)\b/i,
     currency: /^(moneda|currency)\b/i,
     saldoInicial: /^saldo\s+inicial\b/i,

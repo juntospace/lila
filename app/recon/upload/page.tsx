@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import { OperatorShell } from "@/components/patterns/OperatorShell";
 import { Card, CardBody, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
 import { requireReconWriter } from "@/lib/auth/guard";
@@ -96,14 +98,16 @@ export default async function ReconUploadPage() {
             {activeAccounts.length > 0 && (
               <ul className="space-y-2 text-sm">
                 {activeAccounts.map((a) => (
-                  <li
-                    key={a.id}
-                    className="rounded border border-border-subtle bg-bg-raised px-3 py-2"
-                  >
-                    <div className="font-medium text-fg">{a.holder_name}</div>
-                    <div className="text-xs text-fg-muted">
-                      {a.rail.toUpperCase()} · {a.account_number} · {a.currency}
-                    </div>
+                  <li key={a.id}>
+                    <Link
+                      href={`/recon/accounts/${a.id}`}
+                      className="block rounded border border-border-subtle bg-bg-raised px-3 py-2 transition-colors hover:border-border-strong hover:bg-bg-surface"
+                    >
+                      <div className="font-medium text-fg">{a.holder_name}</div>
+                      <div className="text-xs text-fg-muted">
+                        {a.rail.toUpperCase()} · {a.account_number} · {a.currency}
+                      </div>
+                    </Link>
                   </li>
                 ))}
               </ul>
@@ -146,7 +150,12 @@ export default async function ReconUploadPage() {
                             {new Date(u.uploaded_at).toLocaleString()}
                           </td>
                           <td className="py-3 pr-4">
-                            {acct?.account_number ?? u.account_id.slice(0, 8)}
+                            <Link
+                              href={`/recon/accounts/${u.account_id}`}
+                              className="hover:underline"
+                            >
+                              {acct?.account_number ?? u.account_id.slice(0, 8)}
+                            </Link>
                           </td>
                           <td className="py-3 pr-4 max-w-[280px] truncate">
                             {u.original_filename ?? "—"}

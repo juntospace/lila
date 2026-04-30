@@ -42,7 +42,7 @@ export function UploadForm({ accounts }: { accounts: Account[] }) {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="file">Statement (.xlsx)</Label>
+          <Label htmlFor="file">Statement (.xls or .xlsx)</Label>
           <input
             id="file"
             type="file"

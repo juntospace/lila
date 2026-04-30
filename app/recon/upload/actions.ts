@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { readSheet } from "read-excel-file/node";
+import * as XLSX from "xlsx";
 import { z } from "zod";
 
 import { requireReconWriter } from "@/lib/auth/guard";
@@ -95,9 +95,9 @@ export type UploadActionState = {
 };
 
 const ALLOWED_MIME = new Set([
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  "application/vnd.ms-excel",
-  "application/octet-stream", // some browsers omit MIME for .xlsx
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", // .xlsx
+  "application/vnd.ms-excel", // .xls (BAC's default export)
+  "application/octet-stream", // some browsers omit MIME
 ]);
 
 export async function uploadStatement(
@@ -143,8 +143,20 @@ export async function uploadStatement(
 
   let matrix: unknown[][];
   try {
-    // First sheet only — BAC exports always have a single "Report1" sheet.
-    matrix = await readSheet(Buffer.from(fileBytes), 1);
+    // SheetJS handles both .xlsx (OOXML zip) and .xls (legacy OLE compound
+    // document) — BAC's default export is .xls. We pull the first sheet as
+    // an array-of-arrays matching the parser's Cell[][] contract.
+    const workbook = XLSX.read(fileBytes, { type: "array", cellDates: true });
+    const firstSheetName = workbook.SheetNames[0];
+    if (!firstSheetName) {
+      return { status: "error", message: "The workbook has no sheets." };
+    }
+    matrix = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[firstSheetName], {
+      header: 1,
+      raw: true,
+      defval: null,
+      blankrows: true,
+    });
   } catch (err) {
     return {
       status: "error",
