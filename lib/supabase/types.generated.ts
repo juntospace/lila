@@ -14,6 +14,39 @@ export type Database = {
   }
   public: {
     Tables: {
+      bank_accounts: {
+        Row: {
+          account_number: string
+          created_at: string
+          currency: string
+          holder_name: string
+          id: string
+          rail: Database["public"]["Enums"]["bank_accounts_rail_enum"]
+          status: Database["public"]["Enums"]["bank_accounts_status_enum"]
+          updated_at: string
+        }
+        Insert: {
+          account_number: string
+          created_at?: string
+          currency?: string
+          holder_name: string
+          id?: string
+          rail: Database["public"]["Enums"]["bank_accounts_rail_enum"]
+          status?: Database["public"]["Enums"]["bank_accounts_status_enum"]
+          updated_at?: string
+        }
+        Update: {
+          account_number?: string
+          created_at?: string
+          currency?: string
+          holder_name?: string
+          id?: string
+          rail?: Database["public"]["Enums"]["bank_accounts_rail_enum"]
+          status?: Database["public"]["Enums"]["bank_accounts_status_enum"]
+          updated_at?: string
+        }
+        Relationships: []
+      }
       operator_allowlist: {
         Row: {
           created_at: string
@@ -34,6 +67,271 @@ export type Database = {
           role?: Database["public"]["Enums"]["operator_role"]
         }
         Relationships: []
+      }
+      recon_links: {
+        Row: {
+          da_txn_id: string
+          match_strategy: Database["public"]["Enums"]["recon_links_strategy_enum"]
+          matched_at: string
+          matched_by: string | null
+          pr_txn_id: string
+        }
+        Insert: {
+          da_txn_id: string
+          match_strategy: Database["public"]["Enums"]["recon_links_strategy_enum"]
+          matched_at?: string
+          matched_by?: string | null
+          pr_txn_id: string
+        }
+        Update: {
+          da_txn_id?: string
+          match_strategy?: Database["public"]["Enums"]["recon_links_strategy_enum"]
+          matched_at?: string
+          matched_by?: string | null
+          pr_txn_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "recon_links_da_txn_id_fkey"
+            columns: ["da_txn_id"]
+            isOneToOne: true
+            referencedRelation: "recon_transactions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "recon_links_pr_txn_id_fkey"
+            columns: ["pr_txn_id"]
+            isOneToOne: true
+            referencedRelation: "recon_transactions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      recon_manual_actions: {
+        Row: {
+          acted_at: string
+          acted_by: string | null
+          action: Database["public"]["Enums"]["recon_manual_actions_action_enum"]
+          id: string
+          justification: string
+          new_kind:
+            | Database["public"]["Enums"]["recon_transactions_kind_enum"]
+            | null
+          new_state:
+            | Database["public"]["Enums"]["recon_transactions_state_enum"]
+            | null
+          prior_kind:
+            | Database["public"]["Enums"]["recon_transactions_kind_enum"]
+            | null
+          prior_state:
+            | Database["public"]["Enums"]["recon_transactions_state_enum"]
+            | null
+          txn_id: string
+        }
+        Insert: {
+          acted_at?: string
+          acted_by?: string | null
+          action: Database["public"]["Enums"]["recon_manual_actions_action_enum"]
+          id?: string
+          justification: string
+          new_kind?:
+            | Database["public"]["Enums"]["recon_transactions_kind_enum"]
+            | null
+          new_state?:
+            | Database["public"]["Enums"]["recon_transactions_state_enum"]
+            | null
+          prior_kind?:
+            | Database["public"]["Enums"]["recon_transactions_kind_enum"]
+            | null
+          prior_state?:
+            | Database["public"]["Enums"]["recon_transactions_state_enum"]
+            | null
+          txn_id: string
+        }
+        Update: {
+          acted_at?: string
+          acted_by?: string | null
+          action?: Database["public"]["Enums"]["recon_manual_actions_action_enum"]
+          id?: string
+          justification?: string
+          new_kind?:
+            | Database["public"]["Enums"]["recon_transactions_kind_enum"]
+            | null
+          new_state?:
+            | Database["public"]["Enums"]["recon_transactions_state_enum"]
+            | null
+          prior_kind?:
+            | Database["public"]["Enums"]["recon_transactions_kind_enum"]
+            | null
+          prior_state?:
+            | Database["public"]["Enums"]["recon_transactions_state_enum"]
+            | null
+          txn_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "recon_manual_actions_txn_id_fkey"
+            columns: ["txn_id"]
+            isOneToOne: false
+            referencedRelation: "recon_transactions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      recon_transactions: {
+        Row: {
+          account_id: string
+          balance_minor: number | null
+          code: string
+          confirmable_after: string | null
+          created_at: string
+          credit_minor: number
+          currency: string
+          debit_minor: number
+          description: string | null
+          id: string
+          kind: Database["public"]["Enums"]["recon_transactions_kind_enum"]
+          payer_name_raw: string | null
+          posted_at: string
+          rail_native_ref: string | null
+          return_code: string | null
+          row_hash: string
+          state: Database["public"]["Enums"]["recon_transactions_state_enum"]
+          updated_at: string
+          upload_id: string
+        }
+        Insert: {
+          account_id: string
+          balance_minor?: number | null
+          code: string
+          confirmable_after?: string | null
+          created_at?: string
+          credit_minor?: number
+          currency: string
+          debit_minor?: number
+          description?: string | null
+          id?: string
+          kind?: Database["public"]["Enums"]["recon_transactions_kind_enum"]
+          payer_name_raw?: string | null
+          posted_at: string
+          rail_native_ref?: string | null
+          return_code?: string | null
+          row_hash: string
+          state?: Database["public"]["Enums"]["recon_transactions_state_enum"]
+          updated_at?: string
+          upload_id: string
+        }
+        Update: {
+          account_id?: string
+          balance_minor?: number | null
+          code?: string
+          confirmable_after?: string | null
+          created_at?: string
+          credit_minor?: number
+          currency?: string
+          debit_minor?: number
+          description?: string | null
+          id?: string
+          kind?: Database["public"]["Enums"]["recon_transactions_kind_enum"]
+          payer_name_raw?: string | null
+          posted_at?: string
+          rail_native_ref?: string | null
+          return_code?: string | null
+          row_hash?: string
+          state?: Database["public"]["Enums"]["recon_transactions_state_enum"]
+          updated_at?: string
+          upload_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "recon_transactions_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "bank_accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "recon_transactions_upload_id_fkey"
+            columns: ["upload_id"]
+            isOneToOne: false
+            referencedRelation: "recon_uploads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      recon_uploads: {
+        Row: {
+          account_id: string
+          created_at: string
+          date_range_end: string | null
+          date_range_start: string | null
+          error_message: string | null
+          file_sha256: string
+          id: string
+          integrity_ok: boolean | null
+          method: Database["public"]["Enums"]["recon_uploads_method_enum"]
+          original_filename: string | null
+          rows_duplicate: number
+          rows_new: number
+          rows_total: number
+          saldo_final_minor: number | null
+          saldo_inicial_minor: number | null
+          status: Database["public"]["Enums"]["recon_uploads_status_enum"]
+          updated_at: string
+          uploaded_at: string
+          uploaded_by: string | null
+        }
+        Insert: {
+          account_id: string
+          created_at?: string
+          date_range_end?: string | null
+          date_range_start?: string | null
+          error_message?: string | null
+          file_sha256: string
+          id?: string
+          integrity_ok?: boolean | null
+          method: Database["public"]["Enums"]["recon_uploads_method_enum"]
+          original_filename?: string | null
+          rows_duplicate?: number
+          rows_new?: number
+          rows_total?: number
+          saldo_final_minor?: number | null
+          saldo_inicial_minor?: number | null
+          status?: Database["public"]["Enums"]["recon_uploads_status_enum"]
+          updated_at?: string
+          uploaded_at?: string
+          uploaded_by?: string | null
+        }
+        Update: {
+          account_id?: string
+          created_at?: string
+          date_range_end?: string | null
+          date_range_start?: string | null
+          error_message?: string | null
+          file_sha256?: string
+          id?: string
+          integrity_ok?: boolean | null
+          method?: Database["public"]["Enums"]["recon_uploads_method_enum"]
+          original_filename?: string | null
+          rows_duplicate?: number
+          rows_new?: number
+          rows_total?: number
+          saldo_final_minor?: number | null
+          saldo_inicial_minor?: number | null
+          status?: Database["public"]["Enums"]["recon_uploads_status_enum"]
+          updated_at?: string
+          uploaded_at?: string
+          uploaded_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "recon_uploads_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "bank_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       user_profiles: {
         Row: {
@@ -79,12 +377,33 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      is_active_operator: { Args: never; Returns: boolean }
+      is_recon_writer: { Args: never; Returns: boolean }
     }
     Enums: {
+      bank_accounts_rail_enum: "bac"
+      bank_accounts_status_enum: "active" | "archived"
       operator_language: "en" | "es"
       operator_role: "agent" | "loan_officer" | "risk_analyst" | "admin"
       operator_status: "active" | "disabled"
+      recon_links_strategy_enum: "auto_fifo_name_amount" | "manual"
+      recon_manual_actions_action_enum:
+        | "force_confirm"
+        | "force_reject"
+        | "reclassify"
+      recon_transactions_kind_enum:
+        | "loan_inflow"
+        | "reversal"
+        | "non_loan"
+        | "unknown"
+      recon_transactions_state_enum:
+        | "pending"
+        | "confirmed"
+        | "rejected"
+        | "non_loan"
+        | "pending_pair"
+      recon_uploads_method_enum: "statement_excel"
+      recon_uploads_status_enum: "parsed" | "committed" | "failed"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -212,9 +531,32 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
+      bank_accounts_rail_enum: ["bac"],
+      bank_accounts_status_enum: ["active", "archived"],
       operator_language: ["en", "es"],
       operator_role: ["agent", "loan_officer", "risk_analyst", "admin"],
       operator_status: ["active", "disabled"],
+      recon_links_strategy_enum: ["auto_fifo_name_amount", "manual"],
+      recon_manual_actions_action_enum: [
+        "force_confirm",
+        "force_reject",
+        "reclassify",
+      ],
+      recon_transactions_kind_enum: [
+        "loan_inflow",
+        "reversal",
+        "non_loan",
+        "unknown",
+      ],
+      recon_transactions_state_enum: [
+        "pending",
+        "confirmed",
+        "rejected",
+        "non_loan",
+        "pending_pair",
+      ],
+      recon_uploads_method_enum: ["statement_excel"],
+      recon_uploads_status_enum: ["parsed", "committed", "failed"],
     },
   },
 } as const
