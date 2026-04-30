@@ -47,6 +47,18 @@ export interface RecomputeStats {
   daPendingPair: number;
   /** DAs whose description was re-parsed and now has a return_code/payer name. */
   dasReparsed: number;
+  /** Diagnostic — total recon_transactions for this account. */
+  txnCount: number;
+  /** Diagnostic — links found in DB at the start of the recompute (PR side). */
+  preexistingLinks: number;
+  /** Diagnostic — DAs that started without a link (input to the pairing loop). */
+  unpairedDaInput: number;
+  /** Diagnostic — DAs skipped because parser captured no payer name. */
+  unpairedNoPayerName: number;
+  /** Diagnostic — DAs where no PR with same amount + name was eligible. */
+  unpairedNoMatch: number;
+  /** Diagnostic — link inserts that hit a unique violation (race / stale Set). */
+  unpairedLinkConflict: number;
 }
 
 export async function recomputeAccount(
@@ -68,9 +80,14 @@ export async function recomputeAccount(
 
   // 2. Pair every unpaired DA. tryPairDA mutates the Sets on success so
   //    the next iteration's eligibility check sees the new link.
+  const preexistingLinks = linkedPrIds.size;
   const unpairedDAs = await fetchUnpairedDAs(supabase, accountId, linkedDaIds);
+  const unpairedDaInput = unpairedDAs.length;
   let reversalsPaired = 0;
   let reversalsUnpaired = 0;
+  let unpairedNoPayerName = 0;
+  let unpairedNoMatch = 0;
+  let unpairedLinkConflict = 0;
   for (const da of unpairedDAs) {
     const outcome = await tryPairDA(
       supabase,
@@ -81,7 +98,12 @@ export async function recomputeAccount(
       linkedDaIds,
     );
     if (outcome === "paired") reversalsPaired++;
-    else reversalsUnpaired++;
+    else {
+      reversalsUnpaired++;
+      if (outcome === "no_payer_name") unpairedNoPayerName++;
+      else if (outcome === "link_conflict") unpairedLinkConflict++;
+      else unpairedNoMatch++;
+    }
   }
 
   // 3. File-clock cutoff = max posted_at across the account.
@@ -98,6 +120,14 @@ export async function recomputeAccount(
   const prStats = await recomputePRStates(supabase, accountId, cutoff, linkedPrIds);
   const daStats = await recomputeDAStates(supabase, accountId, linkedDaIds);
 
+  // Total txn count for diagnostics (cheap; we already know it from the
+  // earlier fetchAllTxnIds inside fetchLinkedTxnIds, but it's not exposed —
+  // do a HEAD-count which is one round-trip).
+  const { count: txnCount } = await supabase
+    .from("recon_transactions")
+    .select("id", { count: "exact", head: true })
+    .eq("account_id", accountId);
+
   return {
     reversalsPaired,
     reversalsUnpaired,
@@ -107,6 +137,12 @@ export async function recomputeAccount(
     daRejected: daStats.rejected,
     daPendingPair: daStats.pendingPair,
     dasReparsed,
+    txnCount: txnCount ?? 0,
+    preexistingLinks,
+    unpairedDaInput,
+    unpairedNoPayerName,
+    unpairedNoMatch,
+    unpairedLinkConflict,
   };
 }
 
@@ -241,6 +277,8 @@ async function fetchUnpairedDAs(
   return all;
 }
 
+type PairOutcome = "paired" | "no_payer_name" | "no_match" | "link_conflict";
+
 async function tryPairDA(
   supabase: SupabaseClient,
   accountId: string,
@@ -248,8 +286,8 @@ async function tryPairDA(
   uploadedBy: string | null,
   linkedPrIds: Set<string>,
   linkedDaIds: Set<string>,
-): Promise<"paired" | "unpaired"> {
-  if (!da.payer_name_raw) return "unpaired";
+): Promise<PairOutcome> {
+  if (!da.payer_name_raw) return "no_payer_name";
   const daAmount = BigInt(da.debit_minor);
 
   // Candidates: every PR in this account with the same credit amount.
@@ -288,7 +326,7 @@ async function tryPairDA(
     },
     eligible,
   );
-  if (!match) return "unpaired";
+  if (!match) return "no_match";
 
   const { error: linkErr } = await supabase.from("recon_links").insert({
     pr_txn_id: match.id,
@@ -299,7 +337,7 @@ async function tryPairDA(
   if (linkErr) {
     // 23505 = unique violation. The DB is the ultimate source of truth, so
     // if we lost a race (or our Set was stale), back out cleanly.
-    if (linkErr.code === "23505") return "unpaired";
+    if (linkErr.code === "23505") return "link_conflict";
     throw linkErr;
   }
 

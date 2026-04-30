@@ -29,16 +29,31 @@ export function RecomputeButton({ accountId }: { accountId: string }) {
         {pending ? "Recomputing…" : "Recompute pairings + states"}
       </Button>
       {result?.status === "ok" && result.stats && (
-        <span className="text-xs text-fg-muted">
-          {result.stats.dasReparsed > 0
-            ? `Re-parsed ${result.stats.dasReparsed} DVTO/RCZO row${
-                result.stats.dasReparsed === 1 ? "" : "s"
-              }; `
-            : ""}
-          Paired {result.stats.reversalsPaired} reversal
-          {result.stats.reversalsPaired === 1 ? "" : "s"}; {result.stats.prsConfirmed} confirmed,{" "}
-          {result.stats.prsRejected} rejected, {result.stats.prsPending} pending.
-        </span>
+        <div className="text-xs text-fg-muted">
+          <div>
+            {result.stats.dasReparsed > 0
+              ? `Re-parsed ${result.stats.dasReparsed} DVTO/RCZO row${
+                  result.stats.dasReparsed === 1 ? "" : "s"
+                }; `
+              : ""}
+            Paired {result.stats.reversalsPaired} reversal
+            {result.stats.reversalsPaired === 1 ? "" : "s"}; {result.stats.prsConfirmed} confirmed,{" "}
+            {result.stats.prsRejected} rejected, {result.stats.prsPending} pending.
+          </div>
+          <div className="mt-1 text-fg-subtle">
+            <span className="font-mono">
+              [debug]
+              txns={result.stats.txnCount}
+              · preLinks={result.stats.preexistingLinks}
+              · unpairedDAsIn={result.stats.unpairedDaInput}
+              · noName={result.stats.unpairedNoPayerName}
+              · noMatch={result.stats.unpairedNoMatch}
+              · linkConflict={result.stats.unpairedLinkConflict}
+              · daRejected={result.stats.daRejected}
+              · daPendingPair={result.stats.daPendingPair}
+            </span>
+          </div>
+        </div>
       )}
       {result?.status === "error" && (
         <span className="text-xs text-danger">Error: {result.message}</span>
