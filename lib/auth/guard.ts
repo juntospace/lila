@@ -83,3 +83,17 @@ export async function requireOperator(): Promise<OperatorSession> {
     profile: { ...profile, notification_prefs: narrowPrefs(profile.notification_prefs) },
   };
 }
+
+/**
+ * Guard for routes that need recon-writer privileges (creating bank
+ * accounts, uploading statements, posting manual reconciliation actions).
+ * Mirrors the `is_recon_writer()` SECURITY DEFINER function used in RLS.
+ */
+export async function requireReconWriter(): Promise<OperatorSession> {
+  const session = await requireOperator();
+  const role = session.profile.role;
+  if (role !== "loan_officer" && role !== "admin") {
+    redirect("/?error=insufficient_role");
+  }
+  return session;
+}
