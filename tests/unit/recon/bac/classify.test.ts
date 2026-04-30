@@ -174,6 +174,57 @@ describe("pickFifoMatchPR", () => {
     expect(match?.id).toBe("p1");
   });
 
+  it("Karla/Beatriz scenario: 3 same-amount same-name DAs all pair when eligibility filter narrows over iterations", () => {
+    // Simulates the flow inside recompute: the "eligible" set is everything
+    // not already paired. After each successful match the test removes that
+    // PR from the set, mirroring how the in-memory linkedPrIds Set mutates
+    // in tryPairDA.
+    const allPrs: PRCandidate[] = [
+      { id: "p1", postedAt: "2026-04-07", rowIndex: 0, creditMinor: 1000n, description: desc("Karla Margaret Borg") },
+      { id: "p2", postedAt: "2026-04-07", rowIndex: 1, creditMinor: 1000n, description: desc("Karla Margaret Borg") },
+      { id: "p3", postedAt: "2026-04-07", rowIndex: 2, creditMinor: 1000n, description: desc("Karla Margaret Borg") },
+    ];
+    const dasInOrder = [
+      { amountMinor: 1000n, payerNameRaw: "KARLA MARGARET BORGE", postedAt: "2026-04-07" },
+      { amountMinor: 1000n, payerNameRaw: "KARLA MARGARET BORGE", postedAt: "2026-04-07" },
+      { amountMinor: 1000n, payerNameRaw: "KARLA MARGARET BORGE", postedAt: "2026-04-07" },
+    ];
+    const eligible = [...allPrs];
+    const matches: string[] = [];
+    for (const da of dasInOrder) {
+      const m = pickFifoMatchPR(da, eligible);
+      expect(m, `DA ${matches.length + 1} should pair`).not.toBeNull();
+      matches.push(m!.id);
+      // Remove this PR from eligibility — mirrors linkedPrIds.add inside
+      // tryPairDA and the next-iteration filter.
+      const idx = eligible.findIndex((p) => p.id === m!.id);
+      eligible.splice(idx, 1);
+    }
+    expect(matches).toEqual(["p1", "p2", "p3"]);
+  });
+
+  it("Expansion-Latinoamer scenario: amount-segregated candidates pair correctly across same-name PRs", () => {
+    // 3 PRs (64, 63, 64), 2 DAs (63, 64). The amount filter happens in the
+    // candidates *query*, so per-DA pickFifoMatchPR only sees PRs with the
+    // matching credit amount. We simulate that here.
+    const allPrs: PRCandidate[] = [
+      { id: "p1", postedAt: "2026-04-07", rowIndex: 0, creditMinor: 6400n, description: desc("Expansion Latinoame") },
+      { id: "p2", postedAt: "2026-04-07", rowIndex: 1, creditMinor: 6300n, description: desc("Expansion Latinoame") },
+      { id: "p3", postedAt: "2026-04-07", rowIndex: 2, creditMinor: 6400n, description: desc("Expansion Latinoame") },
+    ];
+    // DA-63 first: only p2 matches by amount.
+    const da63 = { amountMinor: 6300n, payerNameRaw: "EXPANSION LATINOAMER", postedAt: "2026-04-07" };
+    const eligible63 = allPrs.filter((p) => p.creditMinor === 6300n);
+    const m63 = pickFifoMatchPR(da63, eligible63);
+    expect(m63?.id).toBe("p2");
+
+    // DA-64 second: p1 and p3 match by amount; FIFO picks the earlier index.
+    const da64 = { amountMinor: 6400n, payerNameRaw: "EXPANSION LATINOAMER", postedAt: "2026-04-07" };
+    const eligible64 = allPrs.filter((p) => p.creditMinor === 6400n);
+    const m64 = pickFifoMatchPR(da64, eligible64);
+    expect(m64?.id).toBe("p1");
+  });
+
   it("rejects unrelated names even with matching amount", () => {
     const candidates: PRCandidate[] = [
       { id: "p1", postedAt: "2026-04-05", rowIndex: 0, creditMinor: 5050n, description: desc("Maria Lopez") },
