@@ -35,26 +35,52 @@ export async function GET(
     return NextResponse.json({ error: "Account not found" }, { status: 404 });
   }
 
-  let query = supabase
-    .from("recon_transactions")
-    .select(
-      "id, posted_at, code, credit_minor, description, state, confirmable_after, rail_native_ref, payer_name_raw, currency",
-    )
-    .eq("account_id", accountId)
-    .eq("kind", "loan_inflow")
-    .order("posted_at", { ascending: false })
-    .order("id", { ascending: false });
+  // Walk the result in 1000-row pages — Supabase JS caps a single request
+  // at 1000 rows by default. Without explicit pagination, exporting an
+  // account with > 1000 matching rows would silently truncate to the most
+  // recent 1000 (sorted posted_at desc), which is exactly the bug ops
+  // reported: "April 5–30 export only contained April 20–30".
+  type ExportRow = {
+    id: string;
+    posted_at: string;
+    code: string;
+    credit_minor: string | number;
+    description: string | null;
+    state: string;
+    confirmable_after: string | null;
+    rail_native_ref: string | null;
+    payer_name_raw: string | null;
+    currency: string;
+  };
 
-  if ((STATES as readonly string[]).includes(state))
-    query = query.eq("state", state as (typeof STATES)[number]);
-  if (from && /^\d{4}-\d{2}-\d{2}$/.test(from)) query = query.gte("posted_at", from);
-  if (to && /^\d{4}-\d{2}-\d{2}$/.test(to)) query = query.lte("posted_at", to);
+  const PAGE = 1000;
+  const SAFETY_CAP = 200_000;
+  const credits: ExportRow[] = [];
+  let cursor = 0;
+  while (cursor < SAFETY_CAP) {
+    let q = supabase
+      .from("recon_transactions")
+      .select(
+        "id, posted_at, code, credit_minor, description, state, confirmable_after, rail_native_ref, payer_name_raw, currency",
+      )
+      .eq("account_id", accountId)
+      .eq("kind", "loan_inflow")
+      .order("posted_at", { ascending: false })
+      .order("id", { ascending: false })
+      .range(cursor, cursor + PAGE - 1);
 
-  const { data: rows, error } = await query;
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    if ((STATES as readonly string[]).includes(state))
+      q = q.eq("state", state as (typeof STATES)[number]);
+    if (from && /^\d{4}-\d{2}-\d{2}$/.test(from)) q = q.gte("posted_at", from);
+    if (to && /^\d{4}-\d{2}-\d{2}$/.test(to)) q = q.lte("posted_at", to);
+
+    const { data, error } = await q;
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (!data || data.length === 0) break;
+    credits.push(...(data as ExportRow[]));
+    if (data.length < PAGE) break;
+    cursor += PAGE;
   }
-  const credits = rows ?? [];
 
   // Lookup DVTO codes + raw descriptions for rejected PRs (description is
   // the legacy fallback when the parser regex didn't extract a code).

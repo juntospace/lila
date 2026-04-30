@@ -69,6 +69,31 @@ function asDir(v: string | undefined): "asc" | "desc" {
   return v === "asc" ? "asc" : "desc";
 }
 
+const SUPABASE_PAGE_LIMIT = 1000;
+const SUPABASE_PAGE_SAFETY_CAP = 200_000;
+
+// Walk a Supabase query in 1000-row pages until we've consumed it.
+// Use this for "give me ALL matching rows" cases (totals, exports) where a
+// single .select() would silently truncate at the per-request cap.
+async function fetchAllPages<TRow>(
+  buildQuery: (
+    cursor: number,
+    pageSize: number,
+  ) => PromiseLike<{ data: TRow[] | null; error: unknown }>,
+): Promise<TRow[]> {
+  const all: TRow[] = [];
+  let cursor = 0;
+  while (cursor < SUPABASE_PAGE_SAFETY_CAP) {
+    const { data, error } = await buildQuery(cursor, SUPABASE_PAGE_LIMIT);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    all.push(...data);
+    if (data.length < SUPABASE_PAGE_LIMIT) break;
+    cursor += SUPABASE_PAGE_LIMIT;
+  }
+  return all;
+}
+
 export default async function AccountDetailPage({
   params,
   searchParams,
@@ -122,17 +147,25 @@ export default async function AccountDetailPage({
   const to = explicitTo ?? defaultRange?.to;
   const usingDefault = !explicitFrom && !explicitTo && !showAll;
 
-  // Aggregate totals don't depend on pagination — query them with their
-  // own narrow projection so the page row count is independent.
-  const totalsQuery = supabase
-    .from("recon_transactions")
-    .select("state, credit_minor")
-    .eq("account_id", accountId)
-    .eq("kind", "loan_inflow");
-  if (stateFilter !== "all") totalsQuery.eq("state", stateFilter);
-  if (from) totalsQuery.gte("posted_at", from);
-  if (to) totalsQuery.lte("posted_at", to);
-  const { data: totalsRows } = await totalsQuery;
+  // Aggregate totals are scoped to (account, kind, date) only — the state
+  // filter narrows the list table, never the cards. We walk the result in
+  // 1000-row pages because Supabase JS caps a single request at 1000 rows
+  // by default; without paging, accounts with > 1000 loan_inflow rows in
+  // the date window would produce undercounts.
+  const totalsRows = await fetchAllPages<{ state: string; credit_minor: string | number }>(
+    (cursor, pageSize) => {
+      let q = supabase
+        .from("recon_transactions")
+        .select("state, credit_minor")
+        .eq("account_id", accountId)
+        .eq("kind", "loan_inflow")
+        .order("id", { ascending: true })
+        .range(cursor, cursor + pageSize - 1);
+      if (from) q = q.gte("posted_at", from);
+      if (to) q = q.lte("posted_at", to);
+      return q;
+    },
+  );
 
   // Page query. We use { count: "exact" } so the footer can render the
   // total page count without a second roundtrip.
@@ -212,7 +245,7 @@ export default async function AccountDetailPage({
     .is("return_code", null);
   const showBackfillHint = (nullDaCount ?? 0) > 0;
 
-  const totalsByState = (totalsRows ?? []).reduce(
+  const totalsByState = totalsRows.reduce(
     (acc, r) => {
       const s = r.state as keyof typeof acc;
       if (s in acc) {
@@ -237,10 +270,15 @@ export default async function AccountDetailPage({
       dir,
       page: String(safePage),
       perPage: String(perPage),
+      // Preserve "show all history" toggle across pagination/sort/perPage
+      // links — without this, clicking Next or a per-page chip dropped us
+      // back to the last-2-working-days default.
+      range: showAll ? "all" : undefined,
       ...overrides,
     };
     const usp = new URLSearchParams();
     if (merged.state && merged.state !== "all") usp.set("state", merged.state);
+    if (merged.range === "all") usp.set("range", "all");
     if (merged.from) usp.set("from", merged.from);
     if (merged.to) usp.set("to", merged.to);
     if (merged.sort && merged.sort !== "posted_at") usp.set("sort", merged.sort);
@@ -252,7 +290,12 @@ export default async function AccountDetailPage({
     return s ? `?${s}` : "";
   };
 
-  const exportHref = `/recon/accounts/${accountId}/export${exportQS({ state: stateFilter, from, to })}`;
+  const exportHref = `/recon/accounts/${accountId}/export${exportQS({
+    state: stateFilter,
+    from,
+    to,
+    range: showAll ? "all" : undefined,
+  })}`;
 
   const showingFrom = total === 0 ? 0 : start + 1;
   const showingTo = Math.min(start + perPage, total);
@@ -358,7 +401,7 @@ export default async function AccountDetailPage({
             </span>
             {!showAll && (
               <Link
-                href={`/recon/accounts/${accountId}?range=all${stateFilter !== "all" ? `&state=${stateFilter}` : ""}`}
+                href={`/recon/accounts/${accountId}${baseQS({ range: "all", from: undefined, to: undefined, page: "1" })}`}
                 className="text-brand-300 hover:text-brand-200"
               >
                 Show all history
@@ -366,7 +409,7 @@ export default async function AccountDetailPage({
             )}
             {showAll && (
               <Link
-                href={`/recon/accounts/${accountId}${stateFilter !== "all" ? `?state=${stateFilter}` : ""}`}
+                href={`/recon/accounts/${accountId}${baseQS({ range: undefined, from: undefined, to: undefined, page: "1" })}`}
                 className="text-brand-300 hover:text-brand-200"
               >
                 Back to last 2 working days
@@ -631,10 +674,19 @@ function StateBadge({ state }: { state: string }) {
 }
 
 // Export route only takes filters, never sort/pagination — admins always
-// get the full filtered set in the .xlsx.
-function exportQS(params: { state: string; from?: string; to?: string }): string {
+// get the full filtered set in the .xlsx. We pass an explicit `range=all`
+// in show-all mode so the export skips date filters even though no from/to
+// are present in the URL (different from the page's "no params" default,
+// which would otherwise apply the last-2-working-days window).
+function exportQS(params: {
+  state: string;
+  from?: string;
+  to?: string;
+  range?: string;
+}): string {
   const sp = new URLSearchParams();
   if (params.state && params.state !== "all") sp.set("state", params.state);
+  if (params.range === "all") sp.set("range", "all");
   if (params.from) sp.set("from", params.from);
   if (params.to) sp.set("to", params.to);
   const s = sp.toString();
