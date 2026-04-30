@@ -1,4 +1,4 @@
-import { Download, Filter } from "lucide-react";
+import { ChevronDown, ChevronsUpDown, ChevronUp, Download, Filter } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -18,10 +18,28 @@ type SearchParams = {
   state?: string;
   from?: string;
   to?: string;
+  page?: string;
+  perPage?: string;
+  sort?: string;
+  dir?: string;
 };
 
 const STATES = ["all", "pending", "confirmed", "rejected"] as const;
 type StateFilter = (typeof STATES)[number];
+
+const SORTABLE = {
+  posted_at: "Date",
+  code: "Code",
+  description: "Payer",
+  credit_minor: "Amount",
+  state: "Status",
+  rail_native_ref: "Reference",
+} as const;
+type SortKey = keyof typeof SORTABLE;
+const SORT_KEYS = Object.keys(SORTABLE) as SortKey[];
+
+const PER_PAGE_DEFAULT = 50;
+const PER_PAGE_OPTIONS = [25, 50, 100, 250];
 
 function asState(v: string | undefined): StateFilter {
   return (STATES as readonly string[]).includes(v ?? "")
@@ -29,9 +47,23 @@ function asState(v: string | undefined): StateFilter {
     : "all";
 }
 
+function asInt(v: string | undefined, fallback: number, min = 1, max = Infinity): number {
+  const n = Number.parseInt(v ?? "", 10);
+  if (Number.isNaN(n)) return fallback;
+  return Math.min(Math.max(n, min), max);
+}
+
 function isoOrUndefined(v: string | undefined): string | undefined {
   if (!v) return undefined;
   return /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined;
+}
+
+function asSortKey(v: string | undefined): SortKey {
+  return SORT_KEYS.includes(v as SortKey) ? (v as SortKey) : "posted_at";
+}
+
+function asDir(v: string | undefined): "asc" | "desc" {
+  return v === "asc" ? "asc" : "desc";
 }
 
 export default async function AccountDetailPage({
@@ -44,9 +76,14 @@ export default async function AccountDetailPage({
   const session = await requireReconWriter();
   const { accountId } = await params;
   const sp = await searchParams;
+
   const stateFilter = asState(sp.state);
   const from = isoOrUndefined(sp.from);
   const to = isoOrUndefined(sp.to);
+  const sort = asSortKey(sp.sort);
+  const dir = asDir(sp.dir);
+  const perPage = asInt(sp.perPage, PER_PAGE_DEFAULT, 1, 500);
+  const page = asInt(sp.page, 1, 1);
 
   const supabase = await createSupabaseServerClient();
 
@@ -58,24 +95,48 @@ export default async function AccountDetailPage({
 
   if (!account) notFound();
 
-  let query = supabase
+  // Aggregate totals don't depend on pagination — query them with their
+  // own narrow projection so the page row count is independent.
+  const totalsQuery = supabase
+    .from("recon_transactions")
+    .select("state, credit_minor")
+    .eq("account_id", accountId)
+    .eq("kind", "loan_inflow");
+  if (stateFilter !== "all") totalsQuery.eq("state", stateFilter);
+  if (from) totalsQuery.gte("posted_at", from);
+  if (to) totalsQuery.lte("posted_at", to);
+  const { data: totalsRows } = await totalsQuery;
+
+  // Page query. We use { count: "exact" } so the footer can render the
+  // total page count without a second roundtrip.
+  let pageQuery = supabase
     .from("recon_transactions")
     .select(
       "id, posted_at, code, credit_minor, description, state, confirmable_after, rail_native_ref, payer_name_raw",
+      { count: "exact" },
     )
     .eq("account_id", accountId)
-    .eq("kind", "loan_inflow")
-    .order("posted_at", { ascending: false })
+    .eq("kind", "loan_inflow");
+  if (stateFilter !== "all") pageQuery = pageQuery.eq("state", stateFilter);
+  if (from) pageQuery = pageQuery.gte("posted_at", from);
+  if (to) pageQuery = pageQuery.lte("posted_at", to);
+
+  // Stable secondary sort on id avoids row-shuffling when many rows share
+  // the same primary key (e.g., 200 PRs all posted on the same day).
+  pageQuery = pageQuery
+    .order(sort, { ascending: dir === "asc" })
     .order("id", { ascending: false });
 
-  if (stateFilter !== "all") query = query.eq("state", stateFilter);
-  if (from) query = query.gte("posted_at", from);
-  if (to) query = query.lte("posted_at", to);
+  const start = (page - 1) * perPage;
+  pageQuery = pageQuery.range(start, start + perPage - 1);
 
-  const { data: rows } = await query;
+  const { data: rows, count } = await pageQuery;
   const credits = rows ?? [];
+  const total = count ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / perPage));
+  const safePage = Math.min(page, totalPages);
 
-  // For rejected PRs, fetch the linked DA so we can show the DVTO code.
+  // Reasons for rejected PRs (only for rows on this page).
   const rejectedPrIds = credits
     .filter((r) => r.code === "PR" && r.state === "rejected")
     .map((r) => r.id);
@@ -101,8 +162,7 @@ export default async function AccountDetailPage({
     }
   }
 
-  // Aggregates for the header strip.
-  const totalsByState = credits.reduce(
+  const totalsByState = (totalsRows ?? []).reduce(
     (acc, r) => {
       const s = r.state as keyof typeof acc;
       if (s in acc) {
@@ -118,7 +178,34 @@ export default async function AccountDetailPage({
     } as Record<"pending" | "confirmed" | "rejected", { count: number; minor: bigint }>,
   );
 
-  const exportHref = `/recon/accounts/${accountId}/export${buildQuery({ state: stateFilter, from, to })}`;
+  const baseQS = (overrides: Partial<SearchParams>): string => {
+    const merged: SearchParams = {
+      state: stateFilter,
+      from,
+      to,
+      sort,
+      dir,
+      page: String(safePage),
+      perPage: String(perPage),
+      ...overrides,
+    };
+    const usp = new URLSearchParams();
+    if (merged.state && merged.state !== "all") usp.set("state", merged.state);
+    if (merged.from) usp.set("from", merged.from);
+    if (merged.to) usp.set("to", merged.to);
+    if (merged.sort && merged.sort !== "posted_at") usp.set("sort", merged.sort);
+    if (merged.dir && merged.dir !== "desc") usp.set("dir", merged.dir);
+    if (merged.page && merged.page !== "1") usp.set("page", merged.page);
+    if (merged.perPage && merged.perPage !== String(PER_PAGE_DEFAULT))
+      usp.set("perPage", merged.perPage);
+    const s = usp.toString();
+    return s ? `?${s}` : "";
+  };
+
+  const exportHref = `/recon/accounts/${accountId}/export${exportQS({ state: stateFilter, from, to })}`;
+
+  const showingFrom = total === 0 ? 0 : start + 1;
+  const showingTo = Math.min(start + perPage, total);
 
   return (
     <OperatorShell session={session}>
@@ -158,7 +245,7 @@ export default async function AccountDetailPage({
           <Button asChild variant="secondary" size="sm">
             <a href={exportHref}>
               <Download className="h-4 w-4" />
-              Export Excel
+              Export Excel ({total})
             </a>
           </Button>
         </CardHeader>
@@ -200,6 +287,12 @@ export default async function AccountDetailPage({
               )}
             </div>
           </div>
+          {/* Preserve sort + perPage when re-applying filters */}
+          {sort !== "posted_at" && <input type="hidden" name="sort" value={sort} />}
+          {dir !== "desc" && <input type="hidden" name="dir" value={dir} />}
+          {perPage !== PER_PAGE_DEFAULT && (
+            <input type="hidden" name="perPage" value={String(perPage)} />
+          )}
         </form>
 
         <CardBody>
@@ -212,13 +305,13 @@ export default async function AccountDetailPage({
               <table className="w-full text-sm">
                 <thead className="text-left text-xs uppercase tracking-wide text-fg-subtle">
                   <tr>
-                    <th className="pb-3 pr-4">Date</th>
-                    <th className="pb-3 pr-4">Code</th>
-                    <th className="pb-3 pr-4">Payer</th>
-                    <th className="pb-3 pr-4 text-right">Amount</th>
-                    <th className="pb-3 pr-4">Status</th>
+                    <SortHeader col="posted_at" label="Date" sort={sort} dir={dir} accountId={accountId} qs={baseQS} />
+                    <SortHeader col="code" label="Code" sort={sort} dir={dir} accountId={accountId} qs={baseQS} />
+                    <SortHeader col="description" label="Payer" sort={sort} dir={dir} accountId={accountId} qs={baseQS} />
+                    <SortHeader col="credit_minor" label="Amount" sort={sort} dir={dir} accountId={accountId} qs={baseQS} align="right" />
+                    <SortHeader col="state" label="Status" sort={sort} dir={dir} accountId={accountId} qs={baseQS} />
                     <th className="pb-3 pr-4">Reason / Detail</th>
-                    <th className="pb-3">Reference</th>
+                    <SortHeader col="rail_native_ref" label="Reference" sort={sort} dir={dir} accountId={accountId} qs={baseQS} />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border-subtle">
@@ -265,8 +358,137 @@ export default async function AccountDetailPage({
             </div>
           )}
         </CardBody>
+
+        {total > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border-subtle px-6 py-3 text-sm text-fg-muted">
+            <div>
+              Showing <span className="text-fg tabular-nums">{showingFrom}</span>–
+              <span className="text-fg tabular-nums">{showingTo}</span> of{" "}
+              <span className="text-fg tabular-nums">{total}</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <PerPageSelect accountId={accountId} qs={baseQS} current={perPage} />
+              <div className="flex items-center gap-1">
+                <PageLink
+                  accountId={accountId}
+                  qs={baseQS}
+                  page={Math.max(1, safePage - 1)}
+                  disabled={safePage <= 1}
+                  label="Prev"
+                />
+                <span className="px-2 text-xs">
+                  Page <span className="text-fg tabular-nums">{safePage}</span> of{" "}
+                  <span className="text-fg tabular-nums">{totalPages}</span>
+                </span>
+                <PageLink
+                  accountId={accountId}
+                  qs={baseQS}
+                  page={Math.min(totalPages, safePage + 1)}
+                  disabled={safePage >= totalPages}
+                  label="Next"
+                />
+              </div>
+            </div>
+          </div>
+        )}
       </Card>
     </OperatorShell>
+  );
+}
+
+function SortHeader({
+  col,
+  label,
+  sort,
+  dir,
+  accountId,
+  qs,
+  align = "left",
+}: {
+  col: SortKey;
+  label: string;
+  sort: SortKey;
+  dir: "asc" | "desc";
+  accountId: string;
+  qs: (overrides: Partial<SearchParams>) => string;
+  align?: "left" | "right";
+}) {
+  const active = sort === col;
+  // Toggle direction on the active column; new column defaults to desc
+  // (matching the page's overall recency-first orientation).
+  const nextDir = active && dir === "desc" ? "asc" : "desc";
+  const Icon = !active ? ChevronsUpDown : dir === "desc" ? ChevronDown : ChevronUp;
+  return (
+    <th className={`pb-3 pr-4 ${align === "right" ? "text-right" : ""}`}>
+      <Link
+        href={`/recon/accounts/${accountId}${qs({ sort: col, dir: nextDir, page: "1" })}`}
+        className={`inline-flex items-center gap-1 hover:text-fg ${active ? "text-fg" : ""} ${align === "right" ? "flex-row-reverse" : ""}`}
+      >
+        <span>{label}</span>
+        <Icon className="h-3 w-3" />
+      </Link>
+    </th>
+  );
+}
+
+function PageLink({
+  accountId,
+  qs,
+  page,
+  disabled,
+  label,
+}: {
+  accountId: string;
+  qs: (overrides: Partial<SearchParams>) => string;
+  page: number;
+  disabled: boolean;
+  label: string;
+}) {
+  if (disabled) {
+    return (
+      <span className="rounded border border-border-subtle px-3 py-1 text-xs text-fg-subtle opacity-50">
+        {label}
+      </span>
+    );
+  }
+  return (
+    <Link
+      href={`/recon/accounts/${accountId}${qs({ page: String(page) })}`}
+      className="rounded border border-border-subtle px-3 py-1 text-xs text-fg hover:bg-bg-raised"
+    >
+      {label}
+    </Link>
+  );
+}
+
+function PerPageSelect({
+  accountId,
+  qs,
+  current,
+}: {
+  accountId: string;
+  qs: (overrides: Partial<SearchParams>) => string;
+  current: number;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-xs">Per page</span>
+      <div className="flex gap-1">
+        {PER_PAGE_OPTIONS.map((n) => (
+          <Link
+            key={n}
+            href={`/recon/accounts/${accountId}${qs({ perPage: String(n), page: "1" })}`}
+            className={`rounded px-2 py-0.5 text-xs ${
+              n === current
+                ? "bg-bg-raised text-fg"
+                : "text-fg-subtle hover:bg-bg-raised hover:text-fg"
+            }`}
+          >
+            {n}
+          </Link>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -311,7 +533,9 @@ function StateBadge({ state }: { state: string }) {
   );
 }
 
-function buildQuery(params: { state: string; from?: string; to?: string }): string {
+// Export route only takes filters, never sort/pagination — admins always
+// get the full filtered set in the .xlsx.
+function exportQS(params: { state: string; from?: string; to?: string }): string {
   const sp = new URLSearchParams();
   if (params.state && params.state !== "all") sp.set("state", params.state);
   if (params.from) sp.set("from", params.from);
