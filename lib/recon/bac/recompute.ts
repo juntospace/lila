@@ -17,6 +17,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { fileClockCutoff, pickFifoMatchPR, type PRCandidate } from "./classify";
+import { parseDvtoDescription } from "./parser";
 
 const SUPABASE_PAGE_LIMIT = 1000;
 const SUPABASE_PAGE_SAFETY_CAP = 200_000;
@@ -46,6 +47,8 @@ export interface RecomputeStats {
   prsPending: number;
   daRejected: number;
   daPendingPair: number;
+  /** DAs whose description was re-parsed and now has a return_code/payer name. */
+  dasReparsed: number;
 }
 
 export async function recomputeAccount(
@@ -53,6 +56,14 @@ export async function recomputeAccount(
   accountId: string,
   uploadedBy?: string | null,
 ): Promise<RecomputeStats> {
+  // 0. Self-healing reparse: re-run parseDvtoDescription against any DA
+  //    with a null return_code. The parser regex has been broadened over
+  //    time (RCZO support, looser separator), so previously unparseable
+  //    descriptions might extract cleanly now. Running this before
+  //    pairing means previously-stranded DAs get a payer name and
+  //    become pairable in the same recompute pass.
+  const dasReparsed = await reparseUnparsedDAs(supabase, accountId);
+
   // 1. Pair every unpaired DA in the account. We discover unpaired DAs by
   //    paginating through recon_transactions and excluding any whose id is
   //    already a da_txn_id in recon_links — relying solely on the upsert
@@ -90,7 +101,46 @@ export async function recomputeAccount(
     prsPending: prStats.pending,
     daRejected: daStats.rejected,
     daPendingPair: daStats.pendingPair,
+    dasReparsed,
   };
+}
+
+async function reparseUnparsedDAs(
+  supabase: SupabaseClient,
+  accountId: string,
+): Promise<number> {
+  let updated = 0;
+  let cursor = 0;
+  while (cursor < SUPABASE_PAGE_SAFETY_CAP) {
+    const { data, error } = await supabase
+      .from("recon_transactions")
+      .select("id, description, payer_name_raw")
+      .eq("account_id", accountId)
+      .eq("code", "DA")
+      .is("return_code", null)
+      .order("id", { ascending: true })
+      .range(cursor, cursor + SUPABASE_PAGE_LIMIT - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    for (const row of data) {
+      const parsed = parseDvtoDescription((row.description as string | null) ?? "");
+      if (!parsed.returnCode) continue;
+      const { error: upErr } = await supabase
+        .from("recon_transactions")
+        .update({
+          return_code: parsed.returnCode,
+          // Preserve a previously-stored payer name if the regex captured
+          // less than what's already there.
+          payer_name_raw: (row.payer_name_raw as string | null) ?? parsed.payerNameRaw ?? null,
+        })
+        .eq("id", row.id);
+      if (upErr) throw upErr;
+      updated++;
+    }
+    if (data.length < SUPABASE_PAGE_LIMIT) break;
+    cursor += SUPABASE_PAGE_LIMIT;
+  }
+  return updated;
 }
 
 // =============================================================

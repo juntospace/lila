@@ -30,6 +30,11 @@ export function RecomputeButton({ accountId }: { accountId: string }) {
       </Button>
       {result?.status === "ok" && result.stats && (
         <span className="text-xs text-fg-muted">
+          {result.stats.dasReparsed > 0
+            ? `Re-parsed ${result.stats.dasReparsed} DVTO/RCZO row${
+                result.stats.dasReparsed === 1 ? "" : "s"
+              }; `
+            : ""}
           Paired {result.stats.reversalsPaired} reversal
           {result.stats.reversalsPaired === 1 ? "" : "s"}; {result.stats.prsConfirmed} confirmed,{" "}
           {result.stats.prsRejected} rejected, {result.stats.prsPending} pending.

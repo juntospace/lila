@@ -130,14 +130,18 @@ export function parseSpanishDate(v: Cell): string | null {
 
 // "DVTO AM04-JORGE MIGUEL DIAZ P" → { returnCode: 'AM04', payerNameRaw: '...' }.
 //
-// Real BAC exports vary more than the synthetic fixture: leading whitespace,
-// optional space around the dash, en/em dashes, mixed-case codes, and codes
-// that aren't strictly two-letters-two-digits — we've seen alphanumerics 2–8
-// chars long. Be permissive on the code shape and on the separator.
+// Real BAC exports use both **DVTO** ("devuelto") and **RCZO** ("rechazo")
+// as the reversal-row prefix in the description. They both indicate a DA
+// that bounces a previous credit. The shape is otherwise identical:
+// {prefix} {return_code} [-/–/—/:/. / ] {name}.
+//
+// We accept either prefix, optional leading whitespace, and a permissive
+// alphanumeric code 2–8 chars (the format isn't strictly fixed across
+// banks-of-origin in the ACH network).
 export function parseDvtoDescription(
   desc: string,
 ): { returnCode?: string; payerNameRaw?: string } {
-  const m = desc.match(/^\s*DVTO\s+([A-Z0-9]{2,8})\s*[\-–—:.]?\s*(.+)$/i);
+  const m = desc.match(/^\s*(?:DVTO|RCZO)\s+([A-Z0-9]{2,8})\s*[\-–—:.]?\s*(.+)$/i);
   if (!m) return {};
   return { returnCode: m[1].toUpperCase(), payerNameRaw: m[2].trim() };
 }

@@ -115,6 +115,12 @@ export interface DAToMatch {
 
 // Picks the earliest unmatched PR whose amount + payer name match the DA.
 // First-unmatched-wins by (postedAt asc, rowIndex asc).
+//
+// We deliberately do NOT enforce `pr.postedAt <= da.postedAt`: BAC's
+// statement layout sometimes shows the DA before the originating PR
+// (multi-section sub-headers, batch reorderings), so the "DA can't
+// pre-date the PR" rule produced false negatives in real data. FIFO on
+// posted_at + row index still gives a deterministic, defensible pick.
 export function pickFifoMatchPR(
   da: DAToMatch,
   candidates: PRCandidate[],
@@ -129,7 +135,6 @@ export function pickFifoMatchPR(
 
   for (const pr of ordered) {
     if (pr.creditMinor !== da.amountMinor) continue;
-    if (pr.postedAt > da.postedAt) continue; // DA can't pre-date the PR
     const prName = extractPRPayerName(pr.description);
     if (!prName) continue;
     if (namesMatch(normalizeName(prName), targetName)) return pr;
