@@ -13,6 +13,7 @@ import { formatDate, formatMinorUSD, lastWorkingDays } from "@/lib/recon/format"
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 import { BackfillButton } from "./backfill-button";
+import { RecomputeButton } from "./recompute-button";
 
 export const dynamic = "force-dynamic";
 
@@ -302,20 +303,23 @@ export default async function AccountDetailPage({
 
   return (
     <OperatorShell session={session}>
-      <header className="mb-8">
-        <div className="flex items-center gap-2 text-sm text-fg-muted">
-          <Link href="/recon/upload" className="hover:text-fg">
-            Reconciliation
-          </Link>
-          <span>·</span>
-          <span>Accounts</span>
+      <header className="mb-8 flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2 text-sm text-fg-muted">
+            <Link href="/recon/upload" className="hover:text-fg">
+              Reconciliation
+            </Link>
+            <span>·</span>
+            <span>Accounts</span>
+          </div>
+          <h1 className="mt-1 font-display text-3xl font-semibold tracking-tight">
+            {account.holder_name}
+          </h1>
+          <p className="mt-1 text-sm text-fg-muted">
+            {account.rail.toUpperCase()} · {account.account_number} · {account.currency}
+          </p>
         </div>
-        <h1 className="mt-1 font-display text-3xl font-semibold tracking-tight">
-          {account.holder_name}
-        </h1>
-        <p className="mt-1 text-sm text-fg-muted">
-          {account.rail.toUpperCase()} · {account.account_number} · {account.currency}
-        </p>
+        <RecomputeButton accountId={accountId} />
       </header>
 
       <section
