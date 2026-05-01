@@ -246,6 +246,23 @@ export default async function AccountDetailPage({
     .is("return_code", null);
   const showBackfillHint = (nullDaCount ?? 0) > 0;
 
+  // Unmatched reversals — DAs that auto-pairing left in 'pending_pair'.
+  // We surface them so ops can spot the pattern (truncated names, cents
+  // mismatches, etc.) and so manual reconciliation has a starting list.
+  const { data: unmatchedDARows } = await supabase
+    .from("recon_transactions")
+    .select("id, posted_at, debit_minor, description, payer_name_raw, return_code, rail_native_ref")
+    .eq("account_id", accountId)
+    .eq("code", "DA")
+    .eq("state", "pending_pair")
+    .order("posted_at", { ascending: true })
+    .order("id", { ascending: true });
+  const unmatchedDAs = unmatchedDARows ?? [];
+  const unmatchedTotal = unmatchedDAs.reduce(
+    (sum, d) => sum + BigInt(String(d.debit_minor)),
+    0n,
+  );
+
   const totalsByState = totalsRows.reduce(
     (acc, r) => {
       const s = r.state as keyof typeof acc;
@@ -340,6 +357,63 @@ export default async function AccountDetailPage({
           </div>
           <BackfillButton accountId={accountId} />
         </div>
+      )}
+
+      {unmatchedDAs.length > 0 && (
+        <Card className="mt-6 border-warning/40">
+          <CardHeader>
+            <CardTitle>
+              Unmatched reversals ({unmatchedDAs.length} ·{" "}
+              {formatMinorUSD(unmatchedTotal)})
+            </CardTitle>
+            <CardDescription>
+              DAs that auto-pairing couldn&apos;t place against a PR — usually
+              from a name-extraction or cents-mismatch edge case. Spot the
+              pattern here, then we can either tighten the auto-matching or
+              wire up manual reconciliation.
+            </CardDescription>
+          </CardHeader>
+          <CardBody>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-left text-xs uppercase tracking-wide text-fg-subtle">
+                  <tr>
+                    <th className="pb-3 pr-4">Date</th>
+                    <th className="pb-3 pr-4">Code</th>
+                    <th className="pb-3 pr-4">Payer (parsed)</th>
+                    <th className="pb-3 pr-4 text-right">Amount</th>
+                    <th className="pb-3 pr-4">Reference</th>
+                    <th className="pb-3">Raw description</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border-subtle">
+                  {unmatchedDAs.map((row) => (
+                    <tr key={row.id}>
+                      <td className="py-3 pr-4 text-fg-muted">
+                        {formatDate(row.posted_at as string)}
+                      </td>
+                      <td className="py-3 pr-4 font-mono text-xs text-fg">
+                        {row.return_code ?? "—"}
+                      </td>
+                      <td className="py-3 pr-4 text-fg">
+                        {(row.payer_name_raw as string | null) ?? "—"}
+                      </td>
+                      <td className="py-3 pr-4 text-right font-medium tabular-nums text-fg">
+                        {formatMinorUSD(String(row.debit_minor))}
+                      </td>
+                      <td className="py-3 pr-4 font-mono text-xs text-fg-muted">
+                        {(row.rail_native_ref as string) || "—"}
+                      </td>
+                      <td className="py-3 max-w-[420px] truncate text-xs text-fg-muted">
+                        {(row.description as string) ?? "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardBody>
+        </Card>
       )}
 
       <Card className="mt-8">
