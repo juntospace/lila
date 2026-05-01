@@ -139,15 +139,68 @@ describe("pickFifoMatchPR", () => {
     expect(match?.id).toBe("p1");
   });
 
-  it("matches a PR whose posted_at is after the DA (BAC sometimes shows the DA first)", () => {
+  it("rejects a PR whose posted_at is AFTER the DA (impossible — rejection can't precede payment)", () => {
     const candidates: PRCandidate[] = [
       { id: "p1", postedAt: "2026-04-08", rowIndex: 0, creditMinor: 5050n, description: desc("Jorge Miguel Diaz P") },
     ];
+    expect(
+      pickFifoMatchPR(
+        { amountMinor: 5050n, payerNameRaw: "JORGE MIGUEL DIAZ P", postedAt: "2026-04-06" },
+        candidates,
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects a PR more than 1 day before the DA — outside the 24h ACH window", () => {
+    // PR Apr 5, DA Apr 7 → PR was already file-clock confirmed by Apr 7,
+    // so the DA cannot be its rejection.
+    const candidates: PRCandidate[] = [
+      { id: "p1", postedAt: "2026-04-05", rowIndex: 0, creditMinor: 500n, description: desc("Astryht Daniela Lay") },
+    ];
+    expect(
+      pickFifoMatchPR(
+        { amountMinor: 500n, payerNameRaw: "ASTRYHT DANIELA LAY", postedAt: "2026-04-07" },
+        candidates,
+      ),
+    ).toBeNull();
+  });
+
+  it("Astryht scenario: DA Apr 7 picks the PR Apr 7, NOT the older PR Apr 5", () => {
+    // Real-world bug: 24h-rule violation pre-fix paired Apr 5 PR (already
+    // confirmed) with Apr 7 DA.
+    const candidates: PRCandidate[] = [
+      { id: "p_old", postedAt: "2026-04-05", rowIndex: 0, creditMinor: 500n, description: desc("Astryht Daniela Lay") },
+      { id: "p_new", postedAt: "2026-04-07", rowIndex: 1, creditMinor: 500n, description: desc("Astryht Daniela Lay") },
+    ];
     const match = pickFifoMatchPR(
-      { amountMinor: 5050n, payerNameRaw: "JORGE MIGUEL DIAZ P", postedAt: "2026-04-06" },
+      { amountMinor: 500n, payerNameRaw: "ASTRYHT DANIELA LAY", postedAt: "2026-04-07" },
       candidates,
     );
-    expect(match?.id).toBe("p1");
+    expect(match?.id).toBe("p_new");
+  });
+
+  it("cross-day pair (PR yesterday + DA today) is in window", () => {
+    const candidates: PRCandidate[] = [
+      { id: "p1", postedAt: "2026-04-06", rowIndex: 0, creditMinor: 500n, description: desc("Foo Bar Baz") },
+    ];
+    expect(
+      pickFifoMatchPR(
+        { amountMinor: 500n, payerNameRaw: "FOO BAR BAZ", postedAt: "2026-04-07" },
+        candidates,
+      )?.id,
+    ).toBe("p1");
+  });
+
+  it("month boundary: PR Mar 31 + DA Apr 1 is in window", () => {
+    const candidates: PRCandidate[] = [
+      { id: "p1", postedAt: "2026-03-31", rowIndex: 0, creditMinor: 500n, description: desc("Foo Bar Baz") },
+    ];
+    expect(
+      pickFifoMatchPR(
+        { amountMinor: 500n, payerNameRaw: "FOO BAR BAZ", postedAt: "2026-04-01" },
+        candidates,
+      )?.id,
+    ).toBe("p1");
   });
 
   it("rejects on amount mismatch", () => {

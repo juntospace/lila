@@ -30,7 +30,12 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { fileClockCutoff, pickFifoMatchPR, type PRCandidate } from "./classify";
+import {
+  fileClockCutoff,
+  isWithinAchRejectionWindow,
+  pickFifoMatchPR,
+  type PRCandidate,
+} from "./classify";
 import { parseDvtoDescription } from "./parser";
 
 const SUPABASE_PAGE_LIMIT = 1000;
@@ -59,6 +64,8 @@ export interface RecomputeStats {
   unpairedNoMatch: number;
   /** Diagnostic — link inserts that hit a unique violation (race / stale Set). */
   unpairedLinkConflict: number;
+  /** Existing auto links deleted because their PR/DA dates were out of the 24h window. */
+  linksRevalidated: number;
 }
 
 export async function recomputeAccount(
@@ -76,11 +83,30 @@ export async function recomputeAccount(
   //    in-memory Sets. These are mutated as we pair more DAs and used by
   //    the candidates filter, the unpaired-DA discovery, and the final
   //    state recompute — single source of truth.
-  const { linkedPrIds, linkedDaIds } = await fetchLinkedTxnIds(supabase, accountId);
+  const { linkedPrIds, linkedDaIds, links } = await fetchLinkedTxnIds(
+    supabase,
+    accountId,
+  );
+  const preexistingLinks = linkedPrIds.size;
+
+  // 1a. Heal: any existing AUTO link that violates the 24h ACH rejection
+  //     window is invalid (the DA can't physically be the source of a PR
+  //     whose 24h window had already closed). Delete those links and
+  //     remove their ids from the in-memory Sets so the unpaired DAs
+  //     pass below can re-pair them with the correct PR.
+  //
+  //     We only touch auto pairings; manual pairings (Tier 2 / future)
+  //     reflect explicit operator intent and stay put.
+  const linksRevalidated = await revalidateLinks(
+    supabase,
+    accountId,
+    links,
+    linkedPrIds,
+    linkedDaIds,
+  );
 
   // 2. Pair every unpaired DA. tryPairDA mutates the Sets on success so
   //    the next iteration's eligibility check sees the new link.
-  const preexistingLinks = linkedPrIds.size;
   const unpairedDAs = await fetchUnpairedDAs(supabase, accountId, linkedDaIds);
   const unpairedDaInput = unpairedDAs.length;
   let reversalsPaired = 0;
@@ -143,6 +169,7 @@ export async function recomputeAccount(
     unpairedNoPayerName,
     unpairedNoMatch,
     unpairedLinkConflict,
+    linksRevalidated,
   };
 }
 
@@ -194,18 +221,29 @@ async function reparseUnparsedDAs(
   return updated;
 }
 
+interface LinkRow {
+  pr_txn_id: string;
+  da_txn_id: string;
+  match_strategy: string;
+}
+
 /**
  * Walk every recon_links row whose PR or DA lives in this account and build
- * Sets of their ids. We can't filter recon_links by account_id directly
- * (no such column), so we first list the account's txn ids and then chunk
- * a join via .in() against pr_txn_id and da_txn_id.
+ * Sets of their ids plus the raw link rows. We can't filter recon_links by
+ * account_id directly (no such column), so we first list the account's
+ * txn ids and then chunk a join via .in() against pr_txn_id and da_txn_id.
  */
 async function fetchLinkedTxnIds(
   supabase: SupabaseClient,
   accountId: string,
-): Promise<{ linkedPrIds: Set<string>; linkedDaIds: Set<string> }> {
+): Promise<{
+  linkedPrIds: Set<string>;
+  linkedDaIds: Set<string>;
+  links: LinkRow[];
+}> {
   const linkedPrIds = new Set<string>();
   const linkedDaIds = new Set<string>();
+  const linksByPrId = new Map<string, LinkRow>();
 
   const txnIds: string[] = [];
   let cursor = 0;
@@ -231,17 +269,95 @@ async function fetchLinkedTxnIds(
       const chunk = txnIds.slice(i, i + ID_CHUNK);
       const { data, error } = await supabase
         .from("recon_links")
-        .select("pr_txn_id, da_txn_id")
+        .select("pr_txn_id, da_txn_id, match_strategy")
         .in(side, chunk);
       if (error) throw error;
       for (const l of data ?? []) {
-        linkedPrIds.add(l.pr_txn_id as string);
+        const prId = l.pr_txn_id as string;
+        linkedPrIds.add(prId);
         linkedDaIds.add(l.da_txn_id as string);
+        linksByPrId.set(prId, {
+          pr_txn_id: prId,
+          da_txn_id: l.da_txn_id as string,
+          match_strategy: l.match_strategy as string,
+        });
       }
     }
   }
 
-  return { linkedPrIds, linkedDaIds };
+  return { linkedPrIds, linkedDaIds, links: Array.from(linksByPrId.values()) };
+}
+
+/**
+ * Inspect every existing AUTO recon_links row and delete any whose PR/DA
+ * date pair violates the 24h ACH rejection window. Manual pairings stay.
+ *
+ * Returns the count of links deleted. The caller's `linkedPrIds` /
+ * `linkedDaIds` Sets are mutated to drop the unlinked ids so the
+ * subsequent unpaired-DA pass picks them up and re-pairs.
+ */
+async function revalidateLinks(
+  supabase: SupabaseClient,
+  accountId: string,
+  links: LinkRow[],
+  linkedPrIds: Set<string>,
+  linkedDaIds: Set<string>,
+): Promise<number> {
+  const autoLinks = links.filter((l) => l.match_strategy === "auto_fifo_name_amount");
+  if (autoLinks.length === 0) return 0;
+
+  // Bulk-fetch posted_at for every txn referenced by an auto link so we
+  // can validate dates without one-row-at-a-time roundtrips.
+  const involvedIds = new Set<string>();
+  for (const l of autoLinks) {
+    involvedIds.add(l.pr_txn_id);
+    involvedIds.add(l.da_txn_id);
+  }
+  const datesById = new Map<string, string>();
+  const involved = Array.from(involvedIds);
+  for (let i = 0; i < involved.length; i += ID_CHUNK) {
+    const chunk = involved.slice(i, i + ID_CHUNK);
+    const { data, error } = await supabase
+      .from("recon_transactions")
+      .select("id, posted_at")
+      .in("id", chunk);
+    if (error) throw error;
+    for (const r of data ?? []) {
+      datesById.set(r.id as string, r.posted_at as string);
+    }
+  }
+
+  const invalidPrIds: string[] = [];
+  const invalidDaIds: string[] = [];
+  for (const l of autoLinks) {
+    const prDate = datesById.get(l.pr_txn_id);
+    const daDate = datesById.get(l.da_txn_id);
+    if (!prDate || !daDate) continue;
+    if (!isWithinAchRejectionWindow(prDate, daDate)) {
+      invalidPrIds.push(l.pr_txn_id);
+      invalidDaIds.push(l.da_txn_id);
+    }
+  }
+
+  if (invalidPrIds.length === 0) return 0;
+
+  // Chunked delete by pr_txn_id (PK on recon_links — one row per PR).
+  for (let i = 0; i < invalidPrIds.length; i += ID_CHUNK) {
+    const chunk = invalidPrIds.slice(i, i + ID_CHUNK);
+    const { error } = await supabase
+      .from("recon_links")
+      .delete()
+      .in("pr_txn_id", chunk);
+    if (error) throw error;
+  }
+
+  for (const id of invalidPrIds) linkedPrIds.delete(id);
+  for (const id of invalidDaIds) linkedDaIds.delete(id);
+
+  // Suppress unused-var complaint when this branch never produces a number
+  // we care about elsewhere — count is surfaced via the return value.
+  void accountId;
+  return invalidPrIds.length;
 }
 
 async function fetchUnpairedDAs(
@@ -290,16 +406,23 @@ async function tryPairDA(
   if (!da.payer_name_raw) return "no_payer_name";
   const daAmount = BigInt(da.debit_minor);
 
-  // Candidates: every PR in this account with the same credit amount.
-  // We add a deterministic secondary sort on id so repeated runs over the
-  // same data make the same pairings (matters when many same-day same-name
-  // PRs share an amount, e.g. Karla 10/10/10).
+  // Candidates: every PR in this account with the same credit amount AND
+  // whose posted date is within the 24h ACH rejection window of the DA
+  // (i.e. same day or one day before). The window filter at the SQL level
+  // keeps the response small even on accounts with thousands of same-
+  // amount PRs, and means pickFifoMatchPR's defensive check is a no-op
+  // for the common path. Deterministic secondary sort on id so repeated
+  // runs over the same data make the same pairings.
+  const daDate = da.posted_at;
+  const windowFloor = prevDayIso(daDate);
   const { data: candidates, error } = await supabase
     .from("recon_transactions")
     .select("id, posted_at, credit_minor, description")
     .eq("account_id", accountId)
     .eq("code", "PR")
     .eq("credit_minor", daAmount.toString())
+    .gte("posted_at", windowFloor)
+    .lte("posted_at", daDate)
     .order("posted_at", { ascending: true })
     .order("id", { ascending: true });
   if (error) throw error;
@@ -438,4 +561,10 @@ async function applyStateUpdates(
       .in("id", chunk);
     if (error) throw error;
   }
+}
+
+function prevDayIso(iso: string): string {
+  return new Date(Date.parse(iso + "T00:00:00Z") - 86_400_000)
+    .toISOString()
+    .slice(0, 10);
 }

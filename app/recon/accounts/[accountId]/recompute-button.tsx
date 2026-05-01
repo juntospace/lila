@@ -45,6 +45,7 @@ export function RecomputeButton({ accountId }: { accountId: string }) {
               [debug]
               txns={result.stats.txnCount}
               · preLinks={result.stats.preexistingLinks}
+              · revalidated={result.stats.linksRevalidated}
               · unpairedDAsIn={result.stats.unpairedDaInput}
               · noName={result.stats.unpairedNoPayerName}
               · noMatch={result.stats.unpairedNoMatch}

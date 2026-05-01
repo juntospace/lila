@@ -113,14 +113,38 @@ export interface DAToMatch {
   postedAt: string;        // DA cannot precede the PR it reverses
 }
 
-// Picks the earliest unmatched PR whose amount + payer name match the DA.
+/**
+ * A DA can only reject a PR whose 24h rejection window was still open
+ * when the DA arrived. With date-only precision (`posted_at` is YYYY-MM-DD
+ * treated as UTC midnight), that's: `pr.posted_at == da.posted_at` OR
+ * `pr.posted_at == da.posted_at - 1 day`.
+ *
+ * Older PRs were already file-clock-confirmed by the time the DA arrived
+ * (their `confirmable_after = posted_at + 24h <= cutoff`), so they can't
+ * be the source of the rejection. Future PRs are temporally impossible.
+ *
+ * This is the same rule the file-clock confirmation pass uses; without
+ * it, a DA on Apr 7 silently pairs with the earliest PR by FIFO — which
+ * for clients like Astryht (PR Apr 5, PR Apr 7) is the wrong PR. The
+ * Apr 5 PR should have been confirmed; the Apr 7 PR should be rejected.
+ */
+export function isWithinAchRejectionWindow(
+  prPostedAt: string,
+  daPostedAt: string,
+): boolean {
+  if (prPostedAt > daPostedAt) return false;
+  if (prPostedAt === daPostedAt) return true;
+  const prevDayOfDA = new Date(
+    Date.parse(daPostedAt + "T00:00:00Z") - 86_400_000,
+  )
+    .toISOString()
+    .slice(0, 10);
+  return prPostedAt === prevDayOfDA;
+}
+
+// Picks the earliest unmatched PR whose amount + payer name match the DA
+// AND whose 24h rejection window was still open when the DA arrived.
 // First-unmatched-wins by (postedAt asc, rowIndex asc).
-//
-// We deliberately do NOT enforce `pr.postedAt <= da.postedAt`: BAC's
-// statement layout sometimes shows the DA before the originating PR
-// (multi-section sub-headers, batch reorderings), so the "DA can't
-// pre-date the PR" rule produced false negatives in real data. FIFO on
-// posted_at + row index still gives a deterministic, defensible pick.
 export function pickFifoMatchPR(
   da: DAToMatch,
   candidates: PRCandidate[],
@@ -135,6 +159,7 @@ export function pickFifoMatchPR(
 
   for (const pr of ordered) {
     if (pr.creditMinor !== da.amountMinor) continue;
+    if (!isWithinAchRejectionWindow(pr.postedAt, da.postedAt)) continue;
     const prName = extractPRPayerName(pr.description);
     if (!prName) continue;
     if (namesMatch(normalizeName(prName), targetName)) return pr;
