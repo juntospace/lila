@@ -47,6 +47,44 @@ export type Database = {
         }
         Relationships: []
       }
+      name_aliases: {
+        Row: {
+          account_id: string
+          created_at: string
+          created_by: string | null
+          da_name_normalized: string
+          id: string
+          pr_name_normalized: string
+          rail: Database["public"]["Enums"]["bank_accounts_rail_enum"]
+        }
+        Insert: {
+          account_id: string
+          created_at?: string
+          created_by?: string | null
+          da_name_normalized: string
+          id?: string
+          pr_name_normalized: string
+          rail: Database["public"]["Enums"]["bank_accounts_rail_enum"]
+        }
+        Update: {
+          account_id?: string
+          created_at?: string
+          created_by?: string | null
+          da_name_normalized?: string
+          id?: string
+          pr_name_normalized?: string
+          rail?: Database["public"]["Enums"]["bank_accounts_rail_enum"]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "name_aliases_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "bank_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       operator_allowlist: {
         Row: {
           created_at: string
