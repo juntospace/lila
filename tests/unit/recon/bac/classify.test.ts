@@ -139,7 +139,21 @@ describe("pickFifoMatchPR", () => {
     expect(match?.id).toBe("p1");
   });
 
-  it("rejects a PR whose posted_at is AFTER the DA (impossible — rejection can't precede payment)", () => {
+  it("accepts a PR whose posted_at is exactly 1 day AFTER the DA (BAC posting cadence)", () => {
+    // BAC sometimes posts the DA's date one day before the PR's date for
+    // the same physical ACH event. The symmetric ±1-day window allows it.
+    const candidates: PRCandidate[] = [
+      { id: "p1", postedAt: "2026-04-07", rowIndex: 0, creditMinor: 5050n, description: desc("Jorge Miguel Diaz P") },
+    ];
+    expect(
+      pickFifoMatchPR(
+        { amountMinor: 5050n, payerNameRaw: "JORGE MIGUEL DIAZ P", postedAt: "2026-04-06" },
+        candidates,
+      )?.id,
+    ).toBe("p1");
+  });
+
+  it("rejects a PR more than 1 day AFTER the DA (beyond posting-cadence fuzziness)", () => {
     const candidates: PRCandidate[] = [
       { id: "p1", postedAt: "2026-04-08", rowIndex: 0, creditMinor: 5050n, description: desc("Jorge Miguel Diaz P") },
     ];
