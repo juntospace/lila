@@ -435,14 +435,14 @@ async function tryPairDA(
   const daAmount = BigInt(da.debit_minor);
 
   // Candidates: every PR in this account with the same credit amount AND
-  // whose posted date is within the 24h ACH rejection window of the DA
-  // (i.e. same day or one day before). The window filter at the SQL level
-  // keeps the response small even on accounts with thousands of same-
-  // amount PRs, and means pickFifoMatchPR's defensive check is a no-op
-  // for the common path. Deterministic secondary sort on id so repeated
-  // runs over the same data make the same pairings.
+  // whose posted date is within ±1 day of the DA. Symmetric window
+  // because BAC's posting cadence sometimes places the DA one day before
+  // the PR for the same physical event. Picked at the SQL level so the
+  // response stays small even on accounts with thousands of same-amount
+  // PRs. Deterministic secondary sort on id.
   const daDate = da.posted_at;
   const windowFloor = prevDayIso(daDate);
+  const windowCeiling = nextDayIso(daDate);
   const { data: candidates, error } = await supabase
     .from("recon_transactions")
     .select("id, posted_at, credit_minor, description")
@@ -450,7 +450,7 @@ async function tryPairDA(
     .eq("code", "PR")
     .eq("credit_minor", daAmount.toString())
     .gte("posted_at", windowFloor)
-    .lte("posted_at", daDate)
+    .lte("posted_at", windowCeiling)
     .order("posted_at", { ascending: true })
     .order("id", { ascending: true });
   if (error) throw error;
@@ -593,6 +593,12 @@ async function applyStateUpdates(
 
 function prevDayIso(iso: string): string {
   return new Date(Date.parse(iso + "T00:00:00Z") - 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+}
+
+function nextDayIso(iso: string): string {
+  return new Date(Date.parse(iso + "T00:00:00Z") + 86_400_000)
     .toISOString()
     .slice(0, 10);
 }

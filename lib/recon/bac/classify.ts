@@ -115,31 +115,31 @@ export interface DAToMatch {
 
 /**
  * A DA can only reject a PR whose 24h rejection window was still open
- * when the DA arrived. With date-only precision (`posted_at` is YYYY-MM-DD
- * treated as UTC midnight), that's: `pr.posted_at == da.posted_at` OR
- * `pr.posted_at == da.posted_at - 1 day`.
+ * when the DA arrived — that's the original rule, expressed as
+ * `pr.posted_at + 24h > da.posted_at`. In real BAC data, the posting
+ * cadence is fuzzy: a rejection (DA) can be posted with a date one day
+ * BEFORE the corresponding payment (PR), even though the actual ACH
+ * timeline always has PR before DA. This shows up as a DA on Apr 6
+ * paired with a PR on Apr 7 in the bank's ledger.
  *
- * Older PRs were already file-clock-confirmed by the time the DA arrived
- * (their `confirmable_after = posted_at + 24h <= cutoff`), so they can't
- * be the source of the rejection. Future PRs are temporally impossible.
+ * To capture both directions while still excluding the Astryht-style
+ * mismatch (PR Apr 5 + DA Apr 7, two days apart), the rule becomes:
+ * `|pr.posted_at − da.posted_at| <= 1 day`. PR can be the day before,
+ * same day, or day after the DA — but no further.
  *
- * This is the same rule the file-clock confirmation pass uses; without
- * it, a DA on Apr 7 silently pairs with the earliest PR by FIFO — which
- * for clients like Astryht (PR Apr 5, PR Apr 7) is the wrong PR. The
- * Apr 5 PR should have been confirmed; the Apr 7 PR should be rejected.
+ * Anything outside that window is either already file-clock-confirmed
+ * (older PR) or beyond what BAC's posting fuzziness can explain.
  */
 export function isWithinAchRejectionWindow(
   prPostedAt: string,
   daPostedAt: string,
 ): boolean {
-  if (prPostedAt > daPostedAt) return false;
-  if (prPostedAt === daPostedAt) return true;
-  const prevDayOfDA = new Date(
-    Date.parse(daPostedAt + "T00:00:00Z") - 86_400_000,
-  )
-    .toISOString()
-    .slice(0, 10);
-  return prPostedAt === prevDayOfDA;
+  if (!prPostedAt || !daPostedAt) return false;
+  const tPr = Date.parse(prPostedAt + "T00:00:00Z");
+  const tDa = Date.parse(daPostedAt + "T00:00:00Z");
+  if (Number.isNaN(tPr) || Number.isNaN(tDa)) return false;
+  const diffDays = (tPr - tDa) / 86_400_000;
+  return diffDays >= -1 && diffDays <= 1;
 }
 
 // Picks the earliest unmatched PR whose amount + payer name match the DA
