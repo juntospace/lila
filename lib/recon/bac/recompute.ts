@@ -71,6 +71,10 @@ export interface RecomputeStats {
   unpairedLinkConflict: number;
   /** Existing auto links deleted because their PR/DA dates were out of the 24h window. */
   linksRevalidated: number;
+  /** Diagnostic — auto links where PR.posted_at != DA.posted_at (regardless of validity). */
+  crossDayLinks: number;
+  /** Diagnostic — links the heal pass skipped because dates lookup was incomplete. */
+  linksDateMissing: number;
 }
 
 export async function recomputeAccount(
@@ -102,13 +106,16 @@ export async function recomputeAccount(
   //
   //     We only touch auto pairings; manual pairings (Tier 2 / future)
   //     reflect explicit operator intent and stay put.
-  const linksRevalidated = await revalidateLinks(
+  const healOutcome = await revalidateLinks(
     supabase,
     accountId,
     links,
     linkedPrIds,
     linkedDaIds,
   );
+  const linksRevalidated = healOutcome.deleted;
+  const crossDayLinks = healOutcome.crossDay;
+  const linksDateMissing = healOutcome.dateMissing;
 
   // 2. Pair every unpaired DA. tryPairDA mutates the Sets on success so
   //    the next iteration's eligibility check sees the new link.
@@ -175,6 +182,8 @@ export async function recomputeAccount(
     unpairedNoMatch,
     unpairedLinkConflict,
     linksRevalidated,
+    crossDayLinks,
+    linksDateMissing,
   };
 }
 
@@ -293,13 +302,28 @@ async function fetchLinkedTxnIds(
   return { linkedPrIds, linkedDaIds, links: Array.from(linksByPrId.values()) };
 }
 
+interface HealOutcome {
+  deleted: number;
+  crossDay: number;
+  dateMissing: number;
+}
+
 /**
- * Inspect every existing AUTO recon_links row and delete any whose PR/DA
- * date pair violates the 24h ACH rejection window. Manual pairings stay.
+ * Inspect every existing recon_links row and delete any whose PR/DA date
+ * pair violates the 24h ACH rejection window.
  *
- * Returns the count of links deleted. The caller's `linkedPrIds` /
- * `linkedDaIds` Sets are mutated to drop the unlinked ids so the
- * subsequent unpaired-DA pass picks them up and re-pairs.
+ * Returns:
+ *   - deleted:     links removed (also mutates the in-memory Sets).
+ *   - crossDay:    links where PR.date != DA.date, regardless of window
+ *                  validity. Diagnostic; helps us see whether the DB
+ *                  actually contains cross-day pairings to evaluate.
+ *   - dateMissing: links the heal pass had to skip because the date
+ *                  lookup didn't return one of the rows. Diagnostic;
+ *                  flags chunked-fetch gaps.
+ *
+ * Validates ALL links (not just auto) — Tier 2 manual pairings don't
+ * exist yet, and an out-of-window pairing is wrong regardless of who
+ * placed it. When manual pairings ship, we'll narrow back via match_strategy.
  */
 async function revalidateLinks(
   supabase: SupabaseClient,
@@ -307,14 +331,11 @@ async function revalidateLinks(
   links: LinkRow[],
   linkedPrIds: Set<string>,
   linkedDaIds: Set<string>,
-): Promise<number> {
-  const autoLinks = links.filter((l) => l.match_strategy === "auto_fifo_name_amount");
-  if (autoLinks.length === 0) return 0;
+): Promise<HealOutcome> {
+  if (links.length === 0) return { deleted: 0, crossDay: 0, dateMissing: 0 };
 
-  // Bulk-fetch posted_at for every txn referenced by an auto link so we
-  // can validate dates without one-row-at-a-time roundtrips.
   const involvedIds = new Set<string>();
-  for (const l of autoLinks) {
+  for (const l of links) {
     involvedIds.add(l.pr_txn_id);
     involvedIds.add(l.da_txn_id);
   }
@@ -334,35 +355,37 @@ async function revalidateLinks(
 
   const invalidPrIds: string[] = [];
   const invalidDaIds: string[] = [];
-  for (const l of autoLinks) {
+  let crossDay = 0;
+  let dateMissing = 0;
+  for (const l of links) {
     const prDate = datesById.get(l.pr_txn_id);
     const daDate = datesById.get(l.da_txn_id);
-    if (!prDate || !daDate) continue;
+    if (!prDate || !daDate) {
+      dateMissing++;
+      continue;
+    }
+    if (prDate !== daDate) crossDay++;
     if (!isWithinAchRejectionWindow(prDate, daDate)) {
       invalidPrIds.push(l.pr_txn_id);
       invalidDaIds.push(l.da_txn_id);
     }
   }
 
-  if (invalidPrIds.length === 0) return 0;
-
-  // Chunked delete by pr_txn_id (PK on recon_links — one row per PR).
-  for (let i = 0; i < invalidPrIds.length; i += ID_CHUNK) {
-    const chunk = invalidPrIds.slice(i, i + ID_CHUNK);
-    const { error } = await supabase
-      .from("recon_links")
-      .delete()
-      .in("pr_txn_id", chunk);
-    if (error) throw error;
+  if (invalidPrIds.length > 0) {
+    for (let i = 0; i < invalidPrIds.length; i += ID_CHUNK) {
+      const chunk = invalidPrIds.slice(i, i + ID_CHUNK);
+      const { error } = await supabase
+        .from("recon_links")
+        .delete()
+        .in("pr_txn_id", chunk);
+      if (error) throw error;
+    }
+    for (const id of invalidPrIds) linkedPrIds.delete(id);
+    for (const id of invalidDaIds) linkedDaIds.delete(id);
   }
 
-  for (const id of invalidPrIds) linkedPrIds.delete(id);
-  for (const id of invalidDaIds) linkedDaIds.delete(id);
-
-  // Suppress unused-var complaint when this branch never produces a number
-  // we care about elsewhere — count is surfaced via the return value.
   void accountId;
-  return invalidPrIds.length;
+  return { deleted: invalidPrIds.length, crossDay, dateMissing };
 }
 
 async function fetchUnpairedDAs(
