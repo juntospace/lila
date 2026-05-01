@@ -192,7 +192,7 @@ export function normalizeName(s: string): string {
 // handles "JORGE MIGUEL DIAZ P" vs "JORGE MIGUEL DIAZ PE" cleanly while
 // still rejecting unrelated names. We require ≥ 6 chars overlap to avoid
 // pathological short-prefix collisions.
-function namesMatch(a: string, b: string): boolean {
+export function namesMatch(a: string, b: string): boolean {
   if (!a || !b) return false;
   if (a === b) return true;
   const shorter = a.length < b.length ? a : b;

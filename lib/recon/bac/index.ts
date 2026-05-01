@@ -22,6 +22,7 @@ export {
   extractPRPayerName,
   fileClockCutoff,
   isWithinAchRejectionWindow,
+  namesMatch,
   normalizeName,
   pickFifoMatchPR,
 } from './classify';
