@@ -40,7 +40,12 @@ import { parseDvtoDescription } from "./parser";
 
 const SUPABASE_PAGE_LIMIT = 1000;
 const SUPABASE_PAGE_SAFETY_CAP = 200_000;
-const ID_CHUNK = 200;
+// 100 keeps `?id=in.(uuid1,...,uuid100)` URLs well under 4 KB. PostgREST
+// and the Supabase gateway can silently drop tail entries on longer URLs
+// (~8 KB limit), which made revalidateLinks miss bad pairings that lived
+// past chunk position 100 — diagnostic showed `revalidated=0` with bad
+// pairings still in DB. Same chunk size the export route uses.
+const ID_CHUNK = 100;
 
 export interface RecomputeStats {
   reversalsPaired: number;
