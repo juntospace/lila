@@ -8,7 +8,13 @@ import { Card, CardBody, CardDescription, CardHeader, CardTitle } from "@/compon
 import { Input } from "@/components/ui/Input";
 import { Label } from "@/components/ui/Label";
 import { requireReconWriter } from "@/lib/auth/guard";
-import { extractPRPayerName, reasonForDvtoCode } from "@/lib/recon/bac";
+import {
+  extractPRPayerName,
+  isWithinAchRejectionWindow,
+  namesMatch,
+  normalizeName,
+  reasonForDvtoCode,
+} from "@/lib/recon/bac";
 import { formatDate, formatMinorUSD, lastWorkingDays } from "@/lib/recon/format";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
@@ -263,6 +269,59 @@ export default async function AccountDetailPage({
     0n,
   );
 
+  // For each unmatched DA, find PRs in the account with matching amount AND
+  // matching name (no date filter). The closest match (by date) tells us
+  // why auto-pairing missed it: out-of-window PR, already-paired PR, or
+  // none at all. Single batched query keyed on the unique amounts.
+  type ClosestMatch = {
+    count: number;
+    closest: { posted_at: string; state: string; in_window: boolean } | null;
+  };
+  const closestByDaId = new Map<string, ClosestMatch>();
+  if (unmatchedDAs.length > 0) {
+    const uniqueAmounts = Array.from(
+      new Set(unmatchedDAs.map((d) => Number(d.debit_minor))),
+    );
+    const { data: candidatePool } = await supabase
+      .from("recon_transactions")
+      .select("id, posted_at, description, state, credit_minor")
+      .eq("account_id", accountId)
+      .eq("code", "PR")
+      .in("credit_minor", uniqueAmounts)
+      .order("posted_at", { ascending: true });
+    const pool = candidatePool ?? [];
+    for (const da of unmatchedDAs) {
+      const payerRaw = da.payer_name_raw as string | null;
+      if (!payerRaw) {
+        closestByDaId.set(da.id, { count: 0, closest: null });
+        continue;
+      }
+      const target = normalizeName(payerRaw);
+      const daAmount = String(da.debit_minor);
+      const daDate = da.posted_at as string;
+      const matches = pool.filter((c) => {
+        if (String(c.credit_minor) !== daAmount) return false;
+        const prName = extractPRPayerName(c.description as string);
+        if (!prName) return false;
+        return namesMatch(normalizeName(prName), target);
+      });
+      const first = matches[0];
+      closestByDaId.set(da.id, {
+        count: matches.length,
+        closest: first
+          ? {
+              posted_at: first.posted_at as string,
+              state: first.state as string,
+              in_window: isWithinAchRejectionWindow(
+                first.posted_at as string,
+                daDate,
+              ),
+            }
+          : null,
+      });
+    }
+  }
+
   const totalsByState = totalsRows.reduce(
     (acc, r) => {
       const s = r.state as keyof typeof acc;
@@ -382,33 +441,36 @@ export default async function AccountDetailPage({
                     <th className="pb-3 pr-4">Code</th>
                     <th className="pb-3 pr-4">Payer (parsed)</th>
                     <th className="pb-3 pr-4 text-right">Amount</th>
-                    <th className="pb-3 pr-4">Reference</th>
+                    <th className="pb-3 pr-4">Closest PR (any date)</th>
                     <th className="pb-3">Raw description</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border-subtle">
-                  {unmatchedDAs.map((row) => (
-                    <tr key={row.id}>
-                      <td className="py-3 pr-4 text-fg-muted">
-                        {formatDate(row.posted_at as string)}
-                      </td>
-                      <td className="py-3 pr-4 font-mono text-xs text-fg">
-                        {row.return_code ?? "—"}
-                      </td>
-                      <td className="py-3 pr-4 text-fg">
-                        {(row.payer_name_raw as string | null) ?? "—"}
-                      </td>
-                      <td className="py-3 pr-4 text-right font-medium tabular-nums text-fg">
-                        {formatMinorUSD(String(row.debit_minor))}
-                      </td>
-                      <td className="py-3 pr-4 font-mono text-xs text-fg-muted">
-                        {(row.rail_native_ref as string) || "—"}
-                      </td>
-                      <td className="py-3 max-w-[420px] truncate text-xs text-fg-muted">
-                        {(row.description as string) ?? "—"}
-                      </td>
-                    </tr>
-                  ))}
+                  {unmatchedDAs.map((row) => {
+                    const cm = closestByDaId.get(row.id);
+                    return (
+                      <tr key={row.id}>
+                        <td className="py-3 pr-4 text-fg-muted">
+                          {formatDate(row.posted_at as string)}
+                        </td>
+                        <td className="py-3 pr-4 font-mono text-xs text-fg">
+                          {row.return_code ?? "—"}
+                        </td>
+                        <td className="py-3 pr-4 text-fg">
+                          {(row.payer_name_raw as string | null) ?? "—"}
+                        </td>
+                        <td className="py-3 pr-4 text-right font-medium tabular-nums text-fg">
+                          {formatMinorUSD(String(row.debit_minor))}
+                        </td>
+                        <td className="py-3 pr-4 text-xs">
+                          <ClosestPRCell match={cm} />
+                        </td>
+                        <td className="py-3 max-w-[420px] truncate text-xs text-fg-muted">
+                          {(row.description as string) ?? "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -736,6 +798,33 @@ function Stat({
         {formatMinorUSD(minor)}
       </div>
     </div>
+  );
+}
+
+function ClosestPRCell({
+  match,
+}: {
+  match: { count: number; closest: { posted_at: string; state: string; in_window: boolean } | null } | undefined;
+}) {
+  if (!match || match.count === 0) {
+    return <span className="text-fg-subtle">No matching PR found</span>;
+  }
+  const c = match.closest!;
+  const tone =
+    c.in_window
+      ? c.state === "rejected"
+        ? "text-warning"
+        : "text-info"
+      : "text-fg-subtle";
+  const reason = !c.in_window
+    ? "outside 24h window"
+    : c.state === "rejected"
+      ? "already paired"
+      : c.state;
+  return (
+    <span className={tone}>
+      {match.count} PR{match.count === 1 ? "" : "s"} · oldest {formatDate(c.posted_at)} ({reason})
+    </span>
   );
 }
 
