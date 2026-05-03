@@ -348,6 +348,48 @@ export default async function AccountDetailPage({
     }
   }
 
+  // For each pending PR on this page, the manual-reject picker needs the
+  // unpaired DAs in the account whose posted_at is within ±7 days of the
+  // PR. Single batched query for all unpaired DAs in the account, then
+  // per-PR JS filtering by date window — typical accounts have at most
+  // a few dozen DAs in pending_pair at a time, so this is cheap.
+  type CandidateDARow = {
+    id: string;
+    posted_at: string;
+    debit_minor: string;
+    return_code: string | null;
+    payer_name_raw: string | null;
+    description: string | null;
+  };
+  const candidateDAsByPrId = new Map<string, CandidateDARow[]>();
+  const pendingPrs = credits.filter((r) => r.code === "PR" && r.state === "pending");
+  if (pendingPrs.length > 0) {
+    const { data: unpairedDArows } = await supabase
+      .from("recon_transactions")
+      .select("id, posted_at, debit_minor, return_code, payer_name_raw, description")
+      .eq("account_id", accountId)
+      .eq("code", "DA")
+      .eq("state", "pending_pair")
+      .order("posted_at", { ascending: true });
+    const unpairedDAs: CandidateDARow[] = (unpairedDArows ?? []).map((d) => ({
+      id: d.id as string,
+      posted_at: d.posted_at as string,
+      debit_minor: String(d.debit_minor),
+      return_code: d.return_code as string | null,
+      payer_name_raw: d.payer_name_raw as string | null,
+      description: d.description as string | null,
+    }));
+    const SEVEN_DAYS_MS = 7 * 86_400_000;
+    for (const pr of pendingPrs) {
+      const prT = Date.parse((pr.posted_at as string) + "T00:00:00Z");
+      const eligible = unpairedDAs.filter((da) => {
+        const daT = Date.parse(da.posted_at + "T00:00:00Z");
+        return Math.abs(daT - prT) <= SEVEN_DAYS_MS;
+      });
+      candidateDAsByPrId.set(pr.id as string, eligible);
+    }
+  }
+
   // Surface a one-time hint if any rejected DAs in the system still have a
   // null return_code — the operator can backfill them via the button.
   const { count: nullDaCount } = await supabase
@@ -827,6 +869,7 @@ export default async function AccountDetailPage({
                         linkedDA={linkedDaByPrId.get(row.id as string)}
                         manualActions={manualActionsByPrId.get(row.id as string) ?? []}
                         actors={actorById}
+                        rejectCandidates={candidateDAsByPrId.get(row.id as string) ?? []}
                       />
                     );
                     return (

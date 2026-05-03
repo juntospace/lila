@@ -558,3 +558,153 @@ export async function revertRejectedPR(args: {
   revalidatePath(`/recon/accounts/${args.accountId}`);
   return { status: "ok", freedDaId };
 }
+
+// =============================================================
+// manuallyRejectPR
+// =============================================================
+
+export type ManuallyRejectResult = {
+  status: "ok" | "error";
+  message?: string;
+};
+
+/**
+ * Operator marks a pending PR as rejected by picking an unpaired DA.
+ * Mirror of the unmatched-reversals "Match to PR" flow but driven from
+ * the PR side: the operator is sitting on a pending PR they know was
+ * rejected, and chooses which DA in the account corresponds to it.
+ *
+ * Side effects (same audit-first pattern as the other manual actions):
+ *   1. Validate PR (pending, on this account) and DA (pending_pair,
+ *      on this account, unlinked).
+ *   2. INSERT recon_links (match_strategy='manual').
+ *   3. INSERT recon_manual_actions for the PR (reclassify
+ *      pending → rejected, justification + freed/linked DA id).
+ *   4. INSERT name_aliases for the (PR-name, DA-name) pair so future
+ *      ingests pair the same client automatically.
+ *   5. UPDATE both rows to state='rejected'.
+ */
+export async function manuallyRejectPR(args: {
+  accountId: string;
+  prTxnId: string;
+  daTxnId: string;
+  justification: string;
+}): Promise<ManuallyRejectResult> {
+  const session = await requireReconWriter();
+  const supabase = await createSupabaseServerClient();
+
+  const justification = args.justification.trim();
+  if (justification.length < MIN_JUSTIFICATION) {
+    return {
+      status: "error",
+      message: `Justification must be at least ${MIN_JUSTIFICATION} characters.`,
+    };
+  }
+  if (justification.length > MAX_JUSTIFICATION) {
+    return {
+      status: "error",
+      message: `Justification is too long (max ${MAX_JUSTIFICATION}).`,
+    };
+  }
+
+  const { data: rows, error: lookupErr } = await supabase
+    .from("recon_transactions")
+    .select("id, account_id, code, state, description, payer_name_raw")
+    .in("id", [args.prTxnId, args.daTxnId]);
+  if (lookupErr) return { status: "error", message: lookupErr.message };
+  if (!rows || rows.length !== 2) {
+    return { status: "error", message: "PR or DA row not found." };
+  }
+  const pr = rows.find((r) => r.id === args.prTxnId);
+  const da = rows.find((r) => r.id === args.daTxnId);
+  if (!pr || !da) return { status: "error", message: "PR or DA row not found." };
+  if (pr.account_id !== args.accountId || da.account_id !== args.accountId) {
+    return { status: "error", message: "PR or DA is not on this account." };
+  }
+  if (pr.code !== "PR") return { status: "error", message: "Selected PR row is not a credit." };
+  if (da.code !== "DA") return { status: "error", message: "Selected DA row is not a reversal." };
+  if (pr.state !== "pending") {
+    return {
+      status: "error",
+      message: `PR is no longer pending (state: ${pr.state}). Refresh and try again.`,
+    };
+  }
+  if (da.state !== "pending_pair") {
+    return {
+      status: "error",
+      message: `DA is no longer unmatched (state: ${da.state}). Refresh and try again.`,
+    };
+  }
+
+  // Step 2: link.
+  const { error: linkErr } = await supabase.from("recon_links").insert({
+    pr_txn_id: args.prTxnId,
+    da_txn_id: args.daTxnId,
+    match_strategy: "manual",
+    matched_by: session.userId,
+  });
+  if (linkErr) {
+    if (linkErr.code === "23505") {
+      return {
+        status: "error",
+        message:
+          "One of these rows is already paired. Refresh and try again with a different DA or PR.",
+      };
+    }
+    return { status: "error", message: linkErr.message };
+  }
+
+  // Step 3: audit (PR side — that's the row whose state most operators
+  // care about for downstream context).
+  const { error: auditErr } = await supabase
+    .from("recon_manual_actions")
+    .insert({
+      txn_id: args.prTxnId,
+      action: "reclassify",
+      prior_state: "pending",
+      new_state: "rejected",
+      justification: `${justification}\n\n[system] linked DA ${args.daTxnId}`,
+      acted_by: session.userId,
+    });
+
+  // Step 4: name alias (best-effort).
+  const prName = extractPRPayerName((pr.description as string) ?? "");
+  const prNormalized = prName ? normalizeName(prName) : null;
+  const daNormalized = da.payer_name_raw
+    ? normalizeName(da.payer_name_raw as string)
+    : null;
+  let aliasErrMessage: string | null = null;
+  if (prNormalized && daNormalized) {
+    const { error: aliasErr } = await supabase.from("name_aliases").insert({
+      account_id: args.accountId,
+      rail: "bac",
+      pr_name_normalized: prNormalized,
+      da_name_normalized: daNormalized,
+      created_by: session.userId,
+    });
+    if (aliasErr && aliasErr.code !== "23505") {
+      aliasErrMessage = aliasErr.message;
+    }
+  }
+
+  // Step 5: states.
+  const { error: stateErr } = await supabase
+    .from("recon_transactions")
+    .update({ state: "rejected" })
+    .in("id", [args.prTxnId, args.daTxnId]);
+
+  revalidatePath(`/recon/accounts/${args.accountId}`);
+
+  const warnings: string[] = [];
+  if (auditErr) warnings.push(`Audit row failed: ${auditErr.message}`);
+  if (aliasErrMessage) warnings.push(`Alias write failed: ${aliasErrMessage}`);
+  if (stateErr) warnings.push(`State update failed: ${stateErr.message}`);
+
+  if (warnings.length > 0) {
+    return {
+      status: "ok",
+      message: `Linked (with warnings: ${warnings.join("; ")})`,
+    };
+  }
+  return { status: "ok" };
+}
