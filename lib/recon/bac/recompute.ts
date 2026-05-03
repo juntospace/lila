@@ -553,11 +553,9 @@ async function recomputePRStates(
   cutoff: string | null,
   linkedPrIds: Set<string>,
 ): Promise<{ confirmed: number; rejected: number; pending: number }> {
-  const buckets = {
-    confirmed: [] as string[],
-    rejected: [] as string[],
-    pending: [] as string[],
-  };
+  // Phase 1: collect every PR row's id + confirmable_after.
+  type PrRow = { id: string; confirmable_after: string | null };
+  const prs: PrRow[] = [];
   let cursor = 0;
   while (cursor < SUPABASE_PAGE_SAFETY_CAP) {
     const { data, error } = await supabase
@@ -570,22 +568,55 @@ async function recomputePRStates(
     if (error) throw error;
     if (!data || data.length === 0) break;
     for (const pr of data) {
-      const id = pr.id as string;
-      if (linkedPrIds.has(id)) {
-        buckets.rejected.push(id);
-      } else if (
-        cutoff &&
-        pr.confirmable_after &&
-        (pr.confirmable_after as string) <= cutoff
-      ) {
-        buckets.confirmed.push(id);
-      } else {
-        buckets.pending.push(id);
-      }
+      prs.push({
+        id: pr.id as string,
+        confirmable_after: (pr.confirmable_after as string | null) ?? null,
+      });
     }
     if (data.length < SUPABASE_PAGE_LIMIT) break;
     cursor += SUPABASE_PAGE_LIMIT;
   }
+
+  // Phase 2: load latest manual override per PR. Operator-curated state
+  // beats the file-clock rule — if the operator manually confirmed a
+  // pending PR, we must not overwrite it back to pending here.
+  const overrides = await fetchManualOverrides(
+    supabase,
+    prs.map((p) => p.id),
+  );
+
+  // Phase 3: bucket. Order of precedence:
+  //   1. Auto-rejected via recon_links (the strongest signal — a DA
+  //      physically arrived for this PR).
+  //   2. Operator's latest manual override, if any.
+  //   3. File-clock confirmation (confirmable_after lapsed).
+  //   4. Default 'pending'.
+  const buckets = {
+    confirmed: [] as string[],
+    rejected: [] as string[],
+    pending: [] as string[],
+  };
+  for (const pr of prs) {
+    if (linkedPrIds.has(pr.id)) {
+      buckets.rejected.push(pr.id);
+      continue;
+    }
+    const override = overrides.get(pr.id);
+    if (override === "confirmed" || override === "rejected" || override === "pending") {
+      buckets[override].push(pr.id);
+      continue;
+    }
+    if (
+      cutoff &&
+      pr.confirmable_after &&
+      pr.confirmable_after <= cutoff
+    ) {
+      buckets.confirmed.push(pr.id);
+      continue;
+    }
+    buckets.pending.push(pr.id);
+  }
+
   await applyStateUpdates(supabase, "rejected", buckets.rejected);
   await applyStateUpdates(supabase, "confirmed", buckets.confirmed);
   await applyStateUpdates(supabase, "pending", buckets.pending);
@@ -594,6 +625,38 @@ async function recomputePRStates(
     rejected: buckets.rejected.length,
     pending: buckets.pending.length,
   };
+}
+
+/**
+ * Build a Map of `txn_id → latest new_state` from recon_manual_actions
+ * for the given txn ids. "Latest" by acted_at; we walk results most-
+ * recent-first and keep the first occurrence per txn_id.
+ *
+ * Chunked at 100 ids per .in() to dodge URL-length limits (same pattern
+ * recompute uses elsewhere).
+ */
+async function fetchManualOverrides(
+  supabase: SupabaseClient,
+  prIds: string[],
+): Promise<Map<string, string>> {
+  const overrides = new Map<string, string>();
+  if (prIds.length === 0) return overrides;
+  for (let i = 0; i < prIds.length; i += ID_CHUNK) {
+    const chunk = prIds.slice(i, i + ID_CHUNK);
+    const { data, error } = await supabase
+      .from("recon_manual_actions")
+      .select("txn_id, new_state, acted_at")
+      .in("txn_id", chunk)
+      .order("acted_at", { ascending: false });
+    if (error) throw error;
+    for (const a of data ?? []) {
+      const txnId = a.txn_id as string;
+      const newState = a.new_state as string | null;
+      if (!newState) continue;
+      if (!overrides.has(txnId)) overrides.set(txnId, newState);
+    }
+  }
+  return overrides;
 }
 
 async function recomputeDAStates(
