@@ -7,6 +7,7 @@ import { formatDate, formatMinorUSD } from "@/lib/recon/format";
 import { reasonForDvtoCode } from "@/lib/recon/bac";
 
 import { ConfirmPendingButton } from "./confirm-pending-button";
+import { RejectPendingButton, type CandidateDA } from "./reject-pending-button";
 import { RevertConfirmedButton } from "./revert-confirmed-button";
 import { RevertRejectedButton } from "./revert-rejected-button";
 
@@ -54,12 +55,14 @@ export function RowDetailPanel({
   linkedDA,
   manualActions,
   actors,
+  rejectCandidates,
 }: {
   accountId: string;
   row: RowForPanel;
   linkedDA: LinkedDA | undefined;
   manualActions: ManualActionRow[];
   actors: ActorMap;
+  rejectCandidates?: CandidateDA[];
 }) {
   const isPR = row.code === "PR";
   const is4C = row.code === "4C";
@@ -140,8 +143,14 @@ export function RowDetailPanel({
             reaches the confirmable-after date above (file-clock rule), unless a
             DA arrives first.
           </p>
-          <div className="mt-3">
+          <div className="mt-3 flex flex-wrap items-center gap-2">
             <ConfirmPendingButton accountId={accountId} prTxnId={row.id} />
+            <RejectPendingButton
+              accountId={accountId}
+              prTxnId={row.id}
+              prAmountMinor={String(row.credit_minor)}
+              candidates={rejectCandidates ?? []}
+            />
           </div>
         </Section>
       )}
