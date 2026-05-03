@@ -7,6 +7,7 @@ import { formatDate, formatMinorUSD } from "@/lib/recon/format";
 import { reasonForDvtoCode } from "@/lib/recon/bac";
 
 import { ConfirmPendingButton } from "./confirm-pending-button";
+import { RevertConfirmedButton } from "./revert-confirmed-button";
 
 export type LinkedDA = {
   id: string;
@@ -141,11 +142,14 @@ export function RowDetailPanel({
         </Section>
       )}
 
-      {/* PR + confirmed: explain how it landed there (file-clock vs manual).
-          Revert button lands in Tier 3 PR 3. */}
+      {/* PR + confirmed: explain how it landed there (file-clock vs manual)
+          + offer the revert path. */}
       {isPR && row.state === "confirmed" && (
         <Section title="Confirmed" tone="success">
           {confirmationStory(manualActions, actors)}
+          <div className="mt-3">
+            <RevertConfirmedButton accountId={accountId} prTxnId={row.id} />
+          </div>
         </Section>
       )}
 

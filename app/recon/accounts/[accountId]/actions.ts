@@ -313,3 +313,110 @@ export async function confirmPendingPR(args: {
   revalidatePath(`/recon/accounts/${args.accountId}`);
   return { status: "ok" };
 }
+
+// =============================================================
+// revertConfirmedPR
+// =============================================================
+
+export type RevertConfirmedResult = {
+  status: "ok" | "error";
+  message?: string;
+};
+
+/**
+ * Symmetric inverse of confirmPendingPR. Operator decides the file-clock
+ * (or a previous manual confirmation) was wrong — revert the PR back to
+ * `pending` so it stays open for a future DA or a fresh confirmation
+ * decision. The audit row is what makes Recompute's manual-override
+ * lookup honor this state on subsequent passes (Tier 3 hotfix #22).
+ *
+ * If the PR currently has a recon_links row (auto-rejected), this
+ * action refuses — that's a separate workflow (un-pair) that we'd add
+ * if/when the need shows up. Refusing here keeps the operator from
+ * silently leaving a "rejected" PR with no link, which would re-flip
+ * to rejected on the next Recompute and lose the operator's intent.
+ */
+export async function revertConfirmedPR(args: {
+  accountId: string;
+  prTxnId: string;
+  justification: string;
+}): Promise<RevertConfirmedResult> {
+  const session = await requireReconWriter();
+  const supabase = await createSupabaseServerClient();
+
+  const justification = args.justification.trim();
+  if (justification.length < MIN_JUSTIFICATION) {
+    return {
+      status: "error",
+      message: `Justification must be at least ${MIN_JUSTIFICATION} characters.`,
+    };
+  }
+  if (justification.length > MAX_JUSTIFICATION) {
+    return {
+      status: "error",
+      message: `Justification is too long (max ${MAX_JUSTIFICATION}).`,
+    };
+  }
+
+  const { data: pr, error: lookupErr } = await supabase
+    .from("recon_transactions")
+    .select("id, account_id, code, state")
+    .eq("id", args.prTxnId)
+    .maybeSingle();
+  if (lookupErr) return { status: "error", message: lookupErr.message };
+  if (!pr) return { status: "error", message: "Row not found." };
+  if (pr.account_id !== args.accountId) {
+    return { status: "error", message: "Row is not on this account." };
+  }
+  if (pr.code !== "PR") {
+    return { status: "error", message: "Only PR rows can be reverted." };
+  }
+  if (pr.state !== "confirmed") {
+    return {
+      status: "error",
+      message: `Row is not currently confirmed (state: ${pr.state}). Refresh and try again.`,
+    };
+  }
+
+  // Refuse to revert a PR that's auto-paired with a DA (a confirmed PR
+  // shouldn't normally have a link — the recompute would have classified
+  // it as 'rejected' instead. But defending against the edge case keeps
+  // us from silently dropping the audit-trail intent.)
+  const { count: linkCount } = await supabase
+    .from("recon_links")
+    .select("pr_txn_id", { count: "exact", head: true })
+    .eq("pr_txn_id", args.prTxnId);
+  if ((linkCount ?? 0) > 0) {
+    return {
+      status: "error",
+      message:
+        "This PR is paired with a DA — reverting would leave it rejected on the next Recompute. Use the unmatched-reversals flow instead.",
+    };
+  }
+
+  const { error: auditErr } = await supabase
+    .from("recon_manual_actions")
+    .insert({
+      txn_id: args.prTxnId,
+      action: "reclassify",
+      prior_state: "confirmed",
+      new_state: "pending",
+      justification,
+      acted_by: session.userId,
+    });
+  if (auditErr) return { status: "error", message: auditErr.message };
+
+  const { error: stateErr } = await supabase
+    .from("recon_transactions")
+    .update({ state: "pending" })
+    .eq("id", args.prTxnId);
+  if (stateErr) {
+    return {
+      status: "ok",
+      message: `Audit row written but state update failed: ${stateErr.message}. Click Recompute to heal.`,
+    };
+  }
+
+  revalidatePath(`/recon/accounts/${args.accountId}`);
+  return { status: "ok" };
+}
