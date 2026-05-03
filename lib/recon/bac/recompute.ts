@@ -34,6 +34,7 @@ import {
   fileClockCutoff,
   isWithinAchRejectionWindow,
   pickFifoMatchPR,
+  type AliasMap,
   type PRCandidate,
 } from "./classify";
 import { parseDvtoDescription } from "./parser";
@@ -75,6 +76,8 @@ export interface RecomputeStats {
   crossDayLinks: number;
   /** Diagnostic — links the heal pass skipped because dates lookup was incomplete. */
   linksDateMissing: number;
+  /** Diagnostic — operator-curated name aliases loaded for this account. */
+  aliasesLoaded: number;
 }
 
 export async function recomputeAccount(
@@ -97,6 +100,13 @@ export async function recomputeAccount(
     accountId,
   );
   const preexistingLinks = linkedPrIds.size;
+
+  // 1.5. Load operator-curated aliases for this account. The pairing
+  //      pass consults these AFTER the regular prefix match fails, so
+  //      this load is a no-op when no aliases exist (which is the case
+  //      until Tier 2 PR 3's manual-match action ships and is used).
+  const aliases = await fetchAliasMap(supabase, accountId);
+  const aliasesLoaded = aliases.size;
 
   // 1a. Heal: any existing AUTO link that violates the 24h ACH rejection
   //     window is invalid (the DA can't physically be the source of a PR
@@ -134,6 +144,7 @@ export async function recomputeAccount(
       uploadedBy ?? null,
       linkedPrIds,
       linkedDaIds,
+      aliases,
     );
     if (outcome === "paired") reversalsPaired++;
     else {
@@ -184,7 +195,44 @@ export async function recomputeAccount(
     linksRevalidated,
     crossDayLinks,
     linksDateMissing,
+    aliasesLoaded,
   };
+}
+
+/**
+ * Pre-fetch every operator-confirmed (PR-name, DA-name) alias for this
+ * account into a Map<pr_name, Set<da_name>>. The pairing pass uses this
+ * to accept matches that the prefix-based namesMatch would have missed
+ * — but only after the prefix check fails, so behaviour is unchanged
+ * when no aliases exist (which is the case before Tier 2 PR 3 ships
+ * the manual-match action).
+ */
+async function fetchAliasMap(
+  supabase: SupabaseClient,
+  accountId: string,
+): Promise<AliasMap> {
+  const map: AliasMap = new Map();
+  let cursor = 0;
+  while (cursor < SUPABASE_PAGE_SAFETY_CAP) {
+    const { data, error } = await supabase
+      .from("name_aliases")
+      .select("pr_name_normalized, da_name_normalized")
+      .eq("account_id", accountId)
+      .order("id", { ascending: true })
+      .range(cursor, cursor + SUPABASE_PAGE_LIMIT - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    for (const row of data) {
+      const pr = row.pr_name_normalized as string;
+      const da = row.da_name_normalized as string;
+      const set = map.get(pr) ?? new Set<string>();
+      set.add(da);
+      map.set(pr, set);
+    }
+    if (data.length < SUPABASE_PAGE_LIMIT) break;
+    cursor += SUPABASE_PAGE_LIMIT;
+  }
+  return map;
 }
 
 // =============================================================
@@ -430,6 +478,7 @@ async function tryPairDA(
   uploadedBy: string | null,
   linkedPrIds: Set<string>,
   linkedDaIds: Set<string>,
+  aliases: AliasMap,
 ): Promise<PairOutcome> {
   if (!da.payer_name_raw) return "no_payer_name";
   const daAmount = BigInt(da.debit_minor);
@@ -476,6 +525,7 @@ async function tryPairDA(
       postedAt: da.posted_at,
     },
     eligible,
+    aliases,
   );
   if (!match) return "no_match";
 
