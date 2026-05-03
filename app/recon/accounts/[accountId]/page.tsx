@@ -19,6 +19,7 @@ import { formatDate, formatMinorUSD, lastWorkingDays } from "@/lib/recon/format"
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 import { BackfillButton } from "./backfill-button";
+import { MatchToPRButton } from "./match-to-pr-button";
 import { RecomputeButton } from "./recompute-button";
 
 export const dynamic = "force-dynamic";
@@ -273,9 +274,17 @@ export default async function AccountDetailPage({
   // matching name (no date filter). The closest match (by date) tells us
   // why auto-pairing missed it: out-of-window PR, already-paired PR, or
   // none at all. Single batched query keyed on the unique amounts.
+  type CandidatePR = {
+    id: string;
+    posted_at: string;
+    state: string;
+    description: string;
+  };
   type ClosestMatch = {
     count: number;
     closest: { posted_at: string; state: string; in_window: boolean } | null;
+    /** UNPAIRED candidates the operator can manually match this DA to. */
+    pickable: CandidatePR[];
   };
   const closestByDaId = new Map<string, ClosestMatch>();
   if (unmatchedDAs.length > 0) {
@@ -290,10 +299,28 @@ export default async function AccountDetailPage({
       .in("credit_minor", uniqueAmounts)
       .order("posted_at", { ascending: true });
     const pool = candidatePool ?? [];
+
+    // Pre-fetch the set of already-paired PR ids so we don't offer them
+    // as manual-match candidates (they'd hit a 23505 from the link PK).
+    const pairedPrIdSet = new Set<string>();
+    if (pool.length > 0) {
+      const poolIds = pool.map((p) => p.id as string);
+      // Chunk to dodge URL-length limits (same 100-id pattern recompute uses).
+      const ID_CHUNK = 100;
+      for (let i = 0; i < poolIds.length; i += ID_CHUNK) {
+        const chunk = poolIds.slice(i, i + ID_CHUNK);
+        const { data: links } = await supabase
+          .from("recon_links")
+          .select("pr_txn_id")
+          .in("pr_txn_id", chunk);
+        for (const l of links ?? []) pairedPrIdSet.add(l.pr_txn_id as string);
+      }
+    }
+
     for (const da of unmatchedDAs) {
       const payerRaw = da.payer_name_raw as string | null;
       if (!payerRaw) {
-        closestByDaId.set(da.id, { count: 0, closest: null });
+        closestByDaId.set(da.id, { count: 0, closest: null, pickable: [] });
         continue;
       }
       const target = normalizeName(payerRaw);
@@ -306,6 +333,14 @@ export default async function AccountDetailPage({
         return namesMatch(normalizeName(prName), target);
       });
       const first = matches[0];
+      const pickable: CandidatePR[] = matches
+        .filter((m) => !pairedPrIdSet.has(m.id as string))
+        .map((m) => ({
+          id: m.id as string,
+          posted_at: m.posted_at as string,
+          state: m.state as string,
+          description: m.description as string,
+        }));
       closestByDaId.set(da.id, {
         count: matches.length,
         closest: first
@@ -318,9 +353,23 @@ export default async function AccountDetailPage({
               ),
             }
           : null,
+        pickable,
       });
     }
   }
+
+  // KPI: lifetime count of operator-curated manual matches on this account.
+  // Joining via inner-side filter on the embedded recon_transactions row
+  // keeps the count scoped to this account without an account_id column on
+  // recon_links.
+  const { count: manualMatchCount } = await supabase
+    .from("recon_links")
+    .select(
+      "pr_txn_id, pr:recon_transactions!recon_links_pr_txn_id_fkey!inner(account_id)",
+      { count: "exact", head: true },
+    )
+    .eq("match_strategy", "manual")
+    .eq("pr.account_id", accountId);
 
   const totalsByState = totalsRows.reduce(
     (acc, r) => {
@@ -407,6 +456,24 @@ export default async function AccountDetailPage({
         <Stat label="Rejected" tone="warning" {...totalsByState.rejected} />
       </section>
 
+      <section
+        aria-label="Reconciliation KPIs"
+        className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2"
+      >
+        <KpiCard
+          label="Unmatched reversals"
+          tone={unmatchedDAs.length > 0 ? "warning" : "muted"}
+          primary={String(unmatchedDAs.length)}
+          secondary={formatMinorUSD(unmatchedTotal)}
+        />
+        <KpiCard
+          label="Manual matches (lifetime)"
+          tone="muted"
+          primary={String(manualMatchCount ?? 0)}
+          secondary="Operator-curated pairings"
+        />
+      </section>
+
       {showBackfillHint && (
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded border border-warning/40 bg-warning-subtle px-4 py-3 text-sm text-fg">
           <div>
@@ -442,7 +509,7 @@ export default async function AccountDetailPage({
                     <th className="pb-3 pr-4">Payer (parsed)</th>
                     <th className="pb-3 pr-4 text-right">Amount</th>
                     <th className="pb-3 pr-4">Closest PR (any date)</th>
-                    <th className="pb-3">Raw description</th>
+                    <th className="pb-3">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border-subtle">
@@ -465,8 +532,12 @@ export default async function AccountDetailPage({
                         <td className="py-3 pr-4 text-xs">
                           <ClosestPRCell match={cm} />
                         </td>
-                        <td className="py-3 max-w-[420px] truncate text-xs text-fg-muted">
-                          {(row.description as string) ?? "—"}
+                        <td className="py-3 align-top">
+                          <MatchToPRButton
+                            accountId={accountId}
+                            daTxnId={row.id as string}
+                            candidates={cm?.pickable ?? []}
+                          />
                         </td>
                       </tr>
                     );
@@ -797,6 +868,29 @@ function Stat({
       <div className="mt-2 font-display text-2xl font-semibold text-fg tabular-nums">
         {formatMinorUSD(minor)}
       </div>
+    </div>
+  );
+}
+
+function KpiCard({
+  label,
+  tone,
+  primary,
+  secondary,
+}: {
+  label: string;
+  tone: "warning" | "muted";
+  primary: string;
+  secondary: string;
+}) {
+  const headingColor = tone === "warning" ? "text-warning" : "text-fg";
+  return (
+    <div className="rounded border border-border-subtle bg-bg-surface p-4">
+      <div className="text-xs uppercase tracking-wide text-fg-subtle">{label}</div>
+      <div className={`mt-2 font-display text-2xl font-semibold tabular-nums ${headingColor}`}>
+        {primary}
+      </div>
+      <div className="mt-1 text-xs text-fg-muted">{secondary}</div>
     </div>
   );
 }
