@@ -420,3 +420,141 @@ export async function revertConfirmedPR(args: {
   revalidatePath(`/recon/accounts/${args.accountId}`);
   return { status: "ok" };
 }
+
+// =============================================================
+// revertRejectedPR
+// =============================================================
+
+export type RevertRejectedResult = {
+  status: "ok" | "error";
+  message?: string;
+  /** The DA id that was un-linked (freed for re-pairing). */
+  freedDaId?: string | null;
+};
+
+/**
+ * Operator decides a `rejected` PR's pairing was wrong (auto-FIFO picked
+ * the wrong PR, or a manual match was misclicked). Reverts the PR to
+ * `pending` AND un-links the DA so it can pair with the actually-correct
+ * PR.
+ *
+ * Side effects in DB, in order:
+ *   1. Validate row state (must be a rejected PR on this account).
+ *   2. Look up the linked DA via recon_links.
+ *   3. INSERT recon_manual_actions(action='reclassify',
+ *      prior='rejected', new='pending', justification, acted_by).
+ *      The manual-override lookup in recomputePRStates honors this so
+ *      the revert sticks across Recompute clicks.
+ *   4. DELETE recon_links where pr_txn_id = this PR. The DA is now
+ *      eligible to pair again (auto on next ingest, or manually via
+ *      the unmatched-reversals card).
+ *   5. UPDATE the PR state='pending'.
+ *   6. UPDATE the freed DA state='pending_pair' so it shows back up
+ *      in the unmatched-reversals card immediately.
+ */
+export async function revertRejectedPR(args: {
+  accountId: string;
+  prTxnId: string;
+  justification: string;
+}): Promise<RevertRejectedResult> {
+  const session = await requireReconWriter();
+  const supabase = await createSupabaseServerClient();
+
+  const justification = args.justification.trim();
+  if (justification.length < MIN_JUSTIFICATION) {
+    return {
+      status: "error",
+      message: `Justification must be at least ${MIN_JUSTIFICATION} characters.`,
+    };
+  }
+  if (justification.length > MAX_JUSTIFICATION) {
+    return {
+      status: "error",
+      message: `Justification is too long (max ${MAX_JUSTIFICATION}).`,
+    };
+  }
+
+  const { data: pr, error: lookupErr } = await supabase
+    .from("recon_transactions")
+    .select("id, account_id, code, state")
+    .eq("id", args.prTxnId)
+    .maybeSingle();
+  if (lookupErr) return { status: "error", message: lookupErr.message };
+  if (!pr) return { status: "error", message: "Row not found." };
+  if (pr.account_id !== args.accountId) {
+    return { status: "error", message: "Row is not on this account." };
+  }
+  if (pr.code !== "PR") {
+    return { status: "error", message: "Only PR rows can be reverted." };
+  }
+  if (pr.state !== "rejected") {
+    return {
+      status: "error",
+      message: `Row is not currently rejected (state: ${pr.state}). Refresh and try again.`,
+    };
+  }
+
+  const { data: link } = await supabase
+    .from("recon_links")
+    .select("pr_txn_id, da_txn_id")
+    .eq("pr_txn_id", args.prTxnId)
+    .maybeSingle();
+  const freedDaId = (link?.da_txn_id as string | null) ?? null;
+
+  const { error: auditErr } = await supabase
+    .from("recon_manual_actions")
+    .insert({
+      txn_id: args.prTxnId,
+      action: "reclassify",
+      prior_state: "rejected",
+      new_state: "pending",
+      justification: freedDaId
+        ? `${justification}\n\n[system] freed DA ${freedDaId}`
+        : justification,
+      acted_by: session.userId,
+    });
+  if (auditErr) return { status: "error", message: auditErr.message };
+
+  if (freedDaId) {
+    const { error: linkErr } = await supabase
+      .from("recon_links")
+      .delete()
+      .eq("pr_txn_id", args.prTxnId);
+    if (linkErr) {
+      return {
+        status: "ok",
+        message: `Audit row written but link delete failed: ${linkErr.message}. Click Recompute to heal.`,
+        freedDaId,
+      };
+    }
+  }
+
+  const { error: prStateErr } = await supabase
+    .from("recon_transactions")
+    .update({ state: "pending" })
+    .eq("id", args.prTxnId);
+  if (prStateErr) {
+    return {
+      status: "ok",
+      message: `PR state update failed: ${prStateErr.message}. Click Recompute to heal.`,
+      freedDaId,
+    };
+  }
+
+  if (freedDaId) {
+    const { error: daStateErr } = await supabase
+      .from("recon_transactions")
+      .update({ state: "pending_pair" })
+      .eq("id", freedDaId);
+    if (daStateErr) {
+      return {
+        status: "ok",
+        message: `DA state update failed: ${daStateErr.message}. Click Recompute to heal.`,
+        freedDaId,
+      };
+    }
+  }
+
+  revalidatePath(`/recon/accounts/${args.accountId}`);
+  return { status: "ok", freedDaId };
+}
