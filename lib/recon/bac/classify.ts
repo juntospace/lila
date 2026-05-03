@@ -142,12 +142,43 @@ export function isWithinAchRejectionWindow(
   return diffDays >= -1 && diffDays <= 1;
 }
 
+/**
+ * Operator-curated alias map for pairing-by-equivalence.
+ *
+ * Key:   the PR-side name as it appears in the description (after
+ *        extractPRPayerName + normalizeName).
+ * Value: the set of DA-side names (after parseDvtoDescription +
+ *        normalizeName) that operators have manually confirmed represent
+ *        the same client.
+ *
+ * pickFifoMatchPR consults this AFTER the regular prefix `namesMatch`
+ * fails, so the alias map is purely additive — it cannot block any
+ * pairing that the prefix rule would have made on its own.
+ */
+export type AliasMap = Map<string, Set<string>>;
+
+export function aliasMatch(
+  prNormalized: string,
+  daNormalized: string,
+  aliases: AliasMap,
+): boolean {
+  const set = aliases.get(prNormalized);
+  return set ? set.has(daNormalized) : false;
+}
+
 // Picks the earliest unmatched PR whose amount + payer name match the DA
 // AND whose 24h rejection window was still open when the DA arrived.
 // First-unmatched-wins by (postedAt asc, rowIndex asc).
+//
+// `aliases` is optional. When supplied, candidates that fail the prefix-
+// based namesMatch are accepted if the operator has previously confirmed
+// the (PR-name, DA-name) pair as the same client. The alias check happens
+// AFTER the prefix check, so behaviour is unchanged when no aliases exist
+// for the account.
 export function pickFifoMatchPR(
   da: DAToMatch,
   candidates: PRCandidate[],
+  aliases?: AliasMap,
 ): PRCandidate | null {
   if (!da.payerNameRaw) return null;
   const targetName = normalizeName(da.payerNameRaw);
@@ -162,7 +193,9 @@ export function pickFifoMatchPR(
     if (!isWithinAchRejectionWindow(pr.postedAt, da.postedAt)) continue;
     const prName = extractPRPayerName(pr.description);
     if (!prName) continue;
-    if (namesMatch(normalizeName(prName), targetName)) return pr;
+    const prNormalized = normalizeName(prName);
+    if (namesMatch(prNormalized, targetName)) return pr;
+    if (aliases && aliasMatch(prNormalized, targetName, aliases)) return pr;
   }
   return null;
 }

@@ -217,6 +217,59 @@ describe("pickFifoMatchPR", () => {
     ).toBe("p1");
   });
 
+  it("alias: matches when prefix logic fails but operator-curated alias is present", () => {
+    // PR description maps to "FOO INC", DA name is "FOO INTERNATIONAL".
+    // Their normalized forms don't agree on a 6-char prefix beyond "FOO ",
+    // so namesMatch alone returns false. With an alias map listing the
+    // pair, pickFifoMatchPR accepts the match.
+    const candidates: PRCandidate[] = [
+      { id: "p1", postedAt: "2026-04-07", rowIndex: 0, creditMinor: 1000n, description: desc("FOO INC") },
+    ];
+    const da = { amountMinor: 1000n, payerNameRaw: "FOO INTERNATIONAL", postedAt: "2026-04-07" };
+    expect(pickFifoMatchPR(da, candidates)).toBeNull();
+    const aliases = new Map([["FOO INC", new Set(["FOO INTERNATIONAL"])]]);
+    expect(pickFifoMatchPR(da, candidates, aliases)?.id).toBe("p1");
+  });
+
+  it("alias: empty/absent map is a strict no-op (preserves existing pairings)", () => {
+    // Names that DO match by prefix should still pair with or without an
+    // alias map — the map is purely additive.
+    const candidates: PRCandidate[] = [
+      { id: "p1", postedAt: "2026-04-07", rowIndex: 0, creditMinor: 1000n, description: desc("Karla Margaret Borg") },
+    ];
+    const da = { amountMinor: 1000n, payerNameRaw: "KARLA MARGARET BORGE", postedAt: "2026-04-07" };
+    const matchedNoMap = pickFifoMatchPR(da, candidates);
+    const matchedEmptyMap = pickFifoMatchPR(da, candidates, new Map());
+    expect(matchedNoMap?.id).toBe("p1");
+    expect(matchedEmptyMap?.id).toBe("p1");
+  });
+
+  it("alias: does not bypass the amount or window guards", () => {
+    // Even with an alias listing the names as paired, a PR outside the
+    // window or with a different amount must NOT pair.
+    const aliases = new Map([["FOO INC", new Set(["FOO INTERNATIONAL"])]]);
+    const wrongAmount: PRCandidate[] = [
+      { id: "p1", postedAt: "2026-04-07", rowIndex: 0, creditMinor: 999n, description: desc("FOO INC") },
+    ];
+    expect(
+      pickFifoMatchPR(
+        { amountMinor: 1000n, payerNameRaw: "FOO INTERNATIONAL", postedAt: "2026-04-07" },
+        wrongAmount,
+        aliases,
+      ),
+    ).toBeNull();
+    const outOfWindow: PRCandidate[] = [
+      { id: "p2", postedAt: "2026-04-04", rowIndex: 0, creditMinor: 1000n, description: desc("FOO INC") },
+    ];
+    expect(
+      pickFifoMatchPR(
+        { amountMinor: 1000n, payerNameRaw: "FOO INTERNATIONAL", postedAt: "2026-04-07" },
+        outOfWindow,
+        aliases,
+      ),
+    ).toBeNull();
+  });
+
   it("rejects on amount mismatch", () => {
     const candidates: PRCandidate[] = [
       { id: "p1", postedAt: "2026-04-05", rowIndex: 0, creditMinor: 5051n, description: desc("Jorge Miguel Diaz P") },

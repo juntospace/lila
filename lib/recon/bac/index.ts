@@ -16,6 +16,7 @@ export type {
 
 export {
   ACH_PENDING_HOURS,
+  aliasMatch,
   classifyBACRow,
   computeFileSha256,
   computeRowHash,
@@ -28,6 +29,7 @@ export {
 } from './classify';
 
 export type {
+  AliasMap,
   DAToMatch,
   PRCandidate,
   RowClassification,

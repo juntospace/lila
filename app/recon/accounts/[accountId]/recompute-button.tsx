@@ -54,6 +54,7 @@ export function RecomputeButton({ accountId }: { accountId: string }) {
               · linkConflict={result.stats.unpairedLinkConflict}
               · daRejected={result.stats.daRejected}
               · daPendingPair={result.stats.daPendingPair}
+              · aliases={result.stats.aliasesLoaded}
             </span>
           </div>
         </div>
