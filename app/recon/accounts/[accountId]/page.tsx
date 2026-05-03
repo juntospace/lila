@@ -19,8 +19,10 @@ import { formatDate, formatMinorUSD, lastWorkingDays } from "@/lib/recon/format"
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 import { BackfillButton } from "./backfill-button";
+import { LoanCreditRow } from "./loan-credit-row";
 import { MatchToPRButton } from "./match-to-pr-button";
 import { RecomputeButton } from "./recompute-button";
+import { RowDetailPanel } from "./row-detail-panel";
 
 export const dynamic = "force-dynamic";
 
@@ -204,41 +206,144 @@ export default async function AccountDetailPage({
   const totalPages = Math.max(1, Math.ceil(total / perPage));
   const safePage = Math.min(page, totalPages);
 
-  // Reasons for rejected PRs on this page. We fetch BOTH the parsed
-  // return_code and the raw description so the UI can fall back to the
-  // description when the regex didn't extract a code (some legacy DA rows
-  // landed before the parser was broadened).
+  // Linked-DA details + manual-action history for rejected PRs on this
+  // page. The expandable detail panel uses the full DA row to show
+  // what rejected the payment, plus the recon_manual_actions audit
+  // trail (how it landed in this state).
   const rejectedPrIds = credits
     .filter((r) => r.code === "PR" && r.state === "rejected")
     .map((r) => r.id);
-  const reasonByPrId = new Map<
-    string,
-    { code: string | null; description: string | null }
-  >();
+  type LinkedDA = {
+    id: string;
+    posted_at: string;
+    return_code: string | null;
+    description: string | null;
+    payer_name_raw: string | null;
+    rail_native_ref: string | null;
+    debit_minor: string;
+    matched_at: string | null;
+    match_strategy: string | null;
+    matched_by: string | null;
+  };
+  const linkedDaByPrId = new Map<string, LinkedDA>();
   if (rejectedPrIds.length > 0) {
     const { data: links } = await supabase
       .from("recon_links")
-      .select("pr_txn_id, da_txn_id")
+      .select("pr_txn_id, da_txn_id, matched_at, match_strategy, matched_by")
       .in("pr_txn_id", rejectedPrIds);
     const daIds = (links ?? []).map((l) => l.da_txn_id);
-    let daById = new Map<string, { return_code: string | null; description: string | null }>();
+    let daById = new Map<
+      string,
+      Omit<LinkedDA, "matched_at" | "match_strategy" | "matched_by">
+    >();
     if (daIds.length > 0) {
       const { data: das } = await supabase
         .from("recon_transactions")
-        .select("id, return_code, description")
+        .select(
+          "id, posted_at, return_code, description, payer_name_raw, rail_native_ref, debit_minor",
+        )
         .in("id", daIds);
       daById = new Map(
         (das ?? []).map((d) => [
-          d.id,
-          { return_code: d.return_code, description: d.description },
+          d.id as string,
+          {
+            id: d.id as string,
+            posted_at: d.posted_at as string,
+            return_code: d.return_code as string | null,
+            description: d.description as string | null,
+            payer_name_raw: d.payer_name_raw as string | null,
+            rail_native_ref: d.rail_native_ref as string | null,
+            debit_minor: String(d.debit_minor),
+          },
         ]),
       );
     }
     for (const link of links ?? []) {
-      const da = daById.get(link.da_txn_id);
-      reasonByPrId.set(link.pr_txn_id, {
-        code: da?.return_code ?? null,
-        description: da?.description ?? null,
+      const da = daById.get(link.da_txn_id as string);
+      if (!da) continue;
+      linkedDaByPrId.set(link.pr_txn_id as string, {
+        ...da,
+        matched_at: link.matched_at as string | null,
+        match_strategy: link.match_strategy as string | null,
+        matched_by: link.matched_by as string | null,
+      });
+    }
+  }
+  // Backwards-compat shim for the existing Reason cell rendering.
+  const reasonByPrId = new Map<
+    string,
+    { code: string | null; description: string | null }
+  >();
+  for (const [prId, da] of linkedDaByPrId) {
+    reasonByPrId.set(prId, {
+      code: da.return_code,
+      description: da.description,
+    });
+  }
+
+  // Manual-action history per PR on this page. Used by the detail
+  // panel's audit trail and to distinguish file-clock vs manually
+  // confirmed rows.
+  const visiblePrIds = credits.filter((r) => r.code === "PR").map((r) => r.id);
+  type ManualActionRow = {
+    id: string;
+    action: string;
+    prior_state: string | null;
+    new_state: string | null;
+    justification: string;
+    acted_by: string | null;
+    acted_at: string;
+  };
+  const manualActionsByPrId = new Map<string, ManualActionRow[]>();
+  if (visiblePrIds.length > 0) {
+    const ID_CHUNK = 100;
+    for (let i = 0; i < visiblePrIds.length; i += ID_CHUNK) {
+      const chunk = visiblePrIds.slice(i, i + ID_CHUNK);
+      const { data: actions } = await supabase
+        .from("recon_manual_actions")
+        .select(
+          "id, txn_id, action, prior_state, new_state, justification, acted_by, acted_at",
+        )
+        .in("txn_id", chunk)
+        .order("acted_at", { ascending: false });
+      for (const a of actions ?? []) {
+        const txnId = a.txn_id as string;
+        const list = manualActionsByPrId.get(txnId) ?? [];
+        list.push({
+          id: a.id as string,
+          action: a.action as string,
+          prior_state: a.prior_state as string | null,
+          new_state: a.new_state as string | null,
+          justification: a.justification as string,
+          acted_by: a.acted_by as string | null,
+          acted_at: a.acted_at as string,
+        });
+        manualActionsByPrId.set(txnId, list);
+      }
+    }
+  }
+
+  // Actor names for manual_actions.acted_by + recon_links.matched_by.
+  const actorIds = new Set<string>();
+  for (const list of manualActionsByPrId.values()) {
+    for (const a of list) if (a.acted_by) actorIds.add(a.acted_by);
+  }
+  for (const da of linkedDaByPrId.values()) {
+    if (da.matched_by) actorIds.add(da.matched_by);
+  }
+  const actorById = new Map<
+    string,
+    { full_name: string | null; email: string }
+  >();
+  if (actorIds.size > 0) {
+    const { data: profiles } = await supabase
+      .from("user_profiles")
+      .select("id, full_name, email")
+      .in("id", Array.from(actorIds));
+    for (const p of profiles ?? []) {
+      actorById.set(p.id as string, {
+        full_name: p.full_name as string | null,
+        email: p.email as string,
       });
     }
   }
@@ -645,6 +750,7 @@ export default async function AccountDetailPage({
               <table className="w-full text-sm">
                 <thead className="text-left text-xs uppercase tracking-wide text-fg-subtle">
                   <tr>
+                    <th className="pb-3 pr-2 sr-only">Expand</th>
                     <SortHeader col="posted_at" label="Date" sort={sort} dir={dir} accountId={accountId} qs={baseQS} />
                     <SortHeader col="code" label="Code" sort={sort} dir={dir} accountId={accountId} qs={baseQS} />
                     <SortHeader col="description" label="Payer" sort={sort} dir={dir} accountId={accountId} qs={baseQS} />
@@ -680,8 +786,8 @@ export default async function AccountDetailPage({
                       (row.payer_name_raw as string | null) ??
                       extractPRPayerName(row.description as string) ??
                       "—";
-                    return (
-                      <tr key={row.id}>
+                    const cells = (
+                      <>
                         <td className="py-3 pr-4 text-fg-muted">
                           {formatDate(row.posted_at as string)}
                         </td>
@@ -701,7 +807,35 @@ export default async function AccountDetailPage({
                         <td className="py-3 font-mono text-xs text-fg-muted">
                           {(row.rail_native_ref as string) || "—"}
                         </td>
-                      </tr>
+                      </>
+                    );
+                    const detail = (
+                      <RowDetailPanel
+                        row={{
+                          id: row.id as string,
+                          posted_at: row.posted_at as string,
+                          code: row.code as string,
+                          state: row.state as string,
+                          credit_minor: row.credit_minor as string | number,
+                          description: row.description as string | null,
+                          rail_native_ref: row.rail_native_ref as string | null,
+                          payer_name_raw: row.payer_name_raw as string | null,
+                          confirmable_after:
+                            (row.confirmable_after as string | null) ?? null,
+                        }}
+                        linkedDA={linkedDaByPrId.get(row.id as string)}
+                        manualActions={manualActionsByPrId.get(row.id as string) ?? []}
+                        actors={actorById}
+                      />
+                    );
+                    return (
+                      <LoanCreditRow
+                        key={row.id}
+                        rowKey={row.id as string}
+                        cells={cells}
+                        detail={detail}
+                        cellCount={7}
+                      />
                     );
                   })}
                 </tbody>
