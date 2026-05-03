@@ -8,6 +8,7 @@ import { reasonForDvtoCode } from "@/lib/recon/bac";
 
 import { ConfirmPendingButton } from "./confirm-pending-button";
 import { RevertConfirmedButton } from "./revert-confirmed-button";
+import { RevertRejectedButton } from "./revert-rejected-button";
 
 export type LinkedDA = {
   id: string;
@@ -124,6 +125,9 @@ export function RowDetailPanel({
               <span className="text-fg-muted">{linkedDA.description || "—"}</span>
             </DetailItem>
           </DetailGrid>
+          <div className="mt-3">
+            <RevertRejectedButton accountId={accountId} prTxnId={row.id} />
+          </div>
         </Section>
       )}
 
