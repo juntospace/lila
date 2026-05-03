@@ -219,3 +219,97 @@ export async function manuallyPairDA(args: {
   }
   return { status: "ok" };
 }
+
+// =============================================================
+// confirmPendingPR
+// =============================================================
+
+export type ConfirmPendingResult = {
+  status: "ok" | "error";
+  message?: string;
+};
+
+const MIN_JUSTIFICATION = 10;
+const MAX_JUSTIFICATION = 1000;
+
+/**
+ * Operator-curated confirmation of a PR that's still in `pending` (its
+ * 24h ACH window hasn't closed yet, but the operator has independent
+ * evidence the payment cleared). Writes the audit row first so the
+ * justification is captured even if the state update later fails; the
+ * Recompute pass would then heal the state on the next click.
+ */
+export async function confirmPendingPR(args: {
+  accountId: string;
+  prTxnId: string;
+  justification: string;
+}): Promise<ConfirmPendingResult> {
+  const session = await requireReconWriter();
+  const supabase = await createSupabaseServerClient();
+
+  const justification = args.justification.trim();
+  if (justification.length < MIN_JUSTIFICATION) {
+    return {
+      status: "error",
+      message: `Justification must be at least ${MIN_JUSTIFICATION} characters.`,
+    };
+  }
+  if (justification.length > MAX_JUSTIFICATION) {
+    return {
+      status: "error",
+      message: `Justification is too long (max ${MAX_JUSTIFICATION}).`,
+    };
+  }
+
+  // Sanity-check the row before mutating: must be a pending PR on this
+  // account. Defends against stale UI state and cross-account spoofing
+  // (RLS would also block, but explicit checks give clearer errors).
+  const { data: pr, error: lookupErr } = await supabase
+    .from("recon_transactions")
+    .select("id, account_id, code, state")
+    .eq("id", args.prTxnId)
+    .maybeSingle();
+  if (lookupErr) return { status: "error", message: lookupErr.message };
+  if (!pr) return { status: "error", message: "Row not found." };
+  if (pr.account_id !== args.accountId) {
+    return { status: "error", message: "Row is not on this account." };
+  }
+  if (pr.code !== "PR") {
+    return {
+      status: "error",
+      message: "Only PR rows can be manually confirmed.",
+    };
+  }
+  if (pr.state !== "pending") {
+    return {
+      status: "error",
+      message: `Row is no longer pending (current state: ${pr.state}). Refresh and try again.`,
+    };
+  }
+
+  const { error: auditErr } = await supabase
+    .from("recon_manual_actions")
+    .insert({
+      txn_id: args.prTxnId,
+      action: "force_confirm",
+      prior_state: "pending",
+      new_state: "confirmed",
+      justification,
+      acted_by: session.userId,
+    });
+  if (auditErr) return { status: "error", message: auditErr.message };
+
+  const { error: stateErr } = await supabase
+    .from("recon_transactions")
+    .update({ state: "confirmed" })
+    .eq("id", args.prTxnId);
+  if (stateErr) {
+    return {
+      status: "ok",
+      message: `Audit row written but state update failed: ${stateErr.message}. Click Recompute to heal.`,
+    };
+  }
+
+  revalidatePath(`/recon/accounts/${args.accountId}`);
+  return { status: "ok" };
+}
