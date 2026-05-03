@@ -811,6 +811,7 @@ export default async function AccountDetailPage({
                     );
                     const detail = (
                       <RowDetailPanel
+                        accountId={accountId}
                         row={{
                           id: row.id as string,
                           posted_at: row.posted_at as string,

@@ -1,9 +1,12 @@
-// Server component (read-only). Renders the expanded detail block under
-// a loan-credits row. Picks the body shape based on the row's state +
-// code, and always shows the operator audit trail when present.
+// Server component. Renders the expanded detail block under a loan-credits
+// row. Picks the body shape based on the row's state + code, and always
+// shows the operator audit trail when present. Action buttons (confirm /
+// revert) are interactive client components mounted inside this panel.
 
 import { formatDate, formatMinorUSD } from "@/lib/recon/format";
 import { reasonForDvtoCode } from "@/lib/recon/bac";
+
+import { ConfirmPendingButton } from "./confirm-pending-button";
 
 export type LinkedDA = {
   id: string;
@@ -44,11 +47,13 @@ type RowForPanel = {
 };
 
 export function RowDetailPanel({
+  accountId,
   row,
   linkedDA,
   manualActions,
   actors,
 }: {
+  accountId: string;
   row: RowForPanel;
   linkedDA: LinkedDA | undefined;
   manualActions: ManualActionRow[];
@@ -121,15 +126,18 @@ export function RowDetailPanel({
         </Section>
       )}
 
-      {/* PR + pending: explain what's blocking confirmation. Confirm
-          button lands in Tier 3 PR 2. */}
+      {/* PR + pending: explain what's blocking confirmation + offer
+          a manual confirm path. */}
       {isPR && row.state === "pending" && (
         <Section title="Pending confirmation" tone="info">
           <p className="text-sm text-fg-muted">
             Will auto-confirm once a future upload&apos;s max <code>posted_at</code>{" "}
             reaches the confirmable-after date above (file-clock rule), unless a
-            DA arrives first. Manual override coming in a follow-up.
+            DA arrives first.
           </p>
+          <div className="mt-3">
+            <ConfirmPendingButton accountId={accountId} prTxnId={row.id} />
+          </div>
         </Section>
       )}
 
