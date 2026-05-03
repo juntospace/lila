@@ -291,32 +291,22 @@ export async function deleteUpload(uploadId: string): Promise<DeleteUploadResult
     }
   }
 
-  // 3. Delete recon_manual_actions referencing any of these txn ids.
-  //    The FK is ON DELETE RESTRICT, so when an operator has manually
-  //    confirmed/reverted any of this upload's PRs (Tier 3), trying to
-  //    delete the recon_transactions in step 4 would otherwise be
-  //    blocked. Chunked at 100 ids to dodge URL-length limits.
-  for (let i = 0; i < txnIds.length; i += ID_CHUNK) {
-    const chunk = txnIds.slice(i, i + ID_CHUNK);
-    const { error } = await supabase
-      .from("recon_manual_actions")
-      .delete()
-      .in("txn_id", chunk);
-    if (error) return { status: "error", message: error.message };
-  }
-
-  // 4. Delete the transactions themselves.
+  // 3. Delete the transactions themselves. recon_manual_actions.txn_id
+  //    cascades on delete (migration 20260503100000), so audit rows for
+  //    the deleted transactions disappear with them — no separate step
+  //    needed and no API-level DELETE policy required on the audit
+  //    table (it stays append-only through PostgREST).
   const { error: txnErr } = await supabase
     .from("recon_transactions")
     .delete()
     .eq("upload_id", uploadId);
   if (txnErr) return { status: "error", message: txnErr.message };
 
-  // 5. Delete the upload row.
+  // 4. Delete the upload row.
   const { error: upErr } = await supabase.from("recon_uploads").delete().eq("id", uploadId);
   if (upErr) return { status: "error", message: upErr.message };
 
-  // 6. Recompute the account so PRs whose linked DA just disappeared, or
+  // 5. Recompute the account so PRs whose linked DA just disappeared, or
   //    that were auto-confirmed via file-clock past this file's range,
   //    settle back to the correct state given the remaining data.
   try {
