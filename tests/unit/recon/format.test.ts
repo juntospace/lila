@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { formatDate, formatMinorUSD, lastWorkingDays } from "@/lib/recon/format";
+import {
+  formatDate,
+  formatMinorUSD,
+  lastWorkingDays,
+  previousWorkingDay,
+} from "@/lib/recon/format";
 
 describe("formatMinorUSD", () => {
   it("formats positive bigint cents", () => {
@@ -56,5 +61,37 @@ describe("lastWorkingDays", () => {
       from: "2026-04-07",
       to: "2026-04-07",
     });
+  });
+});
+
+describe("previousWorkingDay", () => {
+  it("Tue → Mon", () => {
+    expect(previousWorkingDay("2026-04-07")).toBe("2026-04-06");
+  });
+
+  it("Mon → previous Fri (skips weekend)", () => {
+    expect(previousWorkingDay("2026-04-06")).toBe("2026-04-03");
+  });
+
+  it("Sun → previous Fri", () => {
+    expect(previousWorkingDay("2026-04-05")).toBe("2026-04-03");
+  });
+
+  it("Sat → previous Fri", () => {
+    expect(previousWorkingDay("2026-04-04")).toBe("2026-04-03");
+  });
+
+  it("crosses month boundary", () => {
+    // 2026-05-01 is a Friday → previous working day is Thu Apr 30.
+    expect(previousWorkingDay("2026-05-01")).toBe("2026-04-30");
+  });
+
+  it("crosses month boundary over a weekend", () => {
+    // 2026-06-01 is a Monday → previous working day is Fri May 29.
+    expect(previousWorkingDay("2026-06-01")).toBe("2026-05-29");
+  });
+
+  it("throws on invalid ISO", () => {
+    expect(() => previousWorkingDay("not-a-date")).toThrow();
   });
 });

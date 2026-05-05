@@ -36,6 +36,26 @@ export function formatDate(iso: string | null | undefined): string {
 }
 
 /**
+ * Returns the working day immediately before `iso` (YYYY-MM-DD), skipping
+ * weekends. Mon → previous Fri; Tue → Mon; Sat/Sun → previous Fri.
+ *
+ * No holiday calendar yet. If a Panamanian holiday lands on a working
+ * day, BAC's posting cadence may still have produced a batch on it; we
+ * accept that as a known limitation.
+ */
+export function previousWorkingDay(iso: string): string {
+  const t = Date.parse(iso + "T00:00:00Z");
+  if (Number.isNaN(t)) {
+    throw new Error(`previousWorkingDay: invalid ISO date "${iso}"`);
+  }
+  const cursor = new Date(t);
+  do {
+    cursor.setUTCDate(cursor.getUTCDate() - 1);
+  } while (cursor.getUTCDay() === 0 || cursor.getUTCDay() === 6);
+  return cursor.toISOString().slice(0, 10);
+}
+
+/**
  * Walk back from `ref` (a UTC midnight Date) collecting the most recent
  * `n` weekdays (Mon–Fri). Returns the inclusive [from, to] range covering
  * those days, both as ISO YYYY-MM-DD. No holiday calendar yet.
