@@ -424,7 +424,10 @@ export type Database = {
       operator_language: "en" | "es"
       operator_role: "agent" | "loan_officer" | "risk_analyst" | "admin"
       operator_status: "active" | "disabled"
-      recon_links_strategy_enum: "auto_fifo_name_amount" | "manual"
+      recon_links_strategy_enum:
+        | "auto_fifo_name_amount"
+        | "auto_batch_link"
+        | "manual"
       recon_manual_actions_action_enum:
         | "force_confirm"
         | "force_reject"
@@ -574,7 +577,7 @@ export const Constants = {
       operator_language: ["en", "es"],
       operator_role: ["agent", "loan_officer", "risk_analyst", "admin"],
       operator_status: ["active", "disabled"],
-      recon_links_strategy_enum: ["auto_fifo_name_amount", "manual"],
+      recon_links_strategy_enum: ["auto_fifo_name_amount", "auto_batch_link", "manual"],
       recon_manual_actions_action_enum: [
         "force_confirm",
         "force_reject",
