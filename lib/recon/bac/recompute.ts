@@ -1,5 +1,7 @@
-// Account-wide recompute: pair every unpaired DA in the account, then
-// reconcile each PR/DA's state against link presence + file-clock cutoff.
+// Account-wide recompute: batch-aware pairing for every unpaired DA in
+// the account, then reconcile each PR/DA's state against link presence,
+// auto-confirmations from consumed PR batches, manual operator overrides,
+// and the file-clock cutoff.
 //
 // Used by the ingest pipeline at the end of every upload, by the standalone
 // "Recompute" admin action, and by deleteUpload after wiping a file.
@@ -17,27 +19,46 @@
 //
 //   2. Even after handling object-vs-array, the embed reflects only the
 //      committed state at query time. Across many sequential HTTP requests
-//      in a tight loop (one per DA), there are corner cases — connection
-//      pooling, transaction visibility — where the just-inserted link
-//      isn't visible yet, and the next iteration tries to pair against an
-//      already-paired PR.
+//      in a tight loop, there are corner cases — connection pooling,
+//      transaction visibility — where the just-inserted link isn't visible
+//      yet, and the next iteration tries to pair against an already-paired
+//      PR.
 //
 // We pre-fetch all recon_links for the account into in-memory Sets at the
 // start of recompute and use those Sets as the sole source of truth for
 // pairing eligibility. After each successful link insert we mutate the
 // Sets so subsequent iterations see the new link immediately, with no
 // dependency on embed shape or read-after-write timing.
+//
+// Pairing model (Tier 5):
+//
+//   The legacy per-row FIFO+name+amount+window matcher is gone. Real BAC
+//   behaviour is batch-driven — PRs go out in batches sharing a `Referencia`,
+//   DAs come back in batches of consecutive sequences, and a DA batch is
+//   the bank's response to one or more linked PR batches as a group. We
+//   call linkAllBatches() to compute the pairings + auto-confirmations and
+//   then persist them.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import {
+  groupDABatches,
+  groupPRBatches,
+  linkAllBatches,
+  type BatchLink,
+  type DARowForBatch,
+  type PRRowForBatch,
+} from "./batches";
+import {
+  aliasMatch,
+  extractPRPayerName,
   fileClockCutoff,
-  isWithinAchRejectionWindow,
-  pickFifoMatchPR,
+  namesMatch,
+  normalizeName,
   type AliasMap,
-  type PRCandidate,
 } from "./classify";
 import { parseDvtoDescription } from "./parser";
+import { previousWorkingDay } from "../format";
 
 const SUPABASE_PAGE_LIMIT = 1000;
 const SUPABASE_PAGE_SAFETY_CAP = 200_000;
@@ -62,15 +83,23 @@ export interface RecomputeStats {
   txnCount: number;
   /** Diagnostic — links found in DB at the start of the recompute (PR side). */
   preexistingLinks: number;
-  /** Diagnostic — DAs that started without a link (input to the pairing loop). */
+  /** Diagnostic — DAs that started without a link (input to the pairing pass). */
   unpairedDaInput: number;
-  /** Diagnostic — DAs skipped because parser captured no payer name. */
-  unpairedNoPayerName: number;
-  /** Diagnostic — DAs where no PR with same amount + name was eligible. */
-  unpairedNoMatch: number;
+  /** Diagnostic — DA batches the linker produced. */
+  daBatchesFound: number;
+  /** Diagnostic — DA batches that linked to one or more PR batches. */
+  daBatchesLinked: number;
+  /** Diagnostic — DA batches with no eligible PR group (stay pending). */
+  daBatchesUnlinked: number;
+  /** Diagnostic — PR batches the linker produced. */
+  prBatchesFound: number;
+  /** Diagnostic — PR batches consumed by a link (rejected + auto-confirmed). */
+  prBatchesConsumed: number;
+  /** Diagnostic — PRs auto-confirmed because their batch was consumed but they weren't paired. */
+  prsAutoConfirmedByBatch: number;
   /** Diagnostic — link inserts that hit a unique violation (race / stale Set). */
   unpairedLinkConflict: number;
-  /** Existing auto links deleted because their PR/DA dates were out of the 24h window. */
+  /** Existing auto links deleted because their PR/DA dates fell outside the batch window. */
   linksRevalidated: number;
   /** Diagnostic — auto links where PR.posted_at != DA.posted_at (regardless of validity). */
   crossDayLinks: number;
@@ -92,8 +121,8 @@ export async function recomputeAccount(
   const dasReparsed = await reparseUnparsedDAs(supabase, accountId);
 
   // 1. Pre-fetch every existing recon_links row for this account into
-  //    in-memory Sets. These are mutated as we pair more DAs and used by
-  //    the candidates filter, the unpaired-DA discovery, and the final
+  //    in-memory Sets. These are mutated as we insert more links and used
+  //    by the candidates filter, the unpaired-DA discovery, and the final
   //    state recompute — single source of truth.
   const { linkedPrIds, linkedDaIds, links } = await fetchLinkedTxnIds(
     supabase,
@@ -101,21 +130,19 @@ export async function recomputeAccount(
   );
   const preexistingLinks = linkedPrIds.size;
 
-  // 1.5. Load operator-curated aliases for this account. The pairing
-  //      pass consults these AFTER the regular prefix match fails, so
-  //      this load is a no-op when no aliases exist (which is the case
-  //      until Tier 2 PR 3's manual-match action ships and is used).
+  // 1.5. Load operator-curated aliases for this account. The batch-link
+  //      name matcher consults these AFTER the regular prefix match
+  //      fails, so this load is a no-op when no aliases exist.
   const aliases = await fetchAliasMap(supabase, accountId);
   const aliasesLoaded = aliases.size;
 
-  // 1a. Heal: any existing AUTO link that violates the 24h ACH rejection
-  //     window is invalid (the DA can't physically be the source of a PR
-  //     whose 24h window had already closed). Delete those links and
-  //     remove their ids from the in-memory Sets so the unpaired DAs
-  //     pass below can re-pair them with the correct PR.
+  // 1a. Heal: any existing AUTO link that violates the batch-window rule
+  //     ("PR.day == DA.day OR PR.day == previousWorkingDay(DA.day)") is
+  //     invalid. Delete those links and remove their ids from the Sets so
+  //     the batch pass below can re-pair them under the new model.
   //
-  //     We only touch auto pairings; manual pairings (Tier 2 / future)
-  //     reflect explicit operator intent and stay put.
+  //     We only touch auto pairings (auto_fifo_name_amount + auto_batch_link);
+  //     manual pairings reflect explicit operator intent and stay put.
   const healOutcome = await revalidateLinks(
     supabase,
     accountId,
@@ -127,35 +154,47 @@ export async function recomputeAccount(
   const crossDayLinks = healOutcome.crossDay;
   const linksDateMissing = healOutcome.dateMissing;
 
-  // 2. Pair every unpaired DA. tryPairDA mutates the Sets on success so
-  //    the next iteration's eligibility check sees the new link.
+  // 2. Batch-aware pairing. Load every unpaired PR + DA in the account,
+  //    run the pure linker, persist the resulting links, and remember
+  //    which PRs were auto-confirmed by being inside a consumed PR batch.
+  const unpairedPRs = await fetchUnpairedPRs(supabase, accountId, linkedPrIds);
   const unpairedDAs = await fetchUnpairedDAs(supabase, accountId, linkedDaIds);
   const unpairedDaInput = unpairedDAs.length;
+
+  const prBatches = groupPRBatches(unpairedPRs);
+  const daBatches = groupDABatches(unpairedDAs);
+
+  const linkResult = linkAllBatches(prBatches, daBatches, {
+    nameMatcher: (prName, daName) =>
+      namesMatch(prName, daName) || aliasMatch(prName, daName, aliases),
+    normalize: normalizeName,
+    extractPRPayer: extractPRPayerName,
+    previousWorkingDay,
+  });
+
   let reversalsPaired = 0;
-  let reversalsUnpaired = 0;
-  let unpairedNoPayerName = 0;
-  let unpairedNoMatch = 0;
   let unpairedLinkConflict = 0;
-  for (const da of unpairedDAs) {
-    const outcome = await tryPairDA(
+  const autoConfirmedPrIds = new Set<string>();
+  for (const link of linkResult.links) {
+    const persisted = await persistBatchLink(
       supabase,
-      accountId,
-      da,
+      link,
       uploadedBy ?? null,
       linkedPrIds,
       linkedDaIds,
-      aliases,
     );
-    if (outcome === "paired") reversalsPaired++;
-    else {
-      reversalsUnpaired++;
-      if (outcome === "no_payer_name") unpairedNoPayerName++;
-      else if (outcome === "link_conflict") unpairedLinkConflict++;
-      else unpairedNoMatch++;
-    }
+    reversalsPaired += persisted.paired;
+    unpairedLinkConflict += persisted.conflicts;
+    for (const id of link.confirmedPrIds) autoConfirmedPrIds.add(id);
   }
+  const reversalsUnpaired = linkResult.unlinkedDABatches.reduce(
+    (acc, b) => acc + b.rows.length,
+    0,
+  );
+  const prsAutoConfirmedByBatch = autoConfirmedPrIds.size;
 
   // 3. File-clock cutoff = max posted_at across the account.
+  //    Still consulted as a tertiary fallback. Tier 5 PR 3 retires it.
   const { data: maxRow } = await supabase
     .from("recon_transactions")
     .select("posted_at")
@@ -165,13 +204,16 @@ export async function recomputeAccount(
     .maybeSingle();
   const cutoff = maxRow?.posted_at ? fileClockCutoff(maxRow.posted_at as string) : null;
 
-  // 4. Recompute PR + DA states from the Sets.
-  const prStats = await recomputePRStates(supabase, accountId, cutoff, linkedPrIds);
+  // 4. Recompute PR + DA states from the Sets + auto-confirm set.
+  const prStats = await recomputePRStates(
+    supabase,
+    accountId,
+    cutoff,
+    linkedPrIds,
+    autoConfirmedPrIds,
+  );
   const daStats = await recomputeDAStates(supabase, accountId, linkedDaIds);
 
-  // Total txn count for diagnostics (cheap; we already know it from the
-  // earlier fetchAllTxnIds inside fetchLinkedTxnIds, but it's not exposed —
-  // do a HEAD-count which is one round-trip).
   const { count: txnCount } = await supabase
     .from("recon_transactions")
     .select("id", { count: "exact", head: true })
@@ -189,8 +231,13 @@ export async function recomputeAccount(
     txnCount: txnCount ?? 0,
     preexistingLinks,
     unpairedDaInput,
-    unpairedNoPayerName,
-    unpairedNoMatch,
+    daBatchesFound: daBatches.length,
+    daBatchesLinked: linkResult.links.length,
+    daBatchesUnlinked: linkResult.unlinkedDABatches.length,
+    prBatchesFound: prBatches.length,
+    prBatchesConsumed:
+      prBatches.length - linkResult.unconsumedPRBatchReferences.length,
+    prsAutoConfirmedByBatch,
     unpairedLinkConflict,
     linksRevalidated,
     crossDayLinks,
@@ -202,10 +249,7 @@ export async function recomputeAccount(
 /**
  * Pre-fetch every operator-confirmed (PR-name, DA-name) alias for this
  * account into a Map<pr_name, Set<da_name>>. The pairing pass uses this
- * to accept matches that the prefix-based namesMatch would have missed
- * — but only after the prefix check fails, so behaviour is unchanged
- * when no aliases exist (which is the case before Tier 2 PR 3 ships
- * the manual-match action).
+ * to accept matches that the prefix-based namesMatch would have missed.
  */
 async function fetchAliasMap(
   supabase: SupabaseClient,
@@ -238,13 +282,6 @@ async function fetchAliasMap(
 // =============================================================
 // Internals
 // =============================================================
-
-interface DAForPairing {
-  id: string;
-  posted_at: string;
-  debit_minor: string;
-  payer_name_raw: string | null;
-}
 
 async function reparseUnparsedDAs(
   supabase: SupabaseClient,
@@ -323,9 +360,6 @@ async function fetchLinkedTxnIds(
     cursor += SUPABASE_PAGE_LIMIT;
   }
 
-  // Two passes (pr_txn_id and da_txn_id) so we catch links where this
-  // account owns the PR side, the DA side, or both. Cross-account links
-  // shouldn't normally exist, but the explicit pass is defensive.
   for (const side of ["pr_txn_id", "da_txn_id"] as const) {
     for (let i = 0; i < txnIds.length; i += ID_CHUNK) {
       const chunk = txnIds.slice(i, i + ID_CHUNK);
@@ -356,22 +390,25 @@ interface HealOutcome {
   dateMissing: number;
 }
 
+const AUTO_STRATEGIES = new Set(["auto_fifo_name_amount", "auto_batch_link"]);
+
 /**
- * Inspect every existing recon_links row and delete any whose PR/DA date
- * pair violates the 24h ACH rejection window.
+ * Inspect every existing AUTO recon_links row and delete any whose
+ * PR/DA date pair violates the batch-window rule:
+ *
+ *   PR.posted_at == DA.posted_at OR PR.posted_at == previousWorkingDay(DA.posted_at)
  *
  * Returns:
- *   - deleted:     links removed (also mutates the in-memory Sets).
- *   - crossDay:    links where PR.date != DA.date, regardless of window
- *                  validity. Diagnostic; helps us see whether the DB
- *                  actually contains cross-day pairings to evaluate.
+ *   - deleted:     auto links removed (also mutates the in-memory Sets).
+ *   - crossDay:    links where PR.date != DA.date, regardless of validity.
+ *                  Diagnostic; helps see whether the DB actually contains
+ *                  cross-day pairings to evaluate.
  *   - dateMissing: links the heal pass had to skip because the date
  *                  lookup didn't return one of the rows. Diagnostic;
  *                  flags chunked-fetch gaps.
  *
- * Validates ALL links (not just auto) — Tier 2 manual pairings don't
- * exist yet, and an out-of-window pairing is wrong regardless of who
- * placed it. When manual pairings ship, we'll narrow back via match_strategy.
+ * Manual pairings reflect explicit operator intent (a chosen exception
+ * to the algorithm) and are never invalidated by the heal pass.
  */
 async function revalidateLinks(
   supabase: SupabaseClient,
@@ -406,6 +443,7 @@ async function revalidateLinks(
   let crossDay = 0;
   let dateMissing = 0;
   for (const l of links) {
+    if (!AUTO_STRATEGIES.has(l.match_strategy)) continue;
     const prDate = datesById.get(l.pr_txn_id);
     const daDate = datesById.get(l.da_txn_id);
     if (!prDate || !daDate) {
@@ -413,7 +451,7 @@ async function revalidateLinks(
       continue;
     }
     if (prDate !== daDate) crossDay++;
-    if (!isWithinAchRejectionWindow(prDate, daDate)) {
+    if (!isInBatchWindow(prDate, daDate)) {
       invalidPrIds.push(l.pr_txn_id);
       invalidDaIds.push(l.da_txn_id);
     }
@@ -436,32 +474,42 @@ async function revalidateLinks(
   return { deleted: invalidPrIds.length, crossDay, dateMissing };
 }
 
-async function fetchUnpairedDAs(
+function isInBatchWindow(prDate: string, daDate: string): boolean {
+  if (prDate === daDate) return true;
+  if (prDate === previousWorkingDay(daDate)) return true;
+  return false;
+}
+
+async function fetchUnpairedPRs(
   supabase: SupabaseClient,
   accountId: string,
-  linkedDaIds: Set<string>,
-): Promise<DAForPairing[]> {
-  const all: DAForPairing[] = [];
+  linkedPrIds: Set<string>,
+): Promise<PRRowForBatch[]> {
+  const all: PRRowForBatch[] = [];
   let cursor = 0;
   while (cursor < SUPABASE_PAGE_SAFETY_CAP) {
     const { data, error } = await supabase
       .from("recon_transactions")
-      .select("id, posted_at, debit_minor, payer_name_raw")
+      .select("id, posted_at, rail_native_ref, credit_minor, description")
       .eq("account_id", accountId)
-      .eq("code", "DA")
+      .eq("code", "PR")
+      .order("posted_at", { ascending: true })
       .order("id", { ascending: true })
       .range(cursor, cursor + SUPABASE_PAGE_LIMIT - 1);
     if (error) throw error;
     if (!data || data.length === 0) break;
     for (const row of data) {
-      if (!linkedDaIds.has(row.id as string)) {
-        all.push({
-          id: row.id as string,
-          posted_at: row.posted_at as string,
-          debit_minor: String(row.debit_minor),
-          payer_name_raw: row.payer_name_raw as string | null,
-        });
-      }
+      const id = row.id as string;
+      if (linkedPrIds.has(id)) continue;
+      const ref = (row.rail_native_ref as string | null) ?? "";
+      if (!ref) continue;
+      all.push({
+        id,
+        posted_at: row.posted_at as string,
+        reference: ref,
+        amountMinor: BigInt(String(row.credit_minor)),
+        description: (row.description as string | null) ?? "",
+      });
     }
     if (data.length < SUPABASE_PAGE_LIMIT) break;
     cursor += SUPABASE_PAGE_LIMIT;
@@ -469,82 +517,73 @@ async function fetchUnpairedDAs(
   return all;
 }
 
-type PairOutcome = "paired" | "no_payer_name" | "no_match" | "link_conflict";
-
-async function tryPairDA(
+async function fetchUnpairedDAs(
   supabase: SupabaseClient,
   accountId: string,
-  da: DAForPairing,
+  linkedDaIds: Set<string>,
+): Promise<DARowForBatch[]> {
+  const all: DARowForBatch[] = [];
+  let cursor = 0;
+  while (cursor < SUPABASE_PAGE_SAFETY_CAP) {
+    const { data, error } = await supabase
+      .from("recon_transactions")
+      .select("id, posted_at, rail_native_ref, debit_minor, payer_name_raw")
+      .eq("account_id", accountId)
+      .eq("code", "DA")
+      .order("posted_at", { ascending: true })
+      .order("id", { ascending: true })
+      .range(cursor, cursor + SUPABASE_PAGE_LIMIT - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    for (const row of data) {
+      const id = row.id as string;
+      if (linkedDaIds.has(id)) continue;
+      const ref = (row.rail_native_ref as string | null) ?? "";
+      if (!ref) continue;
+      all.push({
+        id,
+        posted_at: row.posted_at as string,
+        reference: ref,
+        amountMinor: BigInt(String(row.debit_minor)),
+        payerNameRaw: row.payer_name_raw as string | null,
+      });
+    }
+    if (data.length < SUPABASE_PAGE_LIMIT) break;
+    cursor += SUPABASE_PAGE_LIMIT;
+  }
+  return all;
+}
+
+async function persistBatchLink(
+  supabase: SupabaseClient,
+  link: BatchLink,
   uploadedBy: string | null,
   linkedPrIds: Set<string>,
   linkedDaIds: Set<string>,
-  aliases: AliasMap,
-): Promise<PairOutcome> {
-  if (!da.payer_name_raw) return "no_payer_name";
-  const daAmount = BigInt(da.debit_minor);
-
-  // Candidates: every PR in this account with the same credit amount AND
-  // whose posted date is within ±1 day of the DA. Symmetric window
-  // because BAC's posting cadence sometimes places the DA one day before
-  // the PR for the same physical event. Picked at the SQL level so the
-  // response stays small even on accounts with thousands of same-amount
-  // PRs. Deterministic secondary sort on id.
-  const daDate = da.posted_at;
-  const windowFloor = prevDayIso(daDate);
-  const windowCeiling = nextDayIso(daDate);
-  const { data: candidates, error } = await supabase
-    .from("recon_transactions")
-    .select("id, posted_at, credit_minor, description")
-    .eq("account_id", accountId)
-    .eq("code", "PR")
-    .eq("credit_minor", daAmount.toString())
-    .gte("posted_at", windowFloor)
-    .lte("posted_at", windowCeiling)
-    .order("posted_at", { ascending: true })
-    .order("id", { ascending: true });
-  if (error) throw error;
-
-  // Eligible = not already paired in our in-memory Set. The Set is mutated
-  // synchronously after every successful link insert, so the next DA
-  // iteration sees the latest pairing without depending on PostgREST
-  // embed shape or read-after-write visibility.
-  const eligible: PRCandidate[] = (candidates ?? [])
-    .filter((c) => !linkedPrIds.has(c.id as string))
-    .map((c, idx) => ({
-      id: c.id as string,
-      postedAt: c.posted_at as string,
-      rowIndex: idx,
-      creditMinor: BigInt(String(c.credit_minor)),
-      description: c.description as string,
-    }));
-
-  const match = pickFifoMatchPR(
-    {
-      amountMinor: daAmount,
-      payerNameRaw: da.payer_name_raw,
-      postedAt: da.posted_at,
-    },
-    eligible,
-    aliases,
-  );
-  if (!match) return "no_match";
-
-  const { error: linkErr } = await supabase.from("recon_links").insert({
-    pr_txn_id: match.id,
-    da_txn_id: da.id,
-    match_strategy: "auto_fifo_name_amount",
-    matched_by: uploadedBy,
-  });
-  if (linkErr) {
-    // 23505 = unique violation. The DB is the ultimate source of truth, so
-    // if we lost a race (or our Set was stale), back out cleanly.
-    if (linkErr.code === "23505") return "link_conflict";
-    throw linkErr;
+): Promise<{ paired: number; conflicts: number }> {
+  let paired = 0;
+  let conflicts = 0;
+  for (const p of link.pairings) {
+    const { error } = await supabase.from("recon_links").insert({
+      pr_txn_id: p.prId,
+      da_txn_id: p.daId,
+      match_strategy: "auto_batch_link",
+      matched_by: uploadedBy,
+    });
+    if (error) {
+      // 23505 = unique violation. The DB is the ultimate source of truth,
+      // so if we lost a race or the Set was stale, back out cleanly.
+      if (error.code === "23505") {
+        conflicts++;
+        continue;
+      }
+      throw error;
+    }
+    linkedPrIds.add(p.prId);
+    linkedDaIds.add(p.daId);
+    paired++;
   }
-
-  linkedPrIds.add(match.id);
-  linkedDaIds.add(da.id);
-  return "paired";
+  return { paired, conflicts };
 }
 
 async function recomputePRStates(
@@ -552,8 +591,8 @@ async function recomputePRStates(
   accountId: string,
   cutoff: string | null,
   linkedPrIds: Set<string>,
+  autoConfirmedPrIds: Set<string>,
 ): Promise<{ confirmed: number; rejected: number; pending: number }> {
-  // Phase 1: collect every PR row's id + confirmable_after.
   type PrRow = { id: string; confirmable_after: string | null };
   const prs: PrRow[] = [];
   let cursor = 0;
@@ -578,8 +617,8 @@ async function recomputePRStates(
   }
 
   // Phase 2: load latest manual override per PR. Operator-curated state
-  // beats the file-clock rule — if the operator manually confirmed a
-  // pending PR, we must not overwrite it back to pending here.
+  // beats the auto rules — if the operator manually confirmed a pending
+  // PR, we must not overwrite it back to pending here.
   const overrides = await fetchManualOverrides(
     supabase,
     prs.map((p) => p.id),
@@ -589,8 +628,9 @@ async function recomputePRStates(
   //   1. Auto-rejected via recon_links (the strongest signal — a DA
   //      physically arrived for this PR).
   //   2. Operator's latest manual override, if any.
-  //   3. File-clock confirmation (confirmable_after lapsed).
-  //   4. Default 'pending'.
+  //   3. Auto-confirmed because PR's batch was consumed and PR didn't pair.
+  //   4. File-clock confirmation (confirmable_after lapsed).
+  //   5. Default 'pending'.
   const buckets = {
     confirmed: [] as string[],
     rejected: [] as string[],
@@ -604,6 +644,10 @@ async function recomputePRStates(
     const override = overrides.get(pr.id);
     if (override === "confirmed" || override === "rejected" || override === "pending") {
       buckets[override].push(pr.id);
+      continue;
+    }
+    if (autoConfirmedPrIds.has(pr.id)) {
+      buckets.confirmed.push(pr.id);
       continue;
     }
     if (
@@ -632,8 +676,7 @@ async function recomputePRStates(
  * for the given txn ids. "Latest" by acted_at; we walk results most-
  * recent-first and keep the first occurrence per txn_id.
  *
- * Chunked at 100 ids per .in() to dodge URL-length limits (same pattern
- * recompute uses elsewhere).
+ * Chunked at 100 ids per .in() to dodge URL-length limits.
  */
 async function fetchManualOverrides(
   supabase: SupabaseClient,
@@ -702,16 +745,4 @@ async function applyStateUpdates(
       .in("id", chunk);
     if (error) throw error;
   }
-}
-
-function prevDayIso(iso: string): string {
-  return new Date(Date.parse(iso + "T00:00:00Z") - 86_400_000)
-    .toISOString()
-    .slice(0, 10);
-}
-
-function nextDayIso(iso: string): string {
-  return new Date(Date.parse(iso + "T00:00:00Z") + 86_400_000)
-    .toISOString()
-    .slice(0, 10);
 }

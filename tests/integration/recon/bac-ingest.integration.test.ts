@@ -26,24 +26,29 @@ const enabled = Boolean(URL && KEY);
 const TEST_ACCOUNT_NUMBER = `INTG-${Date.now()}`;
 const TEST_HOLDER = "Integration Test Account";
 
-// Minimal three-row fixture: one PR (will pair with the DA), one 4C
-// (irrevocable), one DA (DVTO that pairs back to the PR).
+// Minimal three-row fixture: one PR (will pair with the DA via batch
+// linking), one 4C (irrevocable), one DA (DVTO that pairs back to the PR).
 //
 // Saldo arithmetic (so integrity check passes):
 //   1000.00 + 50.50 (PR) + 200.00 (4C) - 50.50 (DA) = 1200.00
+//
+// References use BAC's actual digit-only shape so groupPRBatches and
+// groupDABatches can parse them. Dates are picked so PR and DA fall in
+// the batch window: PR on Mon 06/04, DA on Tue 07/04 (DA.day's previous
+// working day == PR.day).
 const fixtureSheet = (): unknown[][] => [
   ["Estado de Cuenta"],
   ["Cliente", TEST_HOLDER],
   ["Cuenta", TEST_ACCOUNT_NUMBER],
   ["Moneda", "USD"],
-  ["Período", "05/04/2026 - 07/04/2026"],
+  ["Período", "06/04/2026 - 07/04/2026"],
   ["Saldo Inicial", "1,000.00"],
   ["Saldo Final", "1,200.00"],
   [],
   ["Fecha", "Referencia", null, "Código", "Descripción", null, "Débitos", "Créditos", "Balance"],
-  ["05/04/2026", "REF001", null, "PR", "Tef DCD de Jorge Miguel Diaz P", null, "", "50.50", "1,050.50"],
-  ["05/04/2026", "REF002", null, "4C", "ACH CRE Maria Lopez", null, "", "200.00", "1,250.50"],
-  ["06/04/2026", "REF003", null, "DA", "DVTO AM04-JORGE MIGUEL DIAZ P", null, "50.50", "", "1,200.00"],
+  ["06/04/2026", "6227489", null, "PR", "Tef DCD de Jorge Miguel Diaz P", null, "", "50.50", "1,050.50"],
+  ["06/04/2026", "6227490", null, "4C", "ACH CRE Maria Lopez", null, "", "200.00", "1,250.50"],
+  ["07/04/2026", "7423344", null, "DA", "DVTO AM04-JORGE MIGUEL DIAZ P", null, "50.50", "", "1,200.00"],
 ];
 
 describe.skipIf(!enabled)("BAC ingest integration", () => {
@@ -126,7 +131,7 @@ describe.skipIf(!enabled)("BAC ingest integration", () => {
       .select("match_strategy")
       .order("matched_at", { ascending: false })
       .limit(1);
-    expect(links?.[0]?.match_strategy).toBe("auto_fifo_name_amount");
+    expect(links?.[0]?.match_strategy).toBe("auto_batch_link");
   });
 
   it("re-ingesting the same bytes is a no-op (file dedup)", async () => {

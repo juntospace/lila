@@ -49,8 +49,10 @@ export function RecomputeButton({ accountId }: { accountId: string }) {
               · dateMissing={result.stats.linksDateMissing}
               · revalidated={result.stats.linksRevalidated}
               · unpairedDAsIn={result.stats.unpairedDaInput}
-              · noName={result.stats.unpairedNoPayerName}
-              · noMatch={result.stats.unpairedNoMatch}
+              · prBatches={result.stats.prBatchesFound}/{result.stats.prBatchesConsumed}
+              · daBatches={result.stats.daBatchesLinked}/{result.stats.daBatchesFound}
+              · daUnlinked={result.stats.daBatchesUnlinked}
+              · autoConfirm={result.stats.prsAutoConfirmedByBatch}
               · linkConflict={result.stats.unpairedLinkConflict}
               · daRejected={result.stats.daRejected}
               · daPendingPair={result.stats.daPendingPair}
