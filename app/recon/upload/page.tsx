@@ -31,7 +31,6 @@ type RecentUpload = {
   rows_duplicate: number;
   date_range_start: string | null;
   date_range_end: string | null;
-  integrity_ok: boolean | null;
 };
 
 export default async function ReconUploadPage() {
@@ -47,7 +46,7 @@ export default async function ReconUploadPage() {
     supabase
       .from("recon_uploads")
       .select(
-        "id, uploaded_at, original_filename, account_id, uploaded_by, status, rows_total, rows_new, rows_duplicate, date_range_start, date_range_end, integrity_ok",
+        "id, uploaded_at, original_filename, account_id, uploaded_by, status, rows_total, rows_new, rows_duplicate, date_range_start, date_range_end",
       )
       .order("uploaded_at", { ascending: false })
       .limit(10),
@@ -160,7 +159,6 @@ export default async function ReconUploadPage() {
                       <th className="pb-3 pr-4">File</th>
                       <th className="pb-3 pr-4">Range</th>
                       <th className="pb-3 pr-4 text-right">Rows</th>
-                      <th className="pb-3 pr-4">Integrity</th>
                       <th className="pb-3 pr-4">Status</th>
                       <th className="pb-3 sr-only">Actions</th>
                     </tr>
@@ -201,9 +199,6 @@ export default async function ReconUploadPage() {
                             <span className="text-fg-subtle"> / {u.rows_total}</span>
                           </td>
                           <td className="py-3 pr-4">
-                            <IntegrityBadge ok={u.integrity_ok} />
-                          </td>
-                          <td className="py-3 pr-4">
                             <StatusBadge status={u.status} />
                           </td>
                           <td className="py-3">
@@ -223,21 +218,6 @@ export default async function ReconUploadPage() {
         </Card>
       </section>
     </OperatorShell>
-  );
-}
-
-function IntegrityBadge({ ok }: { ok: boolean | null }) {
-  if (ok === null) return <span className="text-fg-subtle">—</span>;
-  if (ok)
-    return (
-      <span className="rounded bg-success-subtle px-2 py-0.5 text-xs text-success">
-        ok
-      </span>
-    );
-  return (
-    <span className="rounded bg-warning-subtle px-2 py-0.5 text-xs text-warning">
-      mismatch
-    </span>
   );
 }
 

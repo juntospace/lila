@@ -406,12 +406,9 @@ export function parseBACSheet(matrix: Cell[][]): BACParseResult {
   const expectedFinal = preamble.saldoInicialMinor + totalCredit - totalDebit;
   const integrityOk =
     preamble.saldoFinalMinor !== 0n && expectedFinal === preamble.saldoFinalMinor;
-
-  if (!integrityOk && preamble.saldoFinalMinor !== 0n) {
-    warnings.push(
-      `Balance integrity check failed: expected ${expectedFinal}, got ${preamble.saldoFinalMinor} (diff ${expectedFinal - preamble.saldoFinalMinor}).`,
-    );
-  }
+  // The integrity check is preserved on the upload row in DB so we can audit
+  // historical mismatches via SQL, but it no longer surfaces to operators —
+  // saldo arithmetic isn't part of the reconciliation contract.
 
   const header: BACHeader = {
     accountNumber: preamble.accountNumber,
