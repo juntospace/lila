@@ -390,6 +390,40 @@ export default async function AccountDetailPage({
     }
   }
 
+  // Compute the set of "consumed PR-batch references" for this account.
+  // A confirmed PR is auto-confirmed by the batch-link rule (Tier 5 PR 2)
+  // when its rail_native_ref matches a ref that has at least one
+  // auto_batch_link recon_links pairing — meaning the bank returned DAs
+  // for some PRs in that batch but not for this one (the funds stayed).
+  // Used by the row detail panel to render the right confirmation reason
+  // for confirmed PRs (batch-link vs file-clock vs manual).
+  const consumedBatchRefs = new Set<string>();
+  {
+    const { data: accountPrRows } = await supabase
+      .from("recon_transactions")
+      .select("id, rail_native_ref")
+      .eq("account_id", accountId)
+      .eq("code", "PR");
+    const refByPrId = new Map<string, string | null>();
+    for (const r of accountPrRows ?? []) {
+      refByPrId.set(r.id as string, (r.rail_native_ref as string | null) ?? null);
+    }
+    const accountPrIds = Array.from(refByPrId.keys());
+    const ID_CHUNK = 100;
+    for (let i = 0; i < accountPrIds.length; i += ID_CHUNK) {
+      const chunk = accountPrIds.slice(i, i + ID_CHUNK);
+      const { data: autoLinks } = await supabase
+        .from("recon_links")
+        .select("pr_txn_id")
+        .eq("match_strategy", "auto_batch_link")
+        .in("pr_txn_id", chunk);
+      for (const l of autoLinks ?? []) {
+        const ref = refByPrId.get(l.pr_txn_id as string);
+        if (ref) consumedBatchRefs.add(ref);
+      }
+    }
+  }
+
   // Surface a one-time hint if any rejected DAs in the system still have a
   // null return_code — the operator can backfill them via the button.
   const { count: nullDaCount } = await supabase
@@ -851,6 +885,12 @@ export default async function AccountDetailPage({
                         </td>
                       </>
                     );
+                    const ref = row.rail_native_ref as string | null;
+                    const confirmedByBatch =
+                      row.code === "PR" &&
+                      row.state === "confirmed" &&
+                      Boolean(ref) &&
+                      consumedBatchRefs.has(ref!);
                     const detail = (
                       <RowDetailPanel
                         accountId={accountId}
@@ -861,10 +901,11 @@ export default async function AccountDetailPage({
                           state: row.state as string,
                           credit_minor: row.credit_minor as string | number,
                           description: row.description as string | null,
-                          rail_native_ref: row.rail_native_ref as string | null,
+                          rail_native_ref: ref,
                           payer_name_raw: row.payer_name_raw as string | null,
                           confirmable_after:
                             (row.confirmable_after as string | null) ?? null,
+                          confirmedByBatch,
                         }}
                         linkedDA={linkedDaByPrId.get(row.id as string)}
                         manualActions={manualActionsByPrId.get(row.id as string) ?? []}

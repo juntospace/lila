@@ -46,6 +46,10 @@ type RowForPanel = {
   rail_native_ref: string | null;
   payer_name_raw: string | null;
   confirmable_after: string | null;
+  /** True if this PR is confirmed because its batch was consumed by a DA
+   *  batch (Tier 5 batch-link rule). Used to render the right confirmation
+   *  reason — distinct from file-clock + manual confirmations. */
+  confirmedByBatch?: boolean;
   currency?: string;
 };
 
@@ -159,11 +163,11 @@ export function RowDetailPanel({
         </Section>
       )}
 
-      {/* PR + confirmed: explain how it landed there (file-clock vs manual)
-          + offer the revert path. */}
+      {/* PR + confirmed: explain how it landed there (batch-link vs
+          file-clock vs manual) + offer the revert path. */}
       {isPR && row.state === "confirmed" && (
         <Section title="Confirmed" tone="success">
-          {confirmationStory(manualActions, actors)}
+          {confirmationStory(manualActions, actors, row.confirmedByBatch === true)}
           <div className="mt-3">
             <RevertConfirmedButton accountId={accountId} prTxnId={row.id} />
           </div>
@@ -216,6 +220,7 @@ export function RowDetailPanel({
 function confirmationStory(
   actions: ManualActionRow[],
   actors: ActorMap,
+  confirmedByBatch: boolean,
 ) {
   const manualConfirm = actions.find(
     (a) =>
@@ -237,6 +242,15 @@ function confirmationStory(
         .
         <div className="mt-1 text-fg">{manualConfirm.justification}</div>
       </div>
+    );
+  }
+  if (confirmedByBatch) {
+    return (
+      <p className="text-sm text-fg-muted">
+        Auto-confirmed by the batch-link rule — the bank returned DAs for
+        other PRs in this <code>Referencia</code> batch but not for this
+        one, so the funds stayed.
+      </p>
     );
   }
   return (
