@@ -120,8 +120,12 @@ export function RowDetailPanel({
                     ? ` · ${new Date(linkedDA.matched_at).toLocaleString()}`
                     : ""}
                 </>
+              ) : linkedDA.match_strategy === "auto_batch_link" ? (
+                "Auto (batch link)"
+              ) : linkedDA.match_strategy === "auto_fifo_name_amount" ? (
+                "Auto (FIFO + name + amount, legacy)"
               ) : (
-                "Auto (FIFO + name + amount)"
+                "Auto"
               )}
             </DetailItem>
             <DetailItem label="DA raw description" wide>
