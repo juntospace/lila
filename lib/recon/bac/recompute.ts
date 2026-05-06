@@ -174,7 +174,6 @@ export async function recomputeAccount(
 
   let reversalsPaired = 0;
   let unpairedLinkConflict = 0;
-  const autoConfirmedPrIds = new Set<string>();
   for (const link of linkResult.links) {
     const persisted = await persistBatchLink(
       supabase,
@@ -185,11 +184,31 @@ export async function recomputeAccount(
     );
     reversalsPaired += persisted.paired;
     unpairedLinkConflict += persisted.conflicts;
-    for (const id of link.confirmedPrIds) autoConfirmedPrIds.add(id);
   }
   const reversalsUnpaired = linkResult.unlinkedDABatches.reduce(
     (acc, b) => acc + b.rows.length,
     0,
+  );
+
+  // 2a. Derive auto-confirmation from the CURRENT recon_links state, not
+  //     just the pairings produced in this recompute. The BAC contract is:
+  //     once a PR batch is consumed by a DA batch, every PR in that batch
+  //     that didn't pair with a DA is confirmed (the bank kept the funds).
+  //
+  //     "Consumed" is detectable from existing auto_batch_link rows: any
+  //     PR sharing a rail_native_ref with an auto_batch_link-paired PR is
+  //     in a consumed batch. Without this derivation, a second recompute
+  //     run forgets the consumption signal because the unpaired-DA pool
+  //     is empty (the DAs are already linked), and pending PRs in those
+  //     batches stay pending forever.
+  //
+  //     We only treat auto_batch_link as the consumption signal — manual
+  //     pairings reflect operator intent on a single PR/DA, not an entire
+  //     batch consumption.
+  const autoConfirmedPrIds = await deriveAutoConfirmedPrIds(
+    supabase,
+    accountId,
+    linkedPrIds,
   );
   const prsAutoConfirmedByBatch = autoConfirmedPrIds.size;
 
@@ -552,6 +571,84 @@ async function fetchUnpairedDAs(
     cursor += SUPABASE_PAGE_LIMIT;
   }
   return all;
+}
+
+/**
+ * Derive the set of "PR was in a consumed batch but didn't pair" PRs by
+ * inspecting current recon_links state.
+ *
+ * Algorithm:
+ *   1. Pull every PR row's id + rail_native_ref.
+ *   2. Pull every recon_links row whose match_strategy = 'auto_batch_link'
+ *      and whose PR side belongs to this account.
+ *   3. Collect the references of every PR that has an auto_batch_link
+ *      pairing — those references identify "consumed PR batches."
+ *   4. Walk all PRs again; any PR that (a) shares a consumed-batch
+ *      reference, (b) has a parseable digit reference, and (c) is not
+ *      itself paired (linkedPrIds), gets flagged as auto-confirmed.
+ *
+ * Idempotent across recomputes — derives state from the DB rather than
+ * the in-flight linker output, so a second run computes the same answer
+ * even when the unpaired-DA pool is empty.
+ */
+async function deriveAutoConfirmedPrIds(
+  supabase: SupabaseClient,
+  accountId: string,
+  linkedPrIds: Set<string>,
+): Promise<Set<string>> {
+  // Step 1 — load all PRs with their references.
+  type PrInfo = { id: string; ref: string | null };
+  const prs: PrInfo[] = [];
+  let cursor = 0;
+  while (cursor < SUPABASE_PAGE_SAFETY_CAP) {
+    const { data, error } = await supabase
+      .from("recon_transactions")
+      .select("id, rail_native_ref")
+      .eq("account_id", accountId)
+      .eq("code", "PR")
+      .order("id", { ascending: true })
+      .range(cursor, cursor + SUPABASE_PAGE_LIMIT - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    for (const row of data) {
+      prs.push({
+        id: row.id as string,
+        ref: (row.rail_native_ref as string | null) ?? null,
+      });
+    }
+    if (data.length < SUPABASE_PAGE_LIMIT) break;
+    cursor += SUPABASE_PAGE_LIMIT;
+  }
+
+  // Step 2 — fetch auto_batch_link links restricted to this account's PRs.
+  const prIds = prs.map((p) => p.id);
+  const autoBatchPrIds = new Set<string>();
+  for (let i = 0; i < prIds.length; i += ID_CHUNK) {
+    const chunk = prIds.slice(i, i + ID_CHUNK);
+    const { data, error } = await supabase
+      .from("recon_links")
+      .select("pr_txn_id")
+      .eq("match_strategy", "auto_batch_link")
+      .in("pr_txn_id", chunk);
+    if (error) throw error;
+    for (const l of data ?? []) autoBatchPrIds.add(l.pr_txn_id as string);
+  }
+
+  // Step 3 — refs of consumed PR batches.
+  const consumedRefs = new Set<string>();
+  for (const pr of prs) {
+    if (autoBatchPrIds.has(pr.id) && pr.ref) consumedRefs.add(pr.ref);
+  }
+
+  // Step 4 — every unpaired PR sharing a consumed ref is auto-confirmed.
+  const out = new Set<string>();
+  for (const pr of prs) {
+    if (!pr.ref) continue;
+    if (linkedPrIds.has(pr.id)) continue;
+    if (!consumedRefs.has(pr.ref)) continue;
+    out.add(pr.id);
+  }
+  return out;
 }
 
 async function persistBatchLink(
