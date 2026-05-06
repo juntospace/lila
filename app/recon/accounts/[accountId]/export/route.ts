@@ -47,7 +47,6 @@ export async function GET(
     credit_minor: string | number;
     description: string | null;
     state: string;
-    confirmable_after: string | null;
     rail_native_ref: string | null;
     payer_name_raw: string | null;
     currency: string;
@@ -61,7 +60,7 @@ export async function GET(
     let q = supabase
       .from("recon_transactions")
       .select(
-        "id, posted_at, code, credit_minor, description, state, confirmable_after, rail_native_ref, payer_name_raw, currency",
+        "id, posted_at, code, credit_minor, description, state, rail_native_ref, payer_name_raw, currency",
       )
       .eq("account_id", accountId)
       .eq("kind", "loan_inflow")
@@ -157,10 +156,8 @@ export async function GET(
       } else if (reason?.description) {
         reasonDetail = reason.description;
       }
-    } else if (r.state === "pending" && r.confirmable_after) {
-      reasonDetail = `Confirmable after ${formatDate(
-        (r.confirmable_after as string).slice(0, 10),
-      )}`;
+    } else if (r.state === "pending") {
+      reasonDetail = "Awaiting batch link";
     }
     return {
       Date: formatDate(r.posted_at as string),

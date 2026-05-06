@@ -10,12 +10,16 @@ import { Label } from "@/components/ui/Label";
 import { requireReconWriter } from "@/lib/auth/guard";
 import {
   extractPRPayerName,
-  isWithinAchRejectionWindow,
   namesMatch,
   normalizeName,
   reasonForDvtoCode,
 } from "@/lib/recon/bac";
-import { formatDate, formatMinorUSD, lastWorkingDays } from "@/lib/recon/format";
+import {
+  formatDate,
+  formatMinorUSD,
+  lastWorkingDays,
+  previousWorkingDay,
+} from "@/lib/recon/format";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 import { BackfillButton } from "./backfill-button";
@@ -81,6 +85,18 @@ function asDir(v: string | undefined): "asc" | "desc" {
 
 const SUPABASE_PAGE_LIMIT = 1000;
 const SUPABASE_PAGE_SAFETY_CAP = 200_000;
+
+/** Match the batch-link window used by recompute: a PR is eligible to
+ *  pair with a DA only if PR.day == DA.day OR PR.day == previousWorkingDay(DA.day). */
+function isInBatchWindow(prDate: string, daDate: string): boolean {
+  if (prDate === daDate) return true;
+  try {
+    if (prDate === previousWorkingDay(daDate)) return true;
+  } catch {
+    // bad ISO → can't be in window
+  }
+  return false;
+}
 
 // Walk a Supabase query in 1000-row pages until we've consumed it.
 // Use this for "give me ALL matching rows" cases (totals, exports) where a
@@ -182,7 +198,7 @@ export default async function AccountDetailPage({
   let pageQuery = supabase
     .from("recon_transactions")
     .select(
-      "id, posted_at, code, credit_minor, description, state, confirmable_after, rail_native_ref, payer_name_raw",
+      "id, posted_at, code, credit_minor, description, state, rail_native_ref, payer_name_raw",
       { count: "exact" },
     )
     .eq("account_id", accountId)
@@ -282,8 +298,7 @@ export default async function AccountDetailPage({
   }
 
   // Manual-action history per PR on this page. Used by the detail
-  // panel's audit trail and to distinguish file-clock vs manually
-  // confirmed rows.
+  // panel's audit trail and to distinguish auto vs manually confirmed rows.
   const visiblePrIds = credits.filter((r) => r.code === "PR").map((r) => r.id);
   type ManualActionRow = {
     id: string;
@@ -396,7 +411,7 @@ export default async function AccountDetailPage({
   // auto_batch_link recon_links pairing — meaning the bank returned DAs
   // for some PRs in that batch but not for this one (the funds stayed).
   // Used by the row detail panel to render the right confirmation reason
-  // for confirmed PRs (batch-link vs file-clock vs manual).
+  // for confirmed PRs (batch-link vs manual).
   const consumedBatchRefs = new Set<string>();
   {
     const { data: accountPrRows } = await supabase
@@ -528,7 +543,7 @@ export default async function AccountDetailPage({
           ? {
               posted_at: first.posted_at as string,
               state: first.state as string,
-              in_window: isWithinAchRejectionWindow(
+              in_window: isInBatchWindow(
                 first.posted_at as string,
                 daDate,
               ),
@@ -851,10 +866,8 @@ export default async function AccountDetailPage({
                       } else {
                         reasonText = "—";
                       }
-                    } else if (row.state === "pending" && row.confirmable_after) {
-                      reasonText = `Confirmable after ${formatDate(
-                        (row.confirmable_after as string).slice(0, 10),
-                      )}`;
+                    } else if (row.state === "pending") {
+                      reasonText = "Awaiting batch link";
                     } else {
                       reasonText = "—";
                     }
@@ -903,8 +916,6 @@ export default async function AccountDetailPage({
                           description: row.description as string | null,
                           rail_native_ref: ref,
                           payer_name_raw: row.payer_name_raw as string | null,
-                          confirmable_after:
-                            (row.confirmable_after as string | null) ?? null,
                           confirmedByBatch,
                         }}
                         linkedDA={linkedDaByPrId.get(row.id as string)}
@@ -1130,7 +1141,7 @@ function ClosestPRCell({
         : "text-info"
       : "text-fg-subtle";
   const reason = !c.in_window
-    ? "outside 24h window"
+    ? "outside batch window"
     : c.state === "rejected"
       ? "already paired"
       : c.state;

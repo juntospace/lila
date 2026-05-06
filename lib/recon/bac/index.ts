@@ -21,17 +21,12 @@ export {
   computeFileSha256,
   computeRowHash,
   extractPRPayerName,
-  fileClockCutoff,
-  isWithinAchRejectionWindow,
   namesMatch,
   normalizeName,
-  pickFifoMatchPR,
 } from './classify';
 
 export type {
   AliasMap,
-  DAToMatch,
-  PRCandidate,
   RowClassification,
   RowHashInput,
   RowKind,

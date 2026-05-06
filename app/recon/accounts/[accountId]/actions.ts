@@ -71,8 +71,9 @@ export type RecomputeActionResult = {
 
 /**
  * Pair every unpaired DA in the account and re-evaluate PR/DA states
- * against link presence + file-clock cutoff. Idempotent. Use to heal bad
- * state from earlier ingests that hit the upsert-response 1000-row cap.
+ * against link presence + batch-link auto-confirmation. Idempotent. Use
+ * to heal bad state from earlier ingests that hit the upsert-response
+ * 1000-row cap.
  */
 export async function recomputeAccountAction(
   accountId: string,
@@ -324,10 +325,11 @@ export type RevertConfirmedResult = {
 };
 
 /**
- * Symmetric inverse of confirmPendingPR. Operator decides the file-clock
- * (or a previous manual confirmation) was wrong — revert the PR back to
- * `pending` so it stays open for a future DA or a fresh confirmation
- * decision. The audit row is what makes Recompute's manual-override
+ * Symmetric inverse of confirmPendingPR. Operator decides the batch-link
+ * auto-confirmation (or a previous manual confirmation) was wrong —
+ * revert the PR back to `pending` so it stays open for a future DA or a
+ * fresh confirmation decision. The audit row is what makes Recompute's
+ * manual-override
  * lookup honor this state on subsequent passes (Tier 3 hotfix #22).
  *
  * If the PR currently has a recon_links row (auto-rejected), this

@@ -1,7 +1,7 @@
 // Account-wide recompute: batch-aware pairing for every unpaired DA in
 // the account, then reconcile each PR/DA's state against link presence,
-// auto-confirmations from consumed PR batches, manual operator overrides,
-// and the file-clock cutoff.
+// auto-confirmations from consumed PR batches, and manual operator
+// overrides. (File-clock confirmation was retired in Tier 5 PR 3.)
 //
 // Used by the ingest pipeline at the end of every upload, by the standalone
 // "Recompute" admin action, and by deleteUpload after wiping a file.
@@ -52,7 +52,6 @@ import {
 import {
   aliasMatch,
   extractPRPayerName,
-  fileClockCutoff,
   namesMatch,
   normalizeName,
   type AliasMap,
@@ -212,22 +211,16 @@ export async function recomputeAccount(
   );
   const prsAutoConfirmedByBatch = autoConfirmedPrIds.size;
 
-  // 3. File-clock cutoff = max posted_at across the account.
-  //    Still consulted as a tertiary fallback. Tier 5 PR 3 retires it.
-  const { data: maxRow } = await supabase
-    .from("recon_transactions")
-    .select("posted_at")
-    .eq("account_id", accountId)
-    .order("posted_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const cutoff = maxRow?.posted_at ? fileClockCutoff(maxRow.posted_at as string) : null;
-
-  // 4. Recompute PR + DA states from the Sets + auto-confirm set.
+  // 3. Recompute PR + DA states from the Sets + auto-confirm set.
+  //    File-clock confirmation was retired in Tier 5 PR 3 — under the
+  //    batch-aware model, a PR confirms when its Referencia batch is
+  //    consumed by a DA batch but no DA returns for it (autoConfirmedPrIds
+  //    above), or by explicit operator action. confirmable_after is no
+  //    longer consulted; the column is preserved for now in case the
+  //    decision is reversed.
   const prStats = await recomputePRStates(
     supabase,
     accountId,
-    cutoff,
     linkedPrIds,
     autoConfirmedPrIds,
   );
@@ -686,29 +679,22 @@ async function persistBatchLink(
 async function recomputePRStates(
   supabase: SupabaseClient,
   accountId: string,
-  cutoff: string | null,
   linkedPrIds: Set<string>,
   autoConfirmedPrIds: Set<string>,
 ): Promise<{ confirmed: number; rejected: number; pending: number }> {
-  type PrRow = { id: string; confirmable_after: string | null };
-  const prs: PrRow[] = [];
+  const prIds: string[] = [];
   let cursor = 0;
   while (cursor < SUPABASE_PAGE_SAFETY_CAP) {
     const { data, error } = await supabase
       .from("recon_transactions")
-      .select("id, confirmable_after")
+      .select("id")
       .eq("account_id", accountId)
       .eq("code", "PR")
       .order("id", { ascending: true })
       .range(cursor, cursor + SUPABASE_PAGE_LIMIT - 1);
     if (error) throw error;
     if (!data || data.length === 0) break;
-    for (const pr of data) {
-      prs.push({
-        id: pr.id as string,
-        confirmable_after: (pr.confirmable_after as string | null) ?? null,
-      });
-    }
+    for (const pr of data) prIds.push(pr.id as string);
     if (data.length < SUPABASE_PAGE_LIMIT) break;
     cursor += SUPABASE_PAGE_LIMIT;
   }
@@ -716,46 +702,38 @@ async function recomputePRStates(
   // Phase 2: load latest manual override per PR. Operator-curated state
   // beats the auto rules — if the operator manually confirmed a pending
   // PR, we must not overwrite it back to pending here.
-  const overrides = await fetchManualOverrides(
-    supabase,
-    prs.map((p) => p.id),
-  );
+  const overrides = await fetchManualOverrides(supabase, prIds);
 
   // Phase 3: bucket. Order of precedence:
   //   1. Auto-rejected via recon_links (the strongest signal — a DA
   //      physically arrived for this PR).
   //   2. Operator's latest manual override, if any.
   //   3. Auto-confirmed because PR's batch was consumed and PR didn't pair.
-  //   4. File-clock confirmation (confirmable_after lapsed).
-  //   5. Default 'pending'.
+  //   4. Default 'pending'.
+  //
+  // File-clock confirmation was retired in Tier 5 PR 3. confirmable_after
+  // is no longer consulted; a PR confirms only via batch-link consumption
+  // or explicit operator action.
   const buckets = {
     confirmed: [] as string[],
     rejected: [] as string[],
     pending: [] as string[],
   };
-  for (const pr of prs) {
-    if (linkedPrIds.has(pr.id)) {
-      buckets.rejected.push(pr.id);
+  for (const id of prIds) {
+    if (linkedPrIds.has(id)) {
+      buckets.rejected.push(id);
       continue;
     }
-    const override = overrides.get(pr.id);
+    const override = overrides.get(id);
     if (override === "confirmed" || override === "rejected" || override === "pending") {
-      buckets[override].push(pr.id);
+      buckets[override].push(id);
       continue;
     }
-    if (autoConfirmedPrIds.has(pr.id)) {
-      buckets.confirmed.push(pr.id);
+    if (autoConfirmedPrIds.has(id)) {
+      buckets.confirmed.push(id);
       continue;
     }
-    if (
-      cutoff &&
-      pr.confirmable_after &&
-      pr.confirmable_after <= cutoff
-    ) {
-      buckets.confirmed.push(pr.id);
-      continue;
-    }
-    buckets.pending.push(pr.id);
+    buckets.pending.push(id);
   }
 
   await applyStateUpdates(supabase, "rejected", buckets.rejected);
