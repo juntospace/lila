@@ -133,7 +133,7 @@ describe('parseBACSheet', () => {
     expect(result.rows.every((r) => r.postedAt.match(/^\d{4}-\d{2}-\d{2}$/))).toBe(true);
   });
 
-  it('flags an integrity mismatch as a warning, not a throw', () => {
+  it('records an integrity mismatch on the result (no warning surfaced)', () => {
     const tampered = minimalBACSheet.map((row) => row.slice());
     // Bump Saldo Final so the check fails (1,200 → 1,300).
     tampered[6] = ['Saldo Final', '1,300.00', null, null, null, null, null, null, null, null];
@@ -141,7 +141,10 @@ describe('parseBACSheet', () => {
     const result = parseBACSheet(tampered);
     expect(result.integrity.ok).toBe(false);
     expect(result.integrity.diffMinor).toBe(-10000n);
-    expect(result.warnings.some((w) => w.startsWith('Balance integrity'))).toBe(true);
+    // After Tier 5 PR 4 the parser no longer surfaces a saldo-leaking
+    // warning; the mismatch is still recorded on result.integrity for
+    // historical audit but does not appear in the user-facing warnings list.
+    expect(result.warnings.some((w) => w.startsWith('Balance integrity'))).toBe(false);
   });
 
   it('throws on a sheet with no recognizable column-header row', () => {
