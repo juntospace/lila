@@ -45,10 +45,9 @@ type RowForPanel = {
   description: string | null;
   rail_native_ref: string | null;
   payer_name_raw: string | null;
-  confirmable_after: string | null;
   /** True if this PR is confirmed because its batch was consumed by a DA
    *  batch (Tier 5 batch-link rule). Used to render the right confirmation
-   *  reason — distinct from file-clock + manual confirmations. */
+   *  reason — distinct from manual confirmations. */
   confirmedByBatch?: boolean;
   currency?: string;
 };
@@ -84,11 +83,6 @@ export function RowDetailPanel({
           {row.rail_native_ref || "—"}
         </DetailItem>
         <DetailItem label="State"><StateChip state={row.state} /></DetailItem>
-        {row.confirmable_after && (
-          <DetailItem label="Confirmable after">
-            {formatDate(row.confirmable_after.slice(0, 10))}
-          </DetailItem>
-        )}
         <DetailItem label="Raw description" wide>
           <span className="text-fg-muted">{row.description || "—"}</span>
         </DetailItem>
@@ -147,9 +141,10 @@ export function RowDetailPanel({
       {isPR && row.state === "pending" && (
         <Section title="Pending confirmation" tone="info">
           <p className="text-sm text-fg-muted">
-            Will auto-confirm once a future upload&apos;s max <code>posted_at</code>{" "}
-            reaches the confirmable-after date above (file-clock rule), unless a
-            DA arrives first.
+            Will auto-confirm once a future upload includes a DA batch
+            that links to this PR&apos;s <code>Referencia</code> batch — at
+            that point any PR in the batch without a returning DA flips
+            to confirmed. Operator can also confirm or reject manually.
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <ConfirmPendingButton accountId={accountId} prTxnId={row.id} />
@@ -164,7 +159,7 @@ export function RowDetailPanel({
       )}
 
       {/* PR + confirmed: explain how it landed there (batch-link vs
-          file-clock vs manual) + offer the revert path. */}
+          manual) + offer the revert path. */}
       {isPR && row.state === "confirmed" && (
         <Section title="Confirmed" tone="success">
           {confirmationStory(manualActions, actors, row.confirmedByBatch === true)}
@@ -253,11 +248,12 @@ function confirmationStory(
       </p>
     );
   }
+  // After Tier 5 PR 3, file-clock confirmation is gone. A confirmed PR
+  // without a manual action and without a consumed batch sibling shouldn't
+  // exist — but if a legacy row is in this state, render a generic note
+  // rather than the now-misleading file-clock copy.
   return (
-    <p className="text-sm text-fg-muted">
-      Auto-confirmed by the file-clock rule — the 24h ACH rejection window
-      lapsed without a corresponding DA arriving in any uploaded file.
-    </p>
+    <p className="text-sm text-fg-muted">Auto-confirmed.</p>
   );
 }
 

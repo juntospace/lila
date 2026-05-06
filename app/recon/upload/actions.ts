@@ -235,8 +235,8 @@ export type DeleteUploadResult = {
 
 /**
  * Wipe an upload's transactions + links, then run a full account recompute
- * so any PRs whose linked DA was just deleted (or that were file-clock-
- * confirmed because of this file's posted_at advancing the cutoff) settle
+ * so any PRs whose linked DA was just deleted (or that were auto-confirmed
+ * because their batch was consumed by a DA batch in this file) settle
  * back to the correct state.
  *
  * Use cases: a file was manipulated before upload, an ingest finished in a
@@ -307,8 +307,8 @@ export async function deleteUpload(uploadId: string): Promise<DeleteUploadResult
   if (upErr) return { status: "error", message: upErr.message };
 
   // 5. Recompute the account so PRs whose linked DA just disappeared, or
-  //    that were auto-confirmed via file-clock past this file's range,
-  //    settle back to the correct state given the remaining data.
+  //    whose batch was consumed by a now-deleted DA batch, settle back to
+  //    the correct state given the remaining data.
   try {
     await recomputeAccount(supabase, accountId);
   } catch (err) {

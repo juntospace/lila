@@ -1,15 +1,20 @@
-// Pure classification, hashing, and FIFO pairing helpers for the BAC rail.
+// Pure classification, hashing, and name-matching helpers for the BAC rail.
 //
 // Kept free of database and I/O so the entire rule-set is testable without
-// fixtures or a Supabase instance. The ingest layer (`./ingest.ts`) is the
-// only thing that turns these decisions into row writes.
+// fixtures or a Supabase instance. The ingest layer (`./ingest.ts`) and
+// recompute layer (`./recompute.ts`) are the only things that turn these
+// decisions into row writes.
+//
+// Pairing math lives in `./batches.ts`; the legacy per-row FIFO matcher
+// (pickFifoMatchPR) was retired in Tier 5 PR 2 alongside the file-clock
+// confirmation rule (Tier 5 PR 3).
 
 import { createHash } from "node:crypto";
 
 import type { BACRow } from "./parser";
 
 // =============================================================
-// Classification — code → kind/state/confirmable_after
+// Classification — code → kind/state
 // =============================================================
 
 export type RowKind = "loan_inflow" | "reversal" | "non_loan" | "unknown";
@@ -24,16 +29,15 @@ export type RowState =
 export interface RowClassification {
   kind: RowKind;
   state: RowState;
-  // ISO timestamp at which a pending PR becomes confirmable if no DVTO has
-  // arrived. Set on PR rows (posted_at + 24h, UTC), null otherwise. Compared
-  // by the ingest layer against the max posted_at observed across all
-  // uploads for this account ("file-clock").
+  // Legacy column carried for compatibility with rows ingested before
+  // Tier 5 PR 3. Populated as posted_at + 24h on PR rows so the DB column
+  // stays consistent across all rows; no code reads the value anymore
+  // (file-clock confirmation was retired).
   confirmableAfter: string | null;
 }
 
-// 24h is the BAC ACH-debit reversal window: a PR credit can be reversed by a
-// DA debit any time within this window. After it lapses (file-clock), the PR
-// is treated as confirmed.
+// Legacy ACH-debit reversal window. Kept only because we still write
+// `confirmable_after = posted_at + 24h` on PR rows for column consistency.
 export const ACH_PENDING_HOURS = 24;
 
 export function classifyBACRow(row: Pick<BACRow, "code" | "postedAt">): RowClassification {
@@ -99,49 +103,6 @@ export function computeFileSha256(bytes: Uint8Array | Buffer): string {
 // FIFO PR ↔ DA pairing
 // =============================================================
 
-export interface PRCandidate {
-  id: string;
-  postedAt: string;
-  rowIndex: number; // tie-breaker for same-day PRs in the same file
-  creditMinor: bigint;
-  description: string;
-}
-
-export interface DAToMatch {
-  amountMinor: bigint;     // = debitMinor on the DA row
-  payerNameRaw: string;    // parsed from "DVTO {code} {NAME}"
-  postedAt: string;        // DA cannot precede the PR it reverses
-}
-
-/**
- * A DA can only reject a PR whose 24h rejection window was still open
- * when the DA arrived — that's the original rule, expressed as
- * `pr.posted_at + 24h > da.posted_at`. In real BAC data, the posting
- * cadence is fuzzy: a rejection (DA) can be posted with a date one day
- * BEFORE the corresponding payment (PR), even though the actual ACH
- * timeline always has PR before DA. This shows up as a DA on Apr 6
- * paired with a PR on Apr 7 in the bank's ledger.
- *
- * To capture both directions while still excluding the Astryht-style
- * mismatch (PR Apr 5 + DA Apr 7, two days apart), the rule becomes:
- * `|pr.posted_at − da.posted_at| <= 1 day`. PR can be the day before,
- * same day, or day after the DA — but no further.
- *
- * Anything outside that window is either already file-clock-confirmed
- * (older PR) or beyond what BAC's posting fuzziness can explain.
- */
-export function isWithinAchRejectionWindow(
-  prPostedAt: string,
-  daPostedAt: string,
-): boolean {
-  if (!prPostedAt || !daPostedAt) return false;
-  const tPr = Date.parse(prPostedAt + "T00:00:00Z");
-  const tDa = Date.parse(daPostedAt + "T00:00:00Z");
-  if (Number.isNaN(tPr) || Number.isNaN(tDa)) return false;
-  const diffDays = (tPr - tDa) / 86_400_000;
-  return diffDays >= -1 && diffDays <= 1;
-}
-
 /**
  * Operator-curated alias map for pairing-by-equivalence.
  *
@@ -151,7 +112,7 @@ export function isWithinAchRejectionWindow(
  *        normalizeName) that operators have manually confirmed represent
  *        the same client.
  *
- * pickFifoMatchPR consults this AFTER the regular prefix `namesMatch`
+ * The batch linker consults this AFTER the regular prefix `namesMatch`
  * fails, so the alias map is purely additive — it cannot block any
  * pairing that the prefix rule would have made on its own.
  */
@@ -164,40 +125,6 @@ export function aliasMatch(
 ): boolean {
   const set = aliases.get(prNormalized);
   return set ? set.has(daNormalized) : false;
-}
-
-// Picks the earliest unmatched PR whose amount + payer name match the DA
-// AND whose 24h rejection window was still open when the DA arrived.
-// First-unmatched-wins by (postedAt asc, rowIndex asc).
-//
-// `aliases` is optional. When supplied, candidates that fail the prefix-
-// based namesMatch are accepted if the operator has previously confirmed
-// the (PR-name, DA-name) pair as the same client. The alias check happens
-// AFTER the prefix check, so behaviour is unchanged when no aliases exist
-// for the account.
-export function pickFifoMatchPR(
-  da: DAToMatch,
-  candidates: PRCandidate[],
-  aliases?: AliasMap,
-): PRCandidate | null {
-  if (!da.payerNameRaw) return null;
-  const targetName = normalizeName(da.payerNameRaw);
-
-  const ordered = [...candidates].sort((a, b) => {
-    if (a.postedAt !== b.postedAt) return a.postedAt < b.postedAt ? -1 : 1;
-    return a.rowIndex - b.rowIndex;
-  });
-
-  for (const pr of ordered) {
-    if (pr.creditMinor !== da.amountMinor) continue;
-    if (!isWithinAchRejectionWindow(pr.postedAt, da.postedAt)) continue;
-    const prName = extractPRPayerName(pr.description);
-    if (!prName) continue;
-    const prNormalized = normalizeName(prName);
-    if (namesMatch(prNormalized, targetName)) return pr;
-    if (aliases && aliasMatch(prNormalized, targetName, aliases)) return pr;
-  }
-  return null;
 }
 
 // "Tef DCD de Jorge Miguel Diaz P" → "Jorge Miguel Diaz P".
@@ -234,24 +161,12 @@ export function namesMatch(a: string, b: string): boolean {
   return longer.startsWith(shorter);
 }
 
-// =============================================================
-// File-clock helpers
-// =============================================================
-
-// posted_at is YYYY-MM-DD; we treat it as UTC midnight. Adding 24h gives the
-// instant at which a PR becomes confirmable if no DA has arrived by then.
+// posted_at is YYYY-MM-DD; treated as UTC midnight. Used to populate the
+// (now-unread) confirmable_after column at ingest time.
 function addHoursToISODate(iso: string, hours: number): string {
   const t = Date.parse(iso + "T00:00:00Z");
   if (Number.isNaN(t)) {
     throw new Error(`addHoursToISODate: invalid ISO date "${iso}"`);
   }
   return new Date(t + hours * 60 * 60 * 1000).toISOString();
-}
-
-// The file-clock cutoff is the latest posted_at observed across all uploads
-// for an account, expressed as a UTC instant. Any pending PR whose
-// confirmable_after <= this cutoff is eligible to flip to confirmed (assuming
-// no DA paired against it).
-export function fileClockCutoff(maxPostedAt: string): string {
-  return new Date(Date.parse(maxPostedAt + "T00:00:00Z")).toISOString();
 }

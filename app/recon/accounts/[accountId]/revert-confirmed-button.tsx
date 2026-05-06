@@ -94,7 +94,7 @@ export function RevertConfirmedButton({
                 Revert to pending
               </h2>
               <p className="mt-1 text-sm text-fg-muted">
-                The PR is currently <code>confirmed</code> (file-clock or
+                The PR is currently <code>confirmed</code> (batch-link or
                 manual). Reverting puts it back to <code>pending</code> so a
                 future DA can still reject it, or so a fresh confirmation
                 decision can be made. The justification below joins the
