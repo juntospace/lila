@@ -161,7 +161,17 @@ export function groupPRBatches(rows: PRRowForBatch[]): PRBatch[] {
  * data the DA type prefix is always 4, but if a non-DA row sneaks
  * through we don't want to fold it in).
  *
- * Returned batches are ordered by `startSequence` ascending.
+ * Sorting note: BAC's DA sequence counter is NOT monotonic across
+ * days — it can reset, wrap, or be scoped to a window. Two days'
+ * worth of data can have lower-numbered sequences on a LATER date
+ * (e.g. Apr 1 has seq 23344 but Apr 7 has seq 9791). Sorting purely
+ * by sequence puts Apr 7 first and breaks the linker's date stop
+ * (the cursor advances through earlier-day PR batches before the
+ * earlier-day DA batches get to walk). We therefore sort rows by
+ * (posted_at ascending, sequence ascending), so DA batches come out
+ * in chronological order with sequence as a within-day tiebreaker.
+ *
+ * Returned batches are ordered by `(posted_at, startSequence)` ascending.
  */
 export function groupDABatches(rows: DARowForBatch[]): DABatch[] {
   const parsedRows: (DARowForBatch & { parsed: DAReferenceParts })[] = [];
@@ -170,7 +180,10 @@ export function groupDABatches(rows: DARowForBatch[]): DABatch[] {
     if (!parsed) continue;
     parsedRows.push({ ...r, parsed });
   }
-  parsedRows.sort((a, b) => a.parsed.sequence - b.parsed.sequence);
+  parsedRows.sort((a, b) => {
+    if (a.posted_at !== b.posted_at) return a.posted_at < b.posted_at ? -1 : 1;
+    return a.parsed.sequence - b.parsed.sequence;
+  });
 
   const batches: DABatch[] = [];
   let current: typeof parsedRows = [];

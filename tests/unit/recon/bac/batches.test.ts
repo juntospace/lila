@@ -196,6 +196,29 @@ describe("groupDABatches", () => {
     expect(batches[0].rows.map((r) => r.id)).toEqual(["d1", "d2"]);
   });
 
+  it("orders cross-day batches chronologically even when later-date sequences are lower", () => {
+    // BAC's DA sequence counter is NOT monotonic across days. Apr 1
+    // has high sequences (23344-23345) while Apr 7 has lower ones
+    // (9791-9792). The earlier-DATE batch must come first, otherwise
+    // the linker walks PR batches in the wrong order and consumes
+    // earlier-day PR batches against later-day DA batches.
+    const rows = [
+      // Apr 7 DA batch — lower sequence
+      da("d_apr7_a", "7409791", 1000n, "ALICE", "2026-04-07"),
+      da("d_apr7_b", "7409792", 2000n, "BOB", "2026-04-07"),
+      // Apr 1 DA batch — higher sequence (despite earlier date)
+      da("d_apr1_a", "7423344", 3000n, "CAROL", "2026-04-01"),
+      da("d_apr1_b", "7423345", 4000n, "DAVE", "2026-04-01"),
+    ];
+    const batches = groupDABatches(rows);
+    expect(batches).toHaveLength(2);
+    // Earlier date first, regardless of sequence magnitude.
+    expect(batches[0].posted_at).toBe("2026-04-01");
+    expect(batches[0].startSequence).toBe(23344);
+    expect(batches[1].posted_at).toBe("2026-04-07");
+    expect(batches[1].startSequence).toBe(9791);
+  });
+
   it("returns empty array for empty input", () => {
     expect(groupDABatches([])).toEqual([]);
   });
@@ -546,6 +569,47 @@ describe("linkAllBatches", () => {
     for (const link of result.links) {
       expect(link.unmatchedDaIds).toEqual([]);
     }
+  });
+
+  it("multi-day data with a later-date DA batch having a LOWER sequence", () => {
+    // Reproduction of the production bug: Apr 1 has DA sequences in the
+    // 23000s (high), Apr 7 has DA sequences starting at 9791 (low). If
+    // we sort DA batches by raw sequence, Apr 7 comes first, walks into
+    // the Apr 1 PR batches, wrongly consumes them, and leaves every
+    // earlier-day DA un-matched. With chronological sort, each DA batch
+    // consumes the PR batches from its own day cleanly.
+    const prRows: PRRowForBatch[] = [
+      // Apr 1 PR batches (lower refs because they were submitted earlier)
+      pr("p_apr1_a", "6227489", 1000n, "ALICE", "2026-04-01"),
+      pr("p_apr1_b", "6227519", 2000n, "BOB", "2026-04-01"),
+      // Apr 7 PR batches (higher refs, later date)
+      pr("p_apr7_a", "6231061", 3000n, "CAROL", "2026-04-07"),
+      pr("p_apr7_b", "6231088", 4000n, "DAVE", "2026-04-07"),
+    ];
+    const daRows: DARowForBatch[] = [
+      // Apr 7 DA batch — sequences 9791-9792 (LOW sequence on a LATE date)
+      da("d_apr7_a", "7409791", 3000n, "CAROL", "2026-04-07"),
+      da("d_apr7_b", "7409792", 4000n, "DAVE", "2026-04-07"),
+      // Apr 1 DA batch — sequences 23344-23345 (HIGH sequence on an EARLY date)
+      da("d_apr1_a", "7423344", 1000n, "ALICE", "2026-04-01"),
+      da("d_apr1_b", "7423345", 2000n, "BOB", "2026-04-01"),
+    ];
+    const result = linkAllBatches(
+      groupPRBatches(prRows),
+      groupDABatches(daRows),
+      opts,
+    );
+    // Both DA batches should pair cleanly against their own day's PR batches.
+    expect(result.links).toHaveLength(2);
+    // First DA batch processed = earliest date = Apr 1 (despite higher seq).
+    expect(result.links[0].prBatchReferences).toEqual(["6227489", "6227519"]);
+    expect(result.links[0].pairings).toHaveLength(2);
+    expect(result.links[0].unmatchedDaIds).toEqual([]);
+    // Second DA batch = Apr 7.
+    expect(result.links[1].prBatchReferences).toEqual(["6231061", "6231088"]);
+    expect(result.links[1].pairings).toHaveLength(2);
+    expect(result.links[1].unmatchedDaIds).toEqual([]);
+    expect(result.unconsumedPRBatchReferences).toEqual([]);
   });
 
   it("the cross-batch case: a DA batch reaches into a PR batch where no DA matched", () => {
