@@ -14,12 +14,7 @@ import {
   normalizeName,
   reasonForDvtoCode,
 } from "@/lib/recon/bac";
-import {
-  formatDate,
-  formatMinorUSD,
-  lastWorkingDays,
-  previousWorkingDay,
-} from "@/lib/recon/format";
+import { formatDate, formatMinorUSD, lastWorkingDays } from "@/lib/recon/format";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 import { BackfillButton } from "./backfill-button";
@@ -86,17 +81,6 @@ function asDir(v: string | undefined): "asc" | "desc" {
 const SUPABASE_PAGE_LIMIT = 1000;
 const SUPABASE_PAGE_SAFETY_CAP = 200_000;
 
-/** Match the batch-link window used by recompute: a PR is eligible to
- *  pair with a DA only if PR.day == DA.day OR PR.day == previousWorkingDay(DA.day). */
-function isInBatchWindow(prDate: string, daDate: string): boolean {
-  if (prDate === daDate) return true;
-  try {
-    if (prDate === previousWorkingDay(daDate)) return true;
-  } catch {
-    // bad ISO → can't be in window
-  }
-  return false;
-}
 
 // Walk a Supabase query in 1000-row pages until we've consumed it.
 // Use this for "give me ALL matching rows" cases (totals, exports) where a
@@ -478,7 +462,7 @@ export default async function AccountDetailPage({
   };
   type ClosestMatch = {
     count: number;
-    closest: { posted_at: string; state: string; in_window: boolean } | null;
+    closest: { posted_at: string; state: string } | null;
     /** UNPAIRED candidates the operator can manually match this DA to. */
     pickable: CandidatePR[];
   };
@@ -521,7 +505,6 @@ export default async function AccountDetailPage({
       }
       const target = normalizeName(payerRaw);
       const daAmount = String(da.debit_minor);
-      const daDate = da.posted_at as string;
       const matches = pool.filter((c) => {
         if (String(c.credit_minor) !== daAmount) return false;
         const prName = extractPRPayerName(c.description as string);
@@ -543,10 +526,6 @@ export default async function AccountDetailPage({
           ? {
               posted_at: first.posted_at as string,
               state: first.state as string,
-              in_window: isInBatchWindow(
-                first.posted_at as string,
-                daDate,
-              ),
             }
           : null,
         pickable,
@@ -1128,23 +1107,15 @@ function KpiCard({
 function ClosestPRCell({
   match,
 }: {
-  match: { count: number; closest: { posted_at: string; state: string; in_window: boolean } | null } | undefined;
+  match: { count: number; closest: { posted_at: string; state: string } | null } | undefined;
 }) {
   if (!match || match.count === 0) {
     return <span className="text-fg-subtle">No matching PR found</span>;
   }
   const c = match.closest!;
   const tone =
-    c.in_window
-      ? c.state === "rejected"
-        ? "text-warning"
-        : "text-info"
-      : "text-fg-subtle";
-  const reason = !c.in_window
-    ? "outside batch window"
-    : c.state === "rejected"
-      ? "already paired"
-      : c.state;
+    c.state === "rejected" ? "text-warning" : "text-info";
+  const reason = c.state === "rejected" ? "already paired" : c.state;
   return (
     <span className={tone}>
       {match.count} PR{match.count === 1 ? "" : "s"} · oldest {formatDate(c.posted_at)} ({reason})

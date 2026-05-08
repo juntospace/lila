@@ -27,35 +27,18 @@ const nameMatcher = (a: string, b: string) =>
   a === b || a.startsWith(b) || b.startsWith(a);
 
 /**
- * BAC PR descriptions in the wild look like
- *   "DEBITO DIRECTO  PAGO LILA            JUAN PEREZ          ..."
- * and the operator/parser pulls the payer-name section. For tests we
- * use a deterministic prefix the fixture controls.
+ * Tests use a deterministic prefix the fixture controls so we don't
+ * couple the test data to the production parser regex.
  */
 const extractPRPayer = (description: string) => {
   const m = description.match(/^PAYER:\s*(.+?)\s*$/);
   return m ? m[1] : null;
 };
 
-/**
- * Test working-day arithmetic that handles the dates we use in fixtures.
- * Matches lib/recon/format.ts#previousWorkingDay's contract.
- */
-const previousWorkingDay = (iso: string): string => {
-  const t = Date.parse(iso + "T00:00:00Z");
-  if (Number.isNaN(t)) throw new Error(`bad iso ${iso}`);
-  const cursor = new Date(t);
-  do {
-    cursor.setUTCDate(cursor.getUTCDate() - 1);
-  } while (cursor.getUTCDay() === 0 || cursor.getUTCDay() === 6);
-  return cursor.toISOString().slice(0, 10);
-};
-
 const opts: LinkOptions = {
   nameMatcher,
   normalize,
   extractPRPayer,
-  previousWorkingDay,
 };
 
 function pr(
@@ -145,17 +128,16 @@ describe("groupPRBatches", () => {
 describe("groupDABatches", () => {
   it("opens a new batch on a sequence gap", () => {
     const rows = [
-      da("d1", "7423344", 1000n, "X", "2026-04-07"),
-      da("d2", "7423345", 2000n, "Y", "2026-04-07"),
-      da("d3", "7423346", 3000n, "Z", "2026-04-07"),
+      da("d1", "7423344", 1000n, "X"),
+      da("d2", "7423345", 2000n, "Y"),
+      da("d3", "7423346", 3000n, "Z"),
       // gap → new batch
-      da("d4", "7423350", 4000n, "A", "2026-04-07"),
-      da("d5", "7423351", 5000n, "B", "2026-04-07"),
+      da("d4", "7423350", 4000n, "A"),
+      da("d5", "7423351", 5000n, "B"),
     ];
     const batches = groupDABatches(rows);
     expect(batches).toHaveLength(2);
     expect(batches[0].id).toBe("4-23344-23346");
-    expect(batches[0].rows.map((r) => r.id)).toEqual(["d1", "d2", "d3"]);
     expect(batches[1].id).toBe("4-23350-23351");
   });
 
@@ -220,164 +202,234 @@ describe("groupDABatches", () => {
 });
 
 // =============================================================
-// tryLinkDABatch
+// tryLinkDABatch (reference-ordered, no date filter)
 // =============================================================
 
 describe("tryLinkDABatch", () => {
-  it("confirms un-paired PRs inside a consumed PR batch", () => {
-    // PR batch 6227489 has ALICE + BOB + EVE; the DA batch only has
-    // ALICE and BOB. EVE is in the same Referencia, so once that PR
-    // batch is consumed she's confirmed (nobody returned her DA).
+  it("consumes PR batches in reference order until DAs are paired", () => {
+    // PR batch 1 (ref 6227489) has ALICE+BOB; PR batch 2 (6227519) has CAROL.
+    // The DA batch needs ALICE/BOB/CAROL → consumes both PR batches.
     const prRows: PRRowForBatch[] = [
-      pr("pA", "6227489", 10000n, "ALICE", "2026-04-06"),
-      pr("pB", "6227489", 5000n, "BOB", "2026-04-06"),
-      pr("pE", "6227489", 4000n, "EVE", "2026-04-06"),
-      pr("pC", "6227519", 7000n, "CAROL", "2026-04-06"),
+      pr("pA", "6227489", 10000n, "ALICE"),
+      pr("pB", "6227489", 5000n, "BOB"),
+      pr("pC", "6227519", 7000n, "CAROL"),
     ];
     const daRows: DARowForBatch[] = [
-      da("d1", "149423344", 10000n, "ALICE", "2026-04-07"),
-      da("d2", "158423345", 5000n, "BOB", "2026-04-07"),
-      da("d3", "7423346", 7000n, "CAROL", "2026-04-07"),
-    ];
-    const prBatches = groupPRBatches(prRows);
-    const daBatches = groupDABatches(daRows);
-    expect(daBatches).toHaveLength(1);
-
-    const link = tryLinkDABatch(daBatches[0], prBatches, opts);
-    expect(link).not.toBeNull();
-    expect(link!.prBatchReferences).toEqual(["6227489", "6227519"]);
-    expect(link!.pairings).toHaveLength(3);
-    expect(link!.confirmedPrIds).toEqual(["pE"]);
-  });
-
-  it("stops growing the PR group as soon as every DA is paired", () => {
-    // Algorithm contract: PR batches beyond what's needed are NOT
-    // dragged into the link. They remain available for later DA batches
-    // (or stay pending if no later DA arrives).
-    const prRows: PRRowForBatch[] = [
-      pr("pA", "6227489", 10000n, "ALICE", "2026-04-06"),
-      pr("pB", "6227489", 5000n, "BOB", "2026-04-06"),
-      pr("pC", "6227519", 7000n, "CAROL", "2026-04-06"),
-      pr("pD", "6227522", 12000n, "DAVE", "2026-04-06"),
-    ];
-    const daRows: DARowForBatch[] = [
-      da("d1", "149423344", 10000n, "ALICE", "2026-04-07"),
-      da("d2", "158423345", 5000n, "BOB", "2026-04-07"),
-      da("d3", "7423346", 7000n, "CAROL", "2026-04-07"),
+      da("d1", "7423344", 10000n, "ALICE"),
+      da("d2", "7423345", 5000n, "BOB"),
+      da("d3", "7423346", 7000n, "CAROL"),
     ];
     const link = tryLinkDABatch(
       groupDABatches(daRows)[0],
       groupPRBatches(prRows),
       opts,
     );
-    expect(link).not.toBeNull();
-    expect(link!.prBatchReferences).toEqual(["6227489", "6227519"]);
-    expect(link!.confirmedPrIds).toEqual([]);
+    expect(link.prBatchReferences).toEqual(["6227489", "6227519"]);
+    expect(link.pairings).toHaveLength(3);
+    expect(link.confirmedPrIds).toEqual([]);
+    expect(link.unmatchedDaIds).toEqual([]);
   });
 
-  it("respects the same-day window (PR.day == DA.day)", () => {
-    const prRows = [pr("p1", "6227489", 1000n, "ALICE", "2026-04-07")];
+  it("confirms un-paired PRs in every consumed PR batch", () => {
+    // PR batch 1 has ALICE+BOB+EVE (3 PRs); DA batch only matches ALICE+BOB.
+    // EVE didn't pair → confirmed.
+    const prRows: PRRowForBatch[] = [
+      pr("pA", "6227489", 10000n, "ALICE"),
+      pr("pB", "6227489", 5000n, "BOB"),
+      pr("pE", "6227489", 4000n, "EVE"),
+    ];
+    const daRows: DARowForBatch[] = [
+      da("d1", "7423344", 10000n, "ALICE"),
+      da("d2", "7423345", 5000n, "BOB"),
+    ];
+    const link = tryLinkDABatch(
+      groupDABatches(daRows)[0],
+      groupPRBatches(prRows),
+      opts,
+    );
+    expect(link.prBatchReferences).toEqual(["6227489"]);
+    expect(link.pairings).toHaveLength(2);
+    expect(link.confirmedPrIds).toEqual(["pE"]);
+    expect(link.unmatchedDaIds).toEqual([]);
+  });
+
+  it("confirms un-paired PRs across multiple consumed PR batches", () => {
+    // PR batch 1 has ALICE+EVE; matches ALICE only. EVE confirmed.
+    // PR batch 2 has BOB+FRANK; matches BOB only. FRANK confirmed.
+    // PR batch 3 has CAROL; matches CAROL — DA batch done.
+    const prRows: PRRowForBatch[] = [
+      pr("pA", "6227489", 10000n, "ALICE"),
+      pr("pE", "6227489", 4000n, "EVE"),
+      pr("pB", "6227519", 5000n, "BOB"),
+      pr("pF", "6227519", 9000n, "FRANK"),
+      pr("pC", "6227522", 7000n, "CAROL"),
+    ];
+    const daRows: DARowForBatch[] = [
+      da("d1", "7423344", 10000n, "ALICE"),
+      da("d2", "7423345", 5000n, "BOB"),
+      da("d3", "7423346", 7000n, "CAROL"),
+    ];
+    const link = tryLinkDABatch(
+      groupDABatches(daRows)[0],
+      groupPRBatches(prRows),
+      opts,
+    );
+    expect(link.prBatchReferences).toEqual(["6227489", "6227519", "6227522"]);
+    expect(link.pairings).toHaveLength(3);
+    expect(link.confirmedPrIds.sort()).toEqual(["pE", "pF"]);
+    expect(link.unmatchedDaIds).toEqual([]);
+  });
+
+  it("does not consume PR batches beyond the last needed one", () => {
+    // PR batches 1+2 are enough; PR batch 3 stays unconsumed for a
+    // future DA batch.
+    const prRows: PRRowForBatch[] = [
+      pr("pA", "6227489", 10000n, "ALICE"),
+      pr("pB", "6227489", 5000n, "BOB"),
+      pr("pC", "6227519", 7000n, "CAROL"),
+      pr("pD", "6227522", 12000n, "DAVE"),
+    ];
+    const daRows: DARowForBatch[] = [
+      da("d1", "7423344", 10000n, "ALICE"),
+      da("d2", "7423345", 5000n, "BOB"),
+      da("d3", "7423346", 7000n, "CAROL"),
+    ];
+    const link = tryLinkDABatch(
+      groupDABatches(daRows)[0],
+      groupPRBatches(prRows),
+      opts,
+    );
+    expect(link.prBatchReferences).toEqual(["6227489", "6227519"]);
+    expect(link.confirmedPrIds).toEqual([]);
+  });
+
+  it("admits any PR batch whose date is on or before the DA batch's date", () => {
+    // PR Apr 1, DA Apr 7 — older window rules would have excluded it.
+    // Under the reference-ordered rule with date sanity check, PR.day
+    // <= DA.day is fine, so the PR batch is consumed.
+    const prRows = [pr("p1", "6227489", 1000n, "ALICE", "2026-04-01")];
     const daRows = [da("d1", "7423344", 1000n, "ALICE", "2026-04-07")];
     const link = tryLinkDABatch(
       groupDABatches(daRows)[0],
       groupPRBatches(prRows),
       opts,
     );
-    expect(link).not.toBeNull();
-    expect(link!.pairings[0]).toEqual({ daId: "d1", prId: "p1" });
+    expect(link.pairings).toEqual([{ daId: "d1", prId: "p1" }]);
   });
 
-  it("respects the previous-working-day window (PR.day = previousWorkingDay(DA.day))", () => {
-    // DA on Mon → PR on previous Fri must still link.
-    const prRows = [pr("p1", "6227489", 1000n, "ALICE", "2026-04-03")]; // Fri
-    const daRows = [da("d1", "7423344", 1000n, "ALICE", "2026-04-06")]; // Mon
+  it("stops at the first PR batch posted AFTER the DA batch (date sanity)", () => {
+    // PR batch 1 (Apr 1) is consumable; PR batch 2 (Apr 5) is NOT — it's
+    // for a future DA batch. The DA batch has 2 unmatched DAs after
+    // batch 1 is exhausted; those become unmatchedDaIds (data error).
+    const prRows: PRRowForBatch[] = [
+      pr("pA", "6227489", 1000n, "ALICE", "2026-04-01"),
+      pr("pB", "6227519", 2000n, "BOB", "2026-04-05"),
+    ];
+    const daRows: DARowForBatch[] = [
+      da("d1", "7423344", 1000n, "ALICE", "2026-04-01"),
+      da("d2", "7423345", 2000n, "BOB", "2026-04-01"),
+    ];
     const link = tryLinkDABatch(
       groupDABatches(daRows)[0],
       groupPRBatches(prRows),
       opts,
     );
-    expect(link).not.toBeNull();
+    expect(link.prBatchReferences).toEqual(["6227489"]);
+    expect(link.pairings).toEqual([{ daId: "d1", prId: "pA" }]);
+    expect(link.unmatchedDaIds).toEqual(["d2"]);
   });
 
-  it("excludes PR batches outside the window even if amount/name would match", () => {
-    // PR two working days before DA → ineligible.
-    const prRows = [pr("p1", "6227489", 1000n, "ALICE", "2026-04-02")];
-    const daRows = [da("d1", "7423344", 1000n, "ALICE", "2026-04-06")];
+  it("the date stop releases the un-consumed PR batch back to the next DA batch", () => {
+    // Apr 1 DA batch can only consume Apr 1 PR batch. Apr 5 DA batch
+    // then picks up the Apr 5 PR batch cleanly.
+    const prRows: PRRowForBatch[] = [
+      pr("pA", "6227489", 1000n, "ALICE", "2026-04-01"),
+      pr("pB", "6227519", 2000n, "BOB", "2026-04-05"),
+    ];
+    const daRows: DARowForBatch[] = [
+      // DA batch 1 (Apr 1) — seq 23344
+      da("d1", "7423344", 1000n, "ALICE", "2026-04-01"),
+      // gap → DA batch 2 (Apr 5) — seq 28982
+      da("d2", "7428982", 2000n, "BOB", "2026-04-05"),
+    ];
+    const result = linkAllBatches(
+      groupPRBatches(prRows),
+      groupDABatches(daRows),
+      opts,
+    );
+    expect(result.links).toHaveLength(2);
+    expect(result.links[0].prBatchReferences).toEqual(["6227489"]);
+    expect(result.links[0].unmatchedDaIds).toEqual([]);
+    expect(result.links[1].prBatchReferences).toEqual(["6227519"]);
+    expect(result.links[1].unmatchedDaIds).toEqual([]);
+    expect(result.unconsumedPRBatchReferences).toEqual([]);
+  });
+
+  it("requires exact amount match (different amount → no pair)", () => {
+    const prRows = [pr("p1", "6227489", 1000n, "ALICE")];
+    const daRows = [da("d1", "7423344", 9999n, "ALICE")];
     const link = tryLinkDABatch(
       groupDABatches(daRows)[0],
       groupPRBatches(prRows),
       opts,
     );
-    expect(link).toBeNull();
+    // PR batch was consumed (we tried). DA stays un-matched.
+    expect(link.prBatchReferences).toEqual(["6227489"]);
+    expect(link.pairings).toEqual([]);
+    expect(link.confirmedPrIds).toEqual(["p1"]);
+    expect(link.unmatchedDaIds).toEqual(["d1"]);
   });
 
-  it("returns null when no PR group can satisfy every DA in the batch", () => {
+  it("reports unmatched DAs when PR batches are exhausted", () => {
+    const prRows = [pr("p1", "6227489", 1000n, "ALICE")];
+    const daRows = [
+      da("d1", "7423344", 1000n, "ALICE"),
+      da("d2", "7423345", 2000n, "BOB"), // no PR in any batch
+    ];
+    const link = tryLinkDABatch(
+      groupDABatches(daRows)[0],
+      groupPRBatches(prRows),
+      opts,
+    );
+    expect(link.pairings).toHaveLength(1);
+    expect(link.unmatchedDaIds).toEqual(["d2"]);
+  });
+
+  it("DAs without payer name fall through to unmatchedDaIds", () => {
     const prRows = [
-      pr("p1", "6227489", 1000n, "ALICE", "2026-04-06"),
-      // No PR for BOB.
+      pr("pA", "6227489", 10000n, "ALICE"),
+      pr("pB", "6227489", 2000n, "BOB"),
     ];
     const daRows = [
-      da("d1", "7423344", 1000n, "ALICE", "2026-04-07"),
-      da("d2", "7423345", 2000n, "BOB", "2026-04-07"),
+      da("d1", "7423344", 10000n, "ALICE"),
+      da("d2", "7423345", 2000n, null), // no payer name
     ];
     const link = tryLinkDABatch(
       groupDABatches(daRows)[0],
       groupPRBatches(prRows),
       opts,
     );
-    expect(link).toBeNull();
+    expect(link.pairings.map((p) => p.daId)).toEqual(["d1"]);
+    expect(link.unmatchedDaIds).toEqual(["d2"]);
+    // pB is in a consumed batch and didn't pair → confirmed.
+    expect(link.confirmedPrIds).toEqual(["pB"]);
   });
 
-  it("requires exact amount match, not just name match", () => {
-    const prRows = [pr("p1", "6227489", 1000n, "ALICE", "2026-04-06")];
-    const daRows = [da("d1", "7423344", 9999n, "ALICE", "2026-04-07")];
+  it("greedy first-fit prefers earlier PRs in the batch when names tie", () => {
+    // Two PRs in the same batch with the same amount + same name; first
+    // declared wins.
+    const prRows: PRRowForBatch[] = [
+      pr("pFirst", "6227489", 5000n, "ALICE"),
+      pr("pSecond", "6227489", 5000n, "ALICE"),
+    ];
+    const daRows: DARowForBatch[] = [da("d1", "7423344", 5000n, "ALICE")];
     const link = tryLinkDABatch(
       groupDABatches(daRows)[0],
       groupPRBatches(prRows),
       opts,
     );
-    expect(link).toBeNull();
-  });
-
-  it("returns null if any DA in the batch lacks a payer name", () => {
-    const prRows = [
-      pr("p1", "6227489", 1000n, "ALICE", "2026-04-06"),
-      pr("p2", "6227489", 2000n, "BOB", "2026-04-06"),
-    ];
-    const daRows = [
-      da("d1", "7423344", 1000n, "ALICE", "2026-04-07"),
-      da("d2", "7423345", 2000n, null, "2026-04-07"),
-    ];
-    const link = tryLinkDABatch(
-      groupDABatches(daRows)[0],
-      groupPRBatches(prRows),
-      opts,
-    );
-    expect(link).toBeNull();
-  });
-
-  it("grows the PR group in sequence order until DA batch is satisfied", () => {
-    // First PR batch alone is missing CAROL — algorithm must grab the
-    // next PR batch to find her, leaving DAVE un-paired in batch 2.
-    const prRows = [
-      pr("pA", "6227489", 10000n, "ALICE", "2026-04-06"),
-      pr("pB", "6227489", 5000n, "BOB", "2026-04-06"),
-      pr("pC", "6227519", 7000n, "CAROL", "2026-04-06"),
-      pr("pD", "6227519", 9999n, "DAVE", "2026-04-06"),
-    ];
-    const daRows = [
-      da("d1", "7423344", 10000n, "ALICE", "2026-04-07"),
-      da("d2", "7423345", 5000n, "BOB", "2026-04-07"),
-      da("d3", "7423346", 7000n, "CAROL", "2026-04-07"),
-    ];
-    const link = tryLinkDABatch(
-      groupDABatches(daRows)[0],
-      groupPRBatches(prRows),
-      opts,
-    );
-    expect(link).not.toBeNull();
-    expect(link!.prBatchReferences).toEqual(["6227489", "6227519"]);
-    expect(link!.confirmedPrIds).toEqual(["pD"]);
+    expect(link.pairings[0].prId).toBe("pFirst");
+    expect(link.confirmedPrIds).toEqual(["pSecond"]);
   });
 });
 
@@ -386,17 +438,22 @@ describe("tryLinkDABatch", () => {
 // =============================================================
 
 describe("linkAllBatches", () => {
-  it("walks DA batches in order and consumes PR batches once", () => {
-    // Two independent DA batches matching two distinct PR batches.
-    const prRows = [
-      pr("pA", "6227489", 10000n, "ALICE", "2026-04-06"),
-      pr("pB", "6227519", 5000n, "BOB", "2026-04-06"),
+  it("threads the PR cursor across DA batches in reference order", () => {
+    // DA batch 1 consumes PR batches 6227489+6227519.
+    // DA batch 2 consumes PR batches 6227522+6227878.
+    const prRows: PRRowForBatch[] = [
+      pr("pA", "6227489", 1000n, "ALICE"),
+      pr("pB", "6227519", 2000n, "BOB"),
+      pr("pC", "6227522", 3000n, "CAROL"),
+      pr("pD", "6227878", 4000n, "DAVE"),
     ];
-    const daRows = [
-      // DA batch 1
-      da("d1", "7423344", 10000n, "ALICE", "2026-04-07"),
-      // gap
-      da("d2", "7423350", 5000n, "BOB", "2026-04-07"),
+    const daRows: DARowForBatch[] = [
+      // DA batch 1 — seqs 23344, 23345
+      da("d1", "7423344", 1000n, "ALICE"),
+      da("d2", "7423345", 2000n, "BOB"),
+      // gap → DA batch 2 — seqs 28982, 28983
+      da("d3", "7428982", 3000n, "CAROL"),
+      da("d4", "7428983", 4000n, "DAVE"),
     ];
     const result = linkAllBatches(
       groupPRBatches(prRows),
@@ -404,73 +461,70 @@ describe("linkAllBatches", () => {
       opts,
     );
     expect(result.links).toHaveLength(2);
-    expect(result.unlinkedDABatches).toEqual([]);
+    expect(result.links[0].prBatchReferences).toEqual(["6227489", "6227519"]);
+    expect(result.links[1].prBatchReferences).toEqual(["6227522", "6227878"]);
     expect(result.unconsumedPRBatchReferences).toEqual([]);
+    for (const link of result.links) {
+      expect(link.unmatchedDaIds).toEqual([]);
+    }
   });
 
-  it("reports DA batches that cannot link and PR batches that go unconsumed", () => {
-    const prRows = [
-      pr("pA", "6227489", 10000n, "ALICE", "2026-04-06"),
-      // EVE has no DA at all → unconsumed.
-      pr("pE", "6227519", 4000n, "EVE", "2026-04-06"),
-    ];
+  it("does not reuse PR batches across DA batches", () => {
+    // First DA batch consumes the only PR batch. Second DA batch has
+    // no PR batches available; its DAs are reported as unmatched.
+    const prRows = [pr("pA", "6227489", 1000n, "ALICE")];
     const daRows = [
-      // DA batch 1: matches ALICE in pA, plus a missing BOB → cannot link.
-      da("d1", "7423344", 10000n, "ALICE", "2026-04-07"),
-      da("d2", "7423345", 9999n, "BOB", "2026-04-07"),
+      da("d1", "7423344", 1000n, "ALICE"),
+      // gap → second batch
+      da("d2", "7428982", 1000n, "ALICE"),
     ];
     const result = linkAllBatches(
       groupPRBatches(prRows),
       groupDABatches(daRows),
       opts,
     );
-    expect(result.links).toEqual([]);
-    expect(result.unlinkedDABatches).toHaveLength(1);
-    expect(result.unconsumedPRBatchReferences.sort()).toEqual([
-      "6227489",
-      "6227519",
-    ]);
+    expect(result.links).toHaveLength(2);
+    expect(result.links[0].pairings).toHaveLength(1);
+    expect(result.links[1].pairings).toEqual([]);
+    expect(result.links[1].unmatchedDaIds).toEqual(["d2"]);
   });
 
-  it("does not reuse a PR batch across multiple DA-batch links", () => {
-    // Both DA batches happen to need the same single PR (impossible in
-    // reality, but the contract is that consumption is exclusive).
-    const prRows = [pr("pA", "6227489", 10000n, "ALICE", "2026-04-06")];
-    const daRows = [
-      da("d1", "7423344", 10000n, "ALICE", "2026-04-07"),
-      // gap → second batch
-      da("d2", "7423350", 10000n, "ALICE", "2026-04-07"),
+  it("leaves PR batches unconsumed if no DA batch needs them", () => {
+    const prRows = [
+      pr("pA", "6227489", 1000n, "ALICE"),
+      pr("pB", "6227519", 2000n, "BOB"),
+      pr("pC", "6227522", 3000n, "CAROL"),
     ];
+    const daRows = [da("d1", "7423344", 1000n, "ALICE")];
     const result = linkAllBatches(
       groupPRBatches(prRows),
       groupDABatches(daRows),
       opts,
     );
     expect(result.links).toHaveLength(1);
-    expect(result.unlinkedDABatches).toHaveLength(1);
+    expect(result.unconsumedPRBatchReferences).toEqual(["6227519", "6227522"]);
   });
 
-  it("works on the structure of the user's two real example links", () => {
-    // Mirrors the shape (not the exact data) the user described:
-    //   Link 1: PR refs 6227489/6227519/6227522 ↔ DA batch ending 7423401
-    //   Link 2: PR refs 6227878/6227916/6227915 ↔ DA batch starting 7428982
+  it("reproduces the user's two real example links", () => {
+    // Mirrors the shape of the real account: two DA batches, each consuming
+    // three PR batches in reference order.
     const prRows: PRRowForBatch[] = [
-      pr("p1", "6227489", 1000n, "ALICE", "2026-04-06"),
-      pr("p2", "6227519", 2000n, "BOB", "2026-04-06"),
-      pr("p3", "6227522", 3000n, "CAROL", "2026-04-06"),
-      pr("p4", "6227878", 4000n, "DAVE", "2026-04-07"),
-      pr("p5", "6227915", 5000n, "EVE", "2026-04-07"),
-      pr("p6", "6227916", 6000n, "FRANK", "2026-04-07"),
+      pr("p1", "6227489", 1000n, "ALICE"),
+      pr("p2", "6227519", 2000n, "BOB"),
+      pr("p3", "6227522", 3000n, "CAROL"),
+      pr("p4", "6227878", 4000n, "DAVE"),
+      pr("p5", "6227915", 5000n, "EVE"),
+      pr("p6", "6227916", 6000n, "FRANK"),
     ];
     const daRows: DARowForBatch[] = [
-      // DA batch 1 — sequences 23344..23346, posted Apr 7
-      da("d1", "149423344", 1000n, "ALICE", "2026-04-07"),
-      da("d2", "158423345", 2000n, "BOB", "2026-04-07"),
-      da("d3", "7423346", 3000n, "CAROL", "2026-04-07"),
-      // DA batch 2 — gap, sequences 28982..28984, posted Apr 8
-      da("d4", "7428982", 4000n, "DAVE", "2026-04-08"),
-      da("d5", "158428983", 5000n, "EVE", "2026-04-08"),
-      da("d6", "7428984", 6000n, "FRANK", "2026-04-08"),
+      // DA batch 1 — seqs 23344..23346
+      da("d1", "149423344", 1000n, "ALICE"),
+      da("d2", "158423345", 2000n, "BOB"),
+      da("d3", "7423346", 3000n, "CAROL"),
+      // DA batch 2 — seqs 28982..28984
+      da("d4", "7428982", 4000n, "DAVE"),
+      da("d5", "158428983", 5000n, "EVE"),
+      da("d6", "7428984", 6000n, "FRANK"),
     ];
     const result = linkAllBatches(
       groupPRBatches(prRows),
@@ -478,17 +532,40 @@ describe("linkAllBatches", () => {
       opts,
     );
     expect(result.links).toHaveLength(2);
-    expect(result.unlinkedDABatches).toEqual([]);
-    expect(result.unconsumedPRBatchReferences).toEqual([]);
-    expect(result.links[0].prBatchReferences.sort()).toEqual([
+    expect(result.links[0].prBatchReferences).toEqual([
       "6227489",
       "6227519",
       "6227522",
     ]);
-    expect(result.links[1].prBatchReferences.sort()).toEqual([
+    expect(result.links[1].prBatchReferences).toEqual([
       "6227878",
       "6227915",
       "6227916",
     ]);
+    expect(result.unconsumedPRBatchReferences).toEqual([]);
+    for (const link of result.links) {
+      expect(link.unmatchedDaIds).toEqual([]);
+    }
+  });
+
+  it("the cross-batch case: a DA batch reaches into a PR batch where no DA matched", () => {
+    // PR batch 6227489 has nobody whose name appears in DA batch 1.
+    // Under the reference-ordered rule, the linker still consumes
+    // 6227489 (advancing the cursor) and confirms its un-paired PRs.
+    const prRows: PRRowForBatch[] = [
+      pr("pX", "6227489", 999n, "XAVIER"),
+      pr("pY", "6227519", 1000n, "ALICE"),
+    ];
+    const daRows = [da("d1", "7423344", 1000n, "ALICE")];
+    const result = linkAllBatches(
+      groupPRBatches(prRows),
+      groupDABatches(daRows),
+      opts,
+    );
+    expect(result.links).toHaveLength(1);
+    expect(result.links[0].prBatchReferences).toEqual(["6227489", "6227519"]);
+    expect(result.links[0].pairings).toEqual([{ daId: "d1", prId: "pY" }]);
+    // pX in 6227489 didn't pair, but its batch was consumed → confirmed.
+    expect(result.links[0].confirmedPrIds).toEqual(["pX"]);
   });
 });

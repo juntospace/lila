@@ -1,10 +1,18 @@
-// Account-wide recompute: batch-aware pairing for every unpaired DA in
-// the account, then reconcile each PR/DA's state against link presence,
+// Account-wide recompute: batch-aware pairing for every DA in the
+// account, then reconcile each PR/DA's state against link presence,
 // auto-confirmations from consumed PR batches, and manual operator
 // overrides. (File-clock confirmation was retired in Tier 5 PR 3.)
 //
 // Used by the ingest pipeline at the end of every upload, by the standalone
 // "Recompute" admin action, and by deleteUpload after wiping a file.
+//
+// Recompute is idempotent: every run wipes the account's existing AUTO
+// links and re-runs the linker over all PRs and DAs. Manual operator
+// pairings (match_strategy='manual') are NEVER touched. This guarantees
+// that the linker always sees the full set of un-paired PRs/DAs and
+// produces the same output regardless of what's currently in the DB —
+// at the cost of O(N) link rewrites per recompute, which the operator
+// invokes infrequently.
 //
 // Implementation note — why we DON'T rely on PostgREST embedded relations:
 //
@@ -30,14 +38,15 @@
 // Sets so subsequent iterations see the new link immediately, with no
 // dependency on embed shape or read-after-write timing.
 //
-// Pairing model (Tier 5):
+// Pairing model:
 //
-//   The legacy per-row FIFO+name+amount+window matcher is gone. Real BAC
-//   behaviour is batch-driven — PRs go out in batches sharing a `Referencia`,
-//   DAs come back in batches of consecutive sequences, and a DA batch is
-//   the bank's response to one or more linked PR batches as a group. We
-//   call linkAllBatches() to compute the pairings + auto-confirmations and
-//   then persist them.
+//   Reference-ordered batch linking. PR batches (rows sharing a
+//   `Referencia`) are sorted by reference ascending; DA batches (runs
+//   of consecutive sequence numbers) by start sequence ascending. Each
+//   DA batch consumes a contiguous prefix of remaining PR batches
+//   until its DAs are paired. PRs in any consumed PR batch that didn't
+//   pair are auto-confirmed (the bank kept the funds). No date filter
+//   is applied — the linker trusts reference order alone.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -57,7 +66,6 @@ import {
   type AliasMap,
 } from "./classify";
 import { parseDvtoDescription } from "./parser";
-import { previousWorkingDay } from "../format";
 
 const SUPABASE_PAGE_LIMIT = 1000;
 const SUPABASE_PAGE_SAFETY_CAP = 200_000;
@@ -82,28 +90,26 @@ export interface RecomputeStats {
   txnCount: number;
   /** Diagnostic — links found in DB at the start of the recompute (PR side). */
   preexistingLinks: number;
-  /** Diagnostic — DAs that started without a link (input to the pairing pass). */
+  /** Diagnostic — DAs in the account at the start of the linker pass. */
   unpairedDaInput: number;
   /** Diagnostic — DA batches the linker produced. */
   daBatchesFound: number;
   /** Diagnostic — DA batches that linked to one or more PR batches. */
   daBatchesLinked: number;
-  /** Diagnostic — DA batches with no eligible PR group (stay pending). */
-  daBatchesUnlinked: number;
   /** Diagnostic — PR batches the linker produced. */
   prBatchesFound: number;
   /** Diagnostic — PR batches consumed by a link (rejected + auto-confirmed). */
   prBatchesConsumed: number;
   /** Diagnostic — PRs auto-confirmed because their batch was consumed but they weren't paired. */
   prsAutoConfirmedByBatch: number;
+  /** Diagnostic — DAs that the linker could not pair against any PR. In
+   *  well-behaved data this is 0; non-zero signals a data error (missing
+   *  PR rows, alias gap, name corruption, or genuinely-stranded DA). */
+  unmatchedDaCount: number;
   /** Diagnostic — link inserts that hit a unique violation (race / stale Set). */
   unpairedLinkConflict: number;
-  /** Existing auto links deleted because their PR/DA dates fell outside the batch window. */
-  linksRevalidated: number;
-  /** Diagnostic — auto links where PR.posted_at != DA.posted_at (regardless of validity). */
-  crossDayLinks: number;
-  /** Diagnostic — links the heal pass skipped because dates lookup was incomplete. */
-  linksDateMissing: number;
+  /** Auto links deleted at the start of the recompute (always wiped + redone). */
+  autoLinksWiped: number;
   /** Diagnostic — operator-curated name aliases loaded for this account. */
   aliasesLoaded: number;
 }
@@ -119,43 +125,35 @@ export async function recomputeAccount(
   //    descriptions might extract cleanly now.
   const dasReparsed = await reparseUnparsedDAs(supabase, accountId);
 
-  // 1. Pre-fetch every existing recon_links row for this account into
-  //    in-memory Sets. These are mutated as we insert more links and used
-  //    by the candidates filter, the unpaired-DA discovery, and the final
-  //    state recompute — single source of truth.
+  // 1. Pre-fetch every existing recon_links row for this account.
+  //    Used for: (a) the diagnostic "preexistingLinks" count, (b) input
+  //    to wipeAutoLinks below, (c) the post-wipe survivors which are the
+  //    Sets fed into the state recompute.
   const { linkedPrIds, linkedDaIds, links } = await fetchLinkedTxnIds(
     supabase,
     accountId,
   );
   const preexistingLinks = linkedPrIds.size;
 
-  // 1.5. Load operator-curated aliases for this account. The batch-link
-  //      name matcher consults these AFTER the regular prefix match
-  //      fails, so this load is a no-op when no aliases exist.
-  const aliases = await fetchAliasMap(supabase, accountId);
-  const aliasesLoaded = aliases.size;
-
-  // 1a. Heal: any existing AUTO link that violates the batch-window rule
-  //     ("PR.day == DA.day OR PR.day == previousWorkingDay(DA.day)") is
-  //     invalid. Delete those links and remove their ids from the Sets so
-  //     the batch pass below can re-pair them under the new model.
-  //
-  //     We only touch auto pairings (auto_fifo_name_amount + auto_batch_link);
-  //     manual pairings reflect explicit operator intent and stay put.
-  const healOutcome = await revalidateLinks(
+  // 1a. Wipe ALL auto links (auto_batch_link + legacy auto_fifo_name_amount)
+  //     and remove their ids from the Sets so the linker re-creates them
+  //     from scratch under the current algorithm. Manual operator pairings
+  //     are preserved.
+  const autoLinksWiped = await wipeAutoLinks(
     supabase,
-    accountId,
     links,
     linkedPrIds,
     linkedDaIds,
   );
-  const linksRevalidated = healOutcome.deleted;
-  const crossDayLinks = healOutcome.crossDay;
-  const linksDateMissing = healOutcome.dateMissing;
 
-  // 2. Batch-aware pairing. Load every unpaired PR + DA in the account,
-  //    run the pure linker, persist the resulting links, and remember
-  //    which PRs were auto-confirmed by being inside a consumed PR batch.
+  // 2. Load operator-curated aliases. The linker consults these AFTER the
+  //    prefix match fails, so this is a no-op when no aliases exist.
+  const aliases = await fetchAliasMap(supabase, accountId);
+  const aliasesLoaded = aliases.size;
+
+  // 3. Batch-aware pairing. Load every unpaired PR + DA in the account
+  //    (after the wipe, only manually-paired rows are linked), run the
+  //    pure linker, persist the resulting auto_batch_link rows.
   const unpairedPRs = await fetchUnpairedPRs(supabase, accountId, linkedPrIds);
   const unpairedDAs = await fetchUnpairedDAs(supabase, accountId, linkedDaIds);
   const unpairedDaInput = unpairedDAs.length;
@@ -168,11 +166,18 @@ export async function recomputeAccount(
       namesMatch(prName, daName) || aliasMatch(prName, daName, aliases),
     normalize: normalizeName,
     extractPRPayer: extractPRPayerName,
-    previousWorkingDay,
   });
 
   let reversalsPaired = 0;
   let unpairedLinkConflict = 0;
+  let unmatchedDaCount = 0;
+  // The linker's confirmedPrIds is the source of truth for auto-confirm:
+  // it lists every PR in a consumed PR batch that didn't pair (whether
+  // the batch had any pairings or none). We use this directly — no
+  // post-hoc derivation from recon_links is needed because every recompute
+  // wipes + recreates links, so the in-memory linker output IS the
+  // authoritative state.
+  const autoConfirmedPrIds = new Set<string>();
   for (const link of linkResult.links) {
     const persisted = await persistBatchLink(
       supabase,
@@ -183,41 +188,15 @@ export async function recomputeAccount(
     );
     reversalsPaired += persisted.paired;
     unpairedLinkConflict += persisted.conflicts;
+    unmatchedDaCount += link.unmatchedDaIds.length;
+    for (const id of link.confirmedPrIds) autoConfirmedPrIds.add(id);
   }
-  const reversalsUnpaired = linkResult.unlinkedDABatches.reduce(
-    (acc, b) => acc + b.rows.length,
-    0,
-  );
-
-  // 2a. Derive auto-confirmation from the CURRENT recon_links state, not
-  //     just the pairings produced in this recompute. The BAC contract is:
-  //     once a PR batch is consumed by a DA batch, every PR in that batch
-  //     that didn't pair with a DA is confirmed (the bank kept the funds).
-  //
-  //     "Consumed" is detectable from existing auto_batch_link rows: any
-  //     PR sharing a rail_native_ref with an auto_batch_link-paired PR is
-  //     in a consumed batch. Without this derivation, a second recompute
-  //     run forgets the consumption signal because the unpaired-DA pool
-  //     is empty (the DAs are already linked), and pending PRs in those
-  //     batches stay pending forever.
-  //
-  //     We only treat auto_batch_link as the consumption signal — manual
-  //     pairings reflect operator intent on a single PR/DA, not an entire
-  //     batch consumption.
-  const autoConfirmedPrIds = await deriveAutoConfirmedPrIds(
-    supabase,
-    accountId,
-    linkedPrIds,
-  );
+  const reversalsUnpaired = unmatchedDaCount;
   const prsAutoConfirmedByBatch = autoConfirmedPrIds.size;
 
-  // 3. Recompute PR + DA states from the Sets + auto-confirm set.
-  //    File-clock confirmation was retired in Tier 5 PR 3 — under the
-  //    batch-aware model, a PR confirms when its Referencia batch is
-  //    consumed by a DA batch but no DA returns for it (autoConfirmedPrIds
-  //    above), or by explicit operator action. confirmable_after is no
-  //    longer consulted; the column is preserved for now in case the
-  //    decision is reversed.
+  // 4. Recompute PR + DA states from the Sets + auto-confirm set.
+  //    File-clock confirmation was retired in Tier 5 PR 3 — a PR confirms
+  //    only via batch-link consumption or explicit operator action.
   const prStats = await recomputePRStates(
     supabase,
     accountId,
@@ -245,15 +224,13 @@ export async function recomputeAccount(
     unpairedDaInput,
     daBatchesFound: daBatches.length,
     daBatchesLinked: linkResult.links.length,
-    daBatchesUnlinked: linkResult.unlinkedDABatches.length,
     prBatchesFound: prBatches.length,
     prBatchesConsumed:
       prBatches.length - linkResult.unconsumedPRBatchReferences.length,
     prsAutoConfirmedByBatch,
+    unmatchedDaCount,
     unpairedLinkConflict,
-    linksRevalidated,
-    crossDayLinks,
-    linksDateMissing,
+    autoLinksWiped,
     aliasesLoaded,
   };
 }
@@ -396,100 +373,43 @@ async function fetchLinkedTxnIds(
   return { linkedPrIds, linkedDaIds, links: Array.from(linksByPrId.values()) };
 }
 
-interface HealOutcome {
-  deleted: number;
-  crossDay: number;
-  dateMissing: number;
-}
-
 const AUTO_STRATEGIES = new Set(["auto_fifo_name_amount", "auto_batch_link"]);
 
 /**
- * Inspect every existing AUTO recon_links row and delete any whose
- * PR/DA date pair violates the batch-window rule:
+ * Delete every auto recon_link in the account (both `auto_batch_link`
+ * and the legacy `auto_fifo_name_amount` strategy) and remove their ids
+ * from the in-memory Sets. Manual operator pairings stay put.
  *
- *   PR.posted_at == DA.posted_at OR PR.posted_at == previousWorkingDay(DA.posted_at)
- *
- * Returns:
- *   - deleted:     auto links removed (also mutates the in-memory Sets).
- *   - crossDay:    links where PR.date != DA.date, regardless of validity.
- *                  Diagnostic; helps see whether the DB actually contains
- *                  cross-day pairings to evaluate.
- *   - dateMissing: links the heal pass had to skip because the date
- *                  lookup didn't return one of the rows. Diagnostic;
- *                  flags chunked-fetch gaps.
- *
- * Manual pairings reflect explicit operator intent (a chosen exception
- * to the algorithm) and are never invalidated by the heal pass.
+ * Wiping + re-linking on every recompute makes the function idempotent
+ * regardless of starting DB state — same input always produces the same
+ * output, and operator-curated overrides are honoured.
  */
-async function revalidateLinks(
+async function wipeAutoLinks(
   supabase: SupabaseClient,
-  accountId: string,
   links: LinkRow[],
   linkedPrIds: Set<string>,
   linkedDaIds: Set<string>,
-): Promise<HealOutcome> {
-  if (links.length === 0) return { deleted: 0, crossDay: 0, dateMissing: 0 };
-
-  const involvedIds = new Set<string>();
-  for (const l of links) {
-    involvedIds.add(l.pr_txn_id);
-    involvedIds.add(l.da_txn_id);
-  }
-  const datesById = new Map<string, string>();
-  const involved = Array.from(involvedIds);
-  for (let i = 0; i < involved.length; i += ID_CHUNK) {
-    const chunk = involved.slice(i, i + ID_CHUNK);
-    const { data, error } = await supabase
-      .from("recon_transactions")
-      .select("id, posted_at")
-      .in("id", chunk);
-    if (error) throw error;
-    for (const r of data ?? []) {
-      datesById.set(r.id as string, r.posted_at as string);
-    }
-  }
-
-  const invalidPrIds: string[] = [];
-  const invalidDaIds: string[] = [];
-  let crossDay = 0;
-  let dateMissing = 0;
+): Promise<number> {
+  const autoPrIds: string[] = [];
+  const autoDaIds: string[] = [];
   for (const l of links) {
     if (!AUTO_STRATEGIES.has(l.match_strategy)) continue;
-    const prDate = datesById.get(l.pr_txn_id);
-    const daDate = datesById.get(l.da_txn_id);
-    if (!prDate || !daDate) {
-      dateMissing++;
-      continue;
-    }
-    if (prDate !== daDate) crossDay++;
-    if (!isInBatchWindow(prDate, daDate)) {
-      invalidPrIds.push(l.pr_txn_id);
-      invalidDaIds.push(l.da_txn_id);
-    }
+    autoPrIds.push(l.pr_txn_id);
+    autoDaIds.push(l.da_txn_id);
   }
+  if (autoPrIds.length === 0) return 0;
 
-  if (invalidPrIds.length > 0) {
-    for (let i = 0; i < invalidPrIds.length; i += ID_CHUNK) {
-      const chunk = invalidPrIds.slice(i, i + ID_CHUNK);
-      const { error } = await supabase
-        .from("recon_links")
-        .delete()
-        .in("pr_txn_id", chunk);
-      if (error) throw error;
-    }
-    for (const id of invalidPrIds) linkedPrIds.delete(id);
-    for (const id of invalidDaIds) linkedDaIds.delete(id);
+  for (let i = 0; i < autoPrIds.length; i += ID_CHUNK) {
+    const chunk = autoPrIds.slice(i, i + ID_CHUNK);
+    const { error } = await supabase
+      .from("recon_links")
+      .delete()
+      .in("pr_txn_id", chunk);
+    if (error) throw error;
   }
-
-  void accountId;
-  return { deleted: invalidPrIds.length, crossDay, dateMissing };
-}
-
-function isInBatchWindow(prDate: string, daDate: string): boolean {
-  if (prDate === daDate) return true;
-  if (prDate === previousWorkingDay(daDate)) return true;
-  return false;
+  for (const id of autoPrIds) linkedPrIds.delete(id);
+  for (const id of autoDaIds) linkedDaIds.delete(id);
+  return autoPrIds.length;
 }
 
 async function fetchUnpairedPRs(
@@ -564,84 +484,6 @@ async function fetchUnpairedDAs(
     cursor += SUPABASE_PAGE_LIMIT;
   }
   return all;
-}
-
-/**
- * Derive the set of "PR was in a consumed batch but didn't pair" PRs by
- * inspecting current recon_links state.
- *
- * Algorithm:
- *   1. Pull every PR row's id + rail_native_ref.
- *   2. Pull every recon_links row whose match_strategy = 'auto_batch_link'
- *      and whose PR side belongs to this account.
- *   3. Collect the references of every PR that has an auto_batch_link
- *      pairing — those references identify "consumed PR batches."
- *   4. Walk all PRs again; any PR that (a) shares a consumed-batch
- *      reference, (b) has a parseable digit reference, and (c) is not
- *      itself paired (linkedPrIds), gets flagged as auto-confirmed.
- *
- * Idempotent across recomputes — derives state from the DB rather than
- * the in-flight linker output, so a second run computes the same answer
- * even when the unpaired-DA pool is empty.
- */
-async function deriveAutoConfirmedPrIds(
-  supabase: SupabaseClient,
-  accountId: string,
-  linkedPrIds: Set<string>,
-): Promise<Set<string>> {
-  // Step 1 — load all PRs with their references.
-  type PrInfo = { id: string; ref: string | null };
-  const prs: PrInfo[] = [];
-  let cursor = 0;
-  while (cursor < SUPABASE_PAGE_SAFETY_CAP) {
-    const { data, error } = await supabase
-      .from("recon_transactions")
-      .select("id, rail_native_ref")
-      .eq("account_id", accountId)
-      .eq("code", "PR")
-      .order("id", { ascending: true })
-      .range(cursor, cursor + SUPABASE_PAGE_LIMIT - 1);
-    if (error) throw error;
-    if (!data || data.length === 0) break;
-    for (const row of data) {
-      prs.push({
-        id: row.id as string,
-        ref: (row.rail_native_ref as string | null) ?? null,
-      });
-    }
-    if (data.length < SUPABASE_PAGE_LIMIT) break;
-    cursor += SUPABASE_PAGE_LIMIT;
-  }
-
-  // Step 2 — fetch auto_batch_link links restricted to this account's PRs.
-  const prIds = prs.map((p) => p.id);
-  const autoBatchPrIds = new Set<string>();
-  for (let i = 0; i < prIds.length; i += ID_CHUNK) {
-    const chunk = prIds.slice(i, i + ID_CHUNK);
-    const { data, error } = await supabase
-      .from("recon_links")
-      .select("pr_txn_id")
-      .eq("match_strategy", "auto_batch_link")
-      .in("pr_txn_id", chunk);
-    if (error) throw error;
-    for (const l of data ?? []) autoBatchPrIds.add(l.pr_txn_id as string);
-  }
-
-  // Step 3 — refs of consumed PR batches.
-  const consumedRefs = new Set<string>();
-  for (const pr of prs) {
-    if (autoBatchPrIds.has(pr.id) && pr.ref) consumedRefs.add(pr.ref);
-  }
-
-  // Step 4 — every unpaired PR sharing a consumed ref is auto-confirmed.
-  const out = new Set<string>();
-  for (const pr of prs) {
-    if (!pr.ref) continue;
-    if (linkedPrIds.has(pr.id)) continue;
-    if (!consumedRefs.has(pr.ref)) continue;
-    out.add(pr.id);
-  }
-  return out;
 }
 
 async function persistBatchLink(
