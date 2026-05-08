@@ -45,13 +45,11 @@ export function RecomputeButton({ accountId }: { accountId: string }) {
               [debug]
               txns={result.stats.txnCount}
               · preLinks={result.stats.preexistingLinks}
-              · crossDay={result.stats.crossDayLinks}
-              · dateMissing={result.stats.linksDateMissing}
-              · revalidated={result.stats.linksRevalidated}
-              · unpairedDAsIn={result.stats.unpairedDaInput}
+              · wiped={result.stats.autoLinksWiped}
+              · DAsIn={result.stats.unpairedDaInput}
               · prBatches={result.stats.prBatchesFound}/{result.stats.prBatchesConsumed}
               · daBatches={result.stats.daBatchesLinked}/{result.stats.daBatchesFound}
-              · daUnlinked={result.stats.daBatchesUnlinked}
+              · unmatchedDAs={result.stats.unmatchedDaCount}
               · autoConfirm={result.stats.prsAutoConfirmedByBatch}
               · linkConflict={result.stats.unpairedLinkConflict}
               · daRejected={result.stats.daRejected}
