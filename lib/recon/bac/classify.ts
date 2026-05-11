@@ -131,12 +131,16 @@ export function aliasMatch(
   return set ? set.has(daNormalized) : false;
 }
 
-// "Tef DCD de Jorge Miguel Diaz P" → "Jorge Miguel Diaz P".
-// "ACH CRE Maria Lopez"            → "Maria Lopez".
+// "Tef DCD de Jorge Miguel Diaz P"   → "Jorge Miguel Diaz P".
+// "ACH CRE Maria Lopez"              → "Maria Lopez".
+// "ACH XPR: MARCELA GARCIA SALGAD"   → "MARCELA GARCIA SALGAD" (4E rows).
+// Despite the "PR" in the name, this extractor is also used to label
+// payer names on 4C / 4E rows in the UI.
 export function extractPRPayerName(desc: string): string | null {
   const m =
     desc.match(/\bDCD\s+de\s+(.+)$/i) ??
     desc.match(/\bACH\s+CRE\s+(.+)$/i) ??
+    desc.match(/\bACH\s+XPR\s*:?\s*(.+)$/i) ??
     desc.match(/\bde\s+(.+)$/i);
   return m ? m[1].trim() : null;
 }

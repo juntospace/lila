@@ -1,34 +1,54 @@
 // BAC batch-aware reconciliation primitives.
 //
 // PRs go out in batches (rows sharing a `Referencia`); DAs come back in
-// batches (runs of consecutive sequence numbers across origin banks); a
-// DA batch is the bank's response to one OR MORE earlier PR batches.
-// The matching is **reference-ordered with a date sanity-check**:
+// batches (runs of consecutive sequence numbers across origin banks).
+// In practice a single DA batch is NOT always the bank's response to
+// one cleanly-partitioned PR submission group — BAC commonly mixes
+// returns from multiple PR batches into a single DA batch (recurring
+// payees with the same name appear in both, the bank's processing
+// order varies by rail/priority, etc).
 //
-//   1. Sort PR batches by reference ascending; sort DA batches by start
-//      sequence ascending.
-//   2. Walk DA batches in order. For each DA batch, walk PR batches in
-//      reference order starting from the first un-consumed one. Each PR
-//      batch is matched against the DA batch's still-un-paired DAs by
-//      (amount + injected name match). Un-paired PRs in any consumed PR
-//      batch are confirmed (the bank kept the funds).
-//   3. **Date stop**: a PR batch posted AFTER the current DA batch's
-//      date is never consumable — the bank can't return a PR that
-//      hadn't been sent yet. The walk stops at the first such PR batch
-//      and any remaining DAs become unmatched (a data-error signal).
-//      The skipped PR batch carries forward to the next DA batch.
-//   4. The walk also stops as soon as the DA batch's DAs are all paired.
-//   5. The next DA batch starts with the next un-consumed PR batch (the
-//      cursor is global; we never reuse a PR batch).
+// Matching model — partial-claim:
+//
+//   1. Sort PR batches by reference ascending; sort DA batches in
+//      chronological order (date asc, then start sequence asc within
+//      a day).
+//   2. Pass 1 — walk DA batches in order. For each DA in each batch,
+//      find a match anywhere in the global PR pool. "Match" = exact
+//      amount + injected name match. A PR is excluded only if it has
+//      already paired with a prior DA OR if its batch's posted_at is
+//      AFTER this DA batch's date (the bank can't return PRs that
+//      hadn't been sent yet).
+//   3. PRs are individually claimed; PR batches are NOT eagerly
+//      claimed. Each DA grabs only the specific PR it needs.
+//   4. Pass 2 — post-hoc assignment. Each PR batch that had at least
+//      one pairing is "assigned" to the DA batch that paired the
+//      MOST of its PRs (the natural owner). Tie-break by earliest DA
+//      batch in chronological order.
+//   5. Pass 3 — build BatchLinks. Each DA batch's link contains: its
+//      pairings, the PR batches assigned to it in pass 2, the un-paired
+//      PRs in those batches as `confirmedPrIds`, and any DAs that
+//      didn't pair anywhere as `unmatchedDaIds`.
+//   6. PR batches with zero pairings remain unconsumed — they may
+//      pair with DAs in a later file's upload, or stay pending for
+//      operator confirmation.
+//
+// Why partial-claim and not strict ref-order consume-on-walk:
+//   - On some days a DA batch mixes returns from PR batches in BOTH
+//     submission groups (Group A and Group B). Strict consume-on-walk
+//     drags the first DA batch into the second group's PR batches
+//     while searching for matches, exhausting them before the second
+//     DA batch can walk. Partial-claim avoids the over-claim because
+//     each DA only takes the one PR it needs.
 //
 // In typical BAC data DA.posted_at == PR.posted_at, occasionally
 // PR.posted_at + 1 working day; the algorithm doesn't enforce a strict
 // upper bound — only the lower bound (DA.day >= PR.day).
 //
-// Critical invariant: every DA in every DA batch must end up paired. If
-// any DA in a batch is left un-paired after the walk terminates, that's
-// surfaced via `BatchLink.unmatchedDaIds`. The recompute layer reports
-// the count; it does not silently drop the DAs.
+// Critical invariant: every DA in every DA batch must end up paired.
+// Any DA still un-paired at the end is surfaced via
+// `BatchLink.unmatchedDaIds`. The recompute layer reports the count;
+// it does not silently drop the DAs.
 //
 // This module only does the matching math — pure functions, no DB or
 // classifier coupling. The recompute layer threads these into
@@ -242,97 +262,79 @@ export interface LinkOptions {
 }
 
 /**
- * Link `daBatch` to a contiguous prefix of `availablePRBatches`,
- * matching by (amount + name) and stopping at the first PR batch
- * posted AFTER the DA batch's date. `availablePRBatches` must already
- * be sorted by reference ascending; `daBatch.rows` in their natural
- * order within the batch.
+ * Pair each DA in `daBatch` against the first available PR (across
+ * `availablePRBatches`) whose amount + name match. Skips PRs already
+ * in `usedPrIds` (mutated to include each successful pairing) and PRs
+ * in batches posted AFTER `daBatch.posted_at` (date sanity — bank
+ * can't return PRs not yet sent).
  *
- * Algorithm:
- *
- *   1. Walk PR batches in reference order. For each PR batch:
- *      - If `prBatch.posted_at > daBatch.posted_at`, stop. The PR
- *        batch is from a date after the DA arrived — it can't be a
- *        source for these DAs (the bank can't return a PR that hadn't
- *        been sent). The PR batch is left for a later DA batch.
- *      - Otherwise consume the batch: try to pair every still-unmatched
- *        DA against an unmatched PR in this single PR batch (one PR
- *        batch at a time, NOT a merged pool).
- *   2. After each consumed PR batch, the un-paired PRs in that batch
- *      go into `confirmedPrIds`. The PR batch was consumed by this DA
- *      batch; PRs the bank didn't return are confirmed.
- *   3. Stop pulling more PR batches as soon as every DA is paired.
- *   4. Any DA still un-paired at the end goes into `unmatchedDaIds` —
- *      the data-error signal.
- *
- * The function does NOT mutate its inputs and does NOT touch the DB.
+ * Returns pairings + unmatched DA ids + the set of PR batch refs that
+ * received at least one pairing. Batch claim and `confirmedPrIds` are
+ * decided post-hoc by `linkAllBatches`; this helper only does the
+ * per-DA matching pass.
  */
 export function tryLinkDABatch(
   daBatch: DABatch,
   availablePRBatches: PRBatch[],
+  usedPrIds: Set<string>,
   options: LinkOptions,
 ): BatchLink {
   const pairings: BatchPairing[] = [];
-  const confirmedPrIds: string[] = [];
-  const consumedRefs: string[] = [];
-  let remainingDAs: DABatch["rows"] = daBatch.rows;
+  const unmatchedDaIds: string[] = [];
+  const batchRefs = new Set<string>();
 
-  for (const prBatch of availablePRBatches) {
-    if (remainingDAs.length === 0) break;
-    // Date sanity check: PR batches posted AFTER this DA batch's date
-    // can't be its source. They belong to a future DA batch.
-    if (prBatch.posted_at > daBatch.posted_at) break;
-
-    consumedRefs.push(prBatch.reference);
-
-    const usedPrIds = new Set<string>();
-    const stillUnmatched: DABatch["rows"] = [];
-    for (const da of remainingDAs) {
-      const match = findMatchInBatch(da, prBatch.rows, usedPrIds, options);
-      if (match) {
-        pairings.push({ daId: da.id, prId: match.id });
-        usedPrIds.add(match.id);
-      } else {
-        stillUnmatched.push(da);
-      }
-    }
-    remainingDAs = stillUnmatched;
-
-    // PRs in this consumed batch that didn't pair are confirmed —
-    // regardless of whether we stop here or continue to the next batch.
-    for (const pr of prBatch.rows) {
-      if (!usedPrIds.has(pr.id)) confirmedPrIds.push(pr.id);
+  for (const da of daBatch.rows) {
+    const match = findMatchAcrossBatches(
+      da,
+      availablePRBatches,
+      daBatch.posted_at,
+      usedPrIds,
+      options,
+    );
+    if (match) {
+      pairings.push({ daId: da.id, prId: match.pr.id });
+      usedPrIds.add(match.pr.id);
+      batchRefs.add(match.batchRef);
+    } else {
+      unmatchedDaIds.push(da.id);
     }
   }
 
   return {
     daBatchId: daBatch.id,
-    prBatchReferences: consumedRefs,
+    prBatchReferences: Array.from(batchRefs),
     pairings,
-    confirmedPrIds,
-    unmatchedDaIds: remainingDAs.map((d) => d.id),
+    confirmedPrIds: [], // filled in by linkAllBatches' post-hoc pass
+    unmatchedDaIds,
   };
 }
 
 /**
- * Find the first PR in `prRows` not yet in `usedPrIds` with matching
- * amount + name. DAs without a payer name can't match anything and
- * return null (the recompute layer treats those as un-pairable).
+ * Walk PR batches in order; for each, walk its PRs in order; return
+ * the first PR whose amount + name match `da` and isn't already in
+ * `usedPrIds`. PR batches posted after `daPostedAt` are skipped (date
+ * sanity). Returns null for DAs without a payer name (can't pair).
  */
-function findMatchInBatch(
+function findMatchAcrossBatches(
   da: DABatch["rows"][number],
-  prRows: PRRowForBatch[],
+  prBatches: PRBatch[],
+  daPostedAt: string,
   usedPrIds: Set<string>,
   options: LinkOptions,
-): PRRowForBatch | null {
+): { pr: PRRowForBatch; batchRef: string } | null {
   if (!da.payerNameRaw) return null;
   const targetName = options.normalize(da.payerNameRaw);
-  for (const pr of prRows) {
-    if (usedPrIds.has(pr.id)) continue;
-    if (pr.amountMinor !== da.amountMinor) continue;
-    const prName = options.extractPRPayer(pr.description);
-    if (!prName) continue;
-    if (options.nameMatcher(options.normalize(prName), targetName)) return pr;
+  for (const prBatch of prBatches) {
+    if (prBatch.posted_at > daPostedAt) continue;
+    for (const pr of prBatch.rows) {
+      if (usedPrIds.has(pr.id)) continue;
+      if (pr.amountMinor !== da.amountMinor) continue;
+      const prName = options.extractPRPayer(pr.description);
+      if (!prName) continue;
+      if (options.nameMatcher(options.normalize(prName), targetName)) {
+        return { pr, batchRef: prBatch.reference };
+      }
+    }
   }
   return null;
 }
@@ -349,34 +351,98 @@ export interface BatchLinkingResult {
 }
 
 /**
- * Walk DA batches in reference order, threading a single PR-batch
- * cursor across the whole sequence. DA batch K starts where DA batch
- * K-1 left off — once a PR batch is consumed (matched against any DA
- * batch), it cannot be reused.
+ * Three-pass orchestrator over all DA batches:
  *
- * Returns one `BatchLink` per DA batch. Even DA batches with un-paired
- * DAs are returned (the caller inspects `unmatchedDaIds` and surfaces
- * the count).
+ *   Pass 1 — Pair each DA against any available PR (partial-claim).
+ *     Walks DA batches in chronological order; for each DA finds the
+ *     first matching PR across the global pool. Records pairings per
+ *     DA batch; PRs themselves are individually claimed (not batches).
  *
- * No DB writes; caller decides what to do with the result.
+ *   Pass 2 — Post-hoc batch assignment. For each PR batch that had at
+ *     least one pairing, assign it to the DA batch that paired the
+ *     MOST of its PRs (the natural owner). Tie-break by earliest DA
+ *     batch in chronological order.
+ *
+ *   Pass 3 — Build BatchLinks. Each DA batch's link carries: its own
+ *     pairings, the PR batches it was assigned in pass 2, the un-paired
+ *     PRs in those batches as `confirmedPrIds`, and any DAs that didn't
+ *     pair anywhere as `unmatchedDaIds`.
+ *
+ *   PR batches with zero pairings remain unconsumed — they may pair
+ *   with DAs in a future file's upload, or stay pending for operator
+ *   confirmation.
  */
 export function linkAllBatches(
   prBatches: PRBatch[],
   daBatches: DABatch[],
   options: LinkOptions,
 ): BatchLinkingResult {
-  const links: BatchLink[] = [];
-  let prCursor = 0;
+  const usedPrIds = new Set<string>();
+  const pass1Links: BatchLink[] = [];
 
+  // Pass 1: pair each DA against the global pool.
   for (const daBatch of daBatches) {
-    const available = prBatches.slice(prCursor);
-    const link = tryLinkDABatch(daBatch, available, options);
-    links.push(link);
-    prCursor += link.prBatchReferences.length;
+    pass1Links.push(tryLinkDABatch(daBatch, prBatches, usedPrIds, options));
   }
 
-  return {
-    links,
-    unconsumedPRBatchReferences: prBatches.slice(prCursor).map((b) => b.reference),
-  };
+  // Pass 2: count pairings per (prBatchRef, daBatchId) so we can pick
+  // the DA batch that "owns" each touched PR batch.
+  const prToBatchRef = new Map<string, string>();
+  for (const prBatch of prBatches) {
+    for (const pr of prBatch.rows) prToBatchRef.set(pr.id, prBatch.reference);
+  }
+  const countsByPrBatch = new Map<string, Map<string, number>>();
+  const daBatchOrder = new Map<string, number>();
+  for (let i = 0; i < daBatches.length; i++) daBatchOrder.set(daBatches[i].id, i);
+  for (const link of pass1Links) {
+    for (const p of link.pairings) {
+      const prBatchRef = prToBatchRef.get(p.prId);
+      if (!prBatchRef) continue;
+      const sub = countsByPrBatch.get(prBatchRef) ?? new Map<string, number>();
+      sub.set(link.daBatchId, (sub.get(link.daBatchId) ?? 0) + 1);
+      countsByPrBatch.set(prBatchRef, sub);
+    }
+  }
+  const prBatchOwner = new Map<string, string>();
+  for (const [prBatchRef, counts] of countsByPrBatch) {
+    let bestDaBatch = "";
+    let bestCount = -1;
+    let bestOrdinal = Infinity;
+    for (const [daBatchId, count] of counts) {
+      const ord = daBatchOrder.get(daBatchId) ?? Infinity;
+      if (count > bestCount || (count === bestCount && ord < bestOrdinal)) {
+        bestCount = count;
+        bestDaBatch = daBatchId;
+        bestOrdinal = ord;
+      }
+    }
+    prBatchOwner.set(prBatchRef, bestDaBatch);
+  }
+
+  // Pass 3: build final links with consumedRefs + confirmedPrIds.
+  const finalLinks: BatchLink[] = [];
+  for (const link of pass1Links) {
+    const consumedRefs: string[] = [];
+    const confirmedPrIds: string[] = [];
+    for (const prBatch of prBatches) {
+      if (prBatchOwner.get(prBatch.reference) !== link.daBatchId) continue;
+      consumedRefs.push(prBatch.reference);
+      for (const pr of prBatch.rows) {
+        if (!usedPrIds.has(pr.id)) confirmedPrIds.push(pr.id);
+      }
+    }
+    finalLinks.push({
+      daBatchId: link.daBatchId,
+      prBatchReferences: consumedRefs,
+      pairings: link.pairings,
+      confirmedPrIds,
+      unmatchedDaIds: link.unmatchedDaIds,
+    });
+  }
+
+  const unconsumedPRBatchReferences = prBatches
+    .filter((b) => !prBatchOwner.has(b.reference))
+    .map((b) => b.reference);
+
+  return { links: finalLinks, unconsumedPRBatchReferences };
 }
