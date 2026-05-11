@@ -14,6 +14,7 @@
 export const BAC_KNOWN_CODES = [
   'PR', // Junto-initiated ACH inbound (rejectable for 24h)
   '4C', // ACH inbound from another bank, irrevocable
+  '4E', // ACH Xpress inbound from another bank, irrevocable (same handling as 4C)
   'DA', // DVTO reversal of a PR
   'AD', // Bank fee on a failed ACH
   'TX', // ITBMS tax tied to AD

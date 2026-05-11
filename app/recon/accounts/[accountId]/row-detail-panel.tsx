@@ -68,7 +68,7 @@ export function RowDetailPanel({
   rejectCandidates?: CandidateDA[];
 }) {
   const isPR = row.code === "PR";
-  const is4C = row.code === "4C";
+  const isInboundACH = row.code === "4C" || row.code === "4E";
 
   return (
     <div className="space-y-4">
@@ -169,13 +169,13 @@ export function RowDetailPanel({
         </Section>
       )}
 
-      {/* 4C: a brief note. */}
-      {is4C && (
+      {/* 4C / 4E: a brief note. */}
+      {isInboundACH && (
         <Section title="Inbound ACH (irrevocable)" tone="success">
           <p className="text-sm text-fg-muted">
-            4C rows are inbound ACH credits from another bank; the originating
-            bank cannot reverse them, so this payment is final the moment it
-            posts.
+            {row.code} rows are inbound ACH credits from another bank
+            {row.code === "4E" ? " via ACH Xpress" : ""}; the originating bank
+            cannot reverse them, so this payment is final the moment it posts.
           </p>
         </Section>
       )}
