@@ -729,7 +729,7 @@ export default async function AccountDetailPage({
           <div>
             <CardTitle>Loan-related credits</CardTitle>
             <CardDescription>
-              PR (Junto-initiated ACH inbound) and 4C (irrevocable inbound ACH) only.
+              PR (Junto-initiated ACH inbound) and 4C / 4E (irrevocable inbound ACH) only.
             </CardDescription>
           </div>
           <Button asChild variant="secondary" size="sm">

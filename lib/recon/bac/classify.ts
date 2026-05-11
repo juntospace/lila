@@ -49,6 +49,10 @@ export function classifyBACRow(row: Pick<BACRow, "code" | "postedAt">): RowClass
         confirmableAfter: addHoursToISODate(row.postedAt, ACH_PENDING_HOURS),
       };
     case "4C":
+    case "4E":
+      // Both are irrevocable inbound ACH credits from another bank: 4C is
+      // standard ACH, 4E is BAC's ACH Xpress (faster rail, same finality).
+      // The originating bank cannot reverse them, so confirm on arrival.
       return { kind: "loan_inflow", state: "confirmed", confirmableAfter: null };
     case "DA":
       // Pending until the ingest layer pairs it back to a PR. If no PR is

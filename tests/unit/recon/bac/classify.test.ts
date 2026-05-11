@@ -27,6 +27,14 @@ describe("classifyBACRow", () => {
     });
   });
 
+  it("4E rows (ACH Xpress) are confirmed immediately, same as 4C", () => {
+    expect(classifyBACRow({ code: "4E", postedAt: "2026-04-20" })).toEqual({
+      kind: "loan_inflow",
+      state: "confirmed",
+      confirmableAfter: null,
+    });
+  });
+
   it("DA rows start as pending_pair until ingest pairs them", () => {
     expect(classifyBACRow({ code: "DA", postedAt: "2026-04-06" })).toEqual({
       kind: "reversal",
