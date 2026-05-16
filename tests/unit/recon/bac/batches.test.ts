@@ -497,28 +497,25 @@ describe("linkAllBatches", () => {
     }
   });
 
-  it("partial-claim: one DA batch pulls from two PR batches; the other DA batch claims one of them by majority", () => {
-    // Production-style scenario: DA batch 1 has DAs whose matches are
-    // spread across both 6227489 and 6227878 (recurring payees with same
-    // name+amount in both submissions). DA batch 2 has its own DAs in
-    // both batches. The MAJORITY of each PR batch's pairings determines
-    // which DA batch "owns" it for the auto-confirm / link record.
+  it("symmetric two-batch case: bipartite assignment splits one PR batch per DA batch", () => {
+    // Two PR batches with identical (name, amount) PRs. Two DA batches
+    // also with identical (name, amount) DAs. The bipartite assignment
+    // chooses one PR batch per DA batch (no over-claim). Exactly which
+    // PR batch goes to which DA batch is symmetric — either choice is
+    // valid — so we just assert both DA batches pair all 3 DAs each
+    // and exactly one PR batch is assigned to each.
     const prRows: PRRowForBatch[] = [
-      // 6227489 — 3 PRs. DA batch 1 will pair 2; DA batch 2 will pair 1.
       pr("pA1", "6227489", 1000n, "ALICE"),
       pr("pA2", "6227489", 2000n, "BOB"),
       pr("pA3", "6227489", 3000n, "CAROL"),
-      // 6227878 — 3 PRs. DA batch 1 will pair 1; DA batch 2 will pair 2.
       pr("pB1", "6227878", 1000n, "ALICE"),
       pr("pB2", "6227878", 2000n, "BOB"),
       pr("pB3", "6227878", 3000n, "CAROL"),
     ];
     const daRows: DARowForBatch[] = [
-      // DA batch 1 — 3 DAs: ALICE, BOB, CAROL (all match in both PR batches)
       da("d1a", "7423344", 1000n, "ALICE"),
       da("d1b", "7423345", 2000n, "BOB"),
       da("d1c", "7423346", 3000n, "CAROL"),
-      // DA batch 2 — 3 DAs: same names again
       da("d2a", "7428982", 1000n, "ALICE"),
       da("d2b", "7428983", 2000n, "BOB"),
       da("d2c", "7428984", 3000n, "CAROL"),
@@ -529,14 +526,53 @@ describe("linkAllBatches", () => {
       opts,
     );
     expect(result.links).toHaveLength(2);
-    // DA batch 1 (first walked) greedily takes PRs from 6227489 first
-    // (lower ref). All 3 of its DAs pair against 6227489's 3 PRs.
-    // DA batch 2 then walks; only 6227878 has matching PRs left. Pairs
-    // all 3. So 6227489 → DA batch 1, 6227878 → DA batch 2.
-    expect(result.links[0].prBatchReferences).toEqual(["6227489"]);
-    expect(result.links[0].pairings).toHaveLength(3);
-    expect(result.links[1].prBatchReferences).toEqual(["6227878"]);
-    expect(result.links[1].pairings).toHaveLength(3);
+    for (const link of result.links) {
+      expect(link.prBatchReferences).toHaveLength(1);
+      expect(link.pairings).toHaveLength(3);
+      expect(link.unmatchedDaIds).toEqual([]);
+    }
+    // Exactly one PR batch per DA batch, no over-claim.
+    const allClaimed = result.links.flatMap((l) => l.prBatchReferences);
+    expect(allClaimed.sort()).toEqual(["6227489", "6227878"]);
     expect(result.unconsumedPRBatchReferences).toEqual([]);
+  });
+
+  it("inverted ref/seq pattern (production Apr 20): DA1 ↔ higher-ref PR group", () => {
+    // The actual Apr 20 production scenario the user's manual
+    // reconciliation revealed: DA batch 1 (lower seq) corresponds to
+    // PR4 (higher ref). The bipartite assignment finds this by
+    // maximizing total pairings — DA1's DAs match PR4's PRs uniquely,
+    // and DA2's DAs match PR1's PRs uniquely (different amounts /
+    // people unique to each PR batch).
+    const prRows: PRRowForBatch[] = [
+      // PR1 (lower ref) — has GROUP_A_PERSON only
+      pr("pr1_a", "6246565", 1000n, "GROUP_A_PERSON_1"),
+      pr("pr1_b", "6246565", 2000n, "GROUP_A_PERSON_2"),
+      // PR4 (higher ref) — has GROUP_B_PERSON only
+      pr("pr4_a", "6246583", 3000n, "GROUP_B_PERSON_1"),
+      pr("pr4_b", "6246583", 4000n, "GROUP_B_PERSON_2"),
+    ];
+    const daRows: DARowForBatch[] = [
+      // DA1 (lower seq) — returns GROUP_B_PERSON
+      da("d1a", "7482219", 3000n, "GROUP_B_PERSON_1"),
+      da("d1b", "7482220", 4000n, "GROUP_B_PERSON_2"),
+      // DA2 (higher seq) — returns GROUP_A_PERSON
+      da("d2a", "7485671", 1000n, "GROUP_A_PERSON_1"),
+      da("d2b", "7485672", 2000n, "GROUP_A_PERSON_2"),
+    ];
+    const result = linkAllBatches(
+      groupPRBatches(prRows),
+      groupDABatches(daRows),
+      opts,
+    );
+    expect(result.links).toHaveLength(2);
+    // DA1 (lower seq) processed first; assigned to 6246583 (higher ref)
+    // because that's where its DAs find matches.
+    const da1Link = result.links.find((l) => l.daBatchId.endsWith("82219-82220"));
+    const da2Link = result.links.find((l) => l.daBatchId.endsWith("85671-85672"));
+    expect(da1Link?.prBatchReferences).toEqual(["6246583"]);
+    expect(da2Link?.prBatchReferences).toEqual(["6246565"]);
+    expect(da1Link?.unmatchedDaIds).toEqual([]);
+    expect(da2Link?.unmatchedDaIds).toEqual([]);
   });
 });
