@@ -41,6 +41,10 @@ export interface IngestResult {
   prsConfirmedThisRun: number;
   reversalsPaired: number;
   reversalsUnpaired: number;
+  /** Account-wide after this ingest: PR batches with no DA pairings. The
+   *  operator can manually confirm those, or wait — they may pair with a
+   *  future file's DA batch. */
+  prBatchesPending: number;
   warnings: string[];
 }
 
@@ -112,6 +116,7 @@ export async function ingestBACFile(args: IngestArgs): Promise<IngestResult> {
         prsConfirmedThisRun: 0,
         reversalsPaired: 0,
         reversalsUnpaired: 0,
+        prBatchesPending: 0,
         warnings,
       };
     }
@@ -201,6 +206,7 @@ export async function ingestBACFile(args: IngestArgs): Promise<IngestResult> {
   const reversalsPaired = recomputeStats.reversalsPaired;
   const reversalsUnpaired = recomputeStats.reversalsUnpaired;
   const prsConfirmedThisRun = recomputeStats.prsConfirmed;
+  const prBatchesPending = recomputeStats.prBatchesPending;
 
   // ----- Finalize the upload row -------------------------------------------
   await supabase
@@ -223,6 +229,7 @@ export async function ingestBACFile(args: IngestArgs): Promise<IngestResult> {
     prsConfirmedThisRun,
     reversalsPaired,
     reversalsUnpaired,
+    prBatchesPending,
     warnings,
   };
 }

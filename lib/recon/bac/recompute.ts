@@ -100,6 +100,9 @@ export interface RecomputeStats {
   prBatchesFound: number;
   /** Diagnostic — PR batches consumed by a link (rejected + auto-confirmed). */
   prBatchesConsumed: number;
+  /** Diagnostic — PR batches the linker left unconsumed. Genuine
+   *  "no DA returned" cases the operator may want to confirm manually. */
+  prBatchesPending: number;
   /** Diagnostic — PRs auto-confirmed because their batch was consumed but they weren't paired. */
   prsAutoConfirmedByBatch: number;
   /** Diagnostic — DAs that the linker could not pair against any PR. In
@@ -227,6 +230,7 @@ export async function recomputeAccount(
     prBatchesFound: prBatches.length,
     prBatchesConsumed:
       prBatches.length - linkResult.unconsumedPRBatchReferences.length,
+    prBatchesPending: linkResult.unconsumedPRBatchReferences.length,
     prsAutoConfirmedByBatch,
     unmatchedDaCount,
     unpairedLinkConflict,

@@ -24,6 +24,13 @@ export type LinkedDA = {
   matched_by: string | null;
 };
 
+export type PrBatchSummary = {
+  total: number;
+  rejected: number;
+  confirmed: number;
+  pending: number;
+};
+
 export type ManualActionRow = {
   id: string;
   action: string;
@@ -59,6 +66,7 @@ export function RowDetailPanel({
   manualActions,
   actors,
   rejectCandidates,
+  prBatchSummary,
 }: {
   accountId: string;
   row: RowForPanel;
@@ -66,6 +74,7 @@ export function RowDetailPanel({
   manualActions: ManualActionRow[];
   actors: ActorMap;
   rejectCandidates?: CandidateDA[];
+  prBatchSummary?: PrBatchSummary;
 }) {
   const isPR = row.code === "PR";
   const isInboundACH = row.code === "4C" || row.code === "4E";
@@ -87,6 +96,36 @@ export function RowDetailPanel({
           <span className="text-fg-muted">{row.description || "—"}</span>
         </DetailItem>
       </DetailGrid>
+
+      {/* PR rows: show this PR's batch (Referencia) state breakdown so
+          operators can quickly cross-check the linker against a manual
+          reconciliation. "This PR is in batch 6246583, which has K
+          rejected + L confirmed + M pending PRs out of N total." */}
+      {isPR && prBatchSummary && row.rail_native_ref && (
+        <Section title="PR batch">
+          <p className="text-xs text-fg-muted">
+            Batch <code className="font-mono">{row.rail_native_ref}</code>{" "}
+            has {prBatchSummary.total} PR{prBatchSummary.total === 1 ? "" : "s"}:
+          </p>
+          <div className="mt-2 flex flex-wrap gap-3 text-sm">
+            <BatchCount
+              label="Rejected"
+              value={prBatchSummary.rejected}
+              tone="warning"
+            />
+            <BatchCount
+              label="Confirmed"
+              value={prBatchSummary.confirmed}
+              tone="success"
+            />
+            <BatchCount
+              label="Pending"
+              value={prBatchSummary.pending}
+              tone={prBatchSummary.pending > 0 ? "info" : "muted"}
+            />
+          </div>
+        </Section>
+      )}
 
       {/* PR + rejected: show the linked DA. */}
       {isPR && row.state === "rejected" && linkedDA && (
@@ -339,6 +378,31 @@ function StateChip({ state }: { state: string }) {
   return (
     <span className={`rounded px-2 py-0.5 text-xs capitalize ${tone}`}>
       {state}
+    </span>
+  );
+}
+
+function BatchCount({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: "success" | "warning" | "info" | "muted";
+}) {
+  const colorClass =
+    tone === "success"
+      ? "text-success"
+      : tone === "warning"
+        ? "text-warning"
+        : tone === "info"
+          ? "text-info"
+          : "text-fg-subtle";
+  return (
+    <span className="inline-flex items-baseline gap-1">
+      <span className={`font-mono tabular-nums ${colorClass}`}>{value}</span>
+      <span className="text-xs text-fg-subtle">{label}</span>
     </span>
   );
 }
