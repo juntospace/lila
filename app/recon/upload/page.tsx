@@ -6,6 +6,7 @@ import { requireReconWriter } from "@/lib/auth/guard";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 import { AddAccountForm } from "./add-account-form";
+import { BulkExportForm } from "./bulk-export-form";
 import { DeleteUploadButton } from "./delete-upload-button";
 import { UploadForm } from "./upload-form";
 
@@ -137,6 +138,23 @@ export default async function ReconUploadPage() {
           </CardBody>
         </Card>
       </div>
+
+      <section className="mt-10">
+        <h2 className="font-display text-xl font-semibold tracking-tight">
+          Bulk export
+        </h2>
+        <Card className="mt-4">
+          <CardBody>
+            <p className="mb-4 text-sm text-fg-muted">
+              Download loan credits across all (or selected) bank accounts.
+              Defaults to rejected PRs from the last 30 days — what collections
+              typically wants to chase up. Adjust the filters and click
+              Download to get an .xlsx.
+            </p>
+            <BulkExportForm accounts={activeAccounts} />
+          </CardBody>
+        </Card>
+      </section>
 
       <section className="mt-10">
         <h2 className="font-display text-xl font-semibold tracking-tight">
