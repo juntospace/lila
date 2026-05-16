@@ -804,3 +804,127 @@ export async function bulkConfirmPendingBatch(args: {
   revalidatePath(`/recon/accounts/${args.accountId}`);
   return { status: "ok", confirmedCount: prIds.length };
 }
+
+// =============================================================
+// bulkConfirmPRs
+// =============================================================
+
+export type BulkConfirmPRsResult = {
+  status: "ok" | "error";
+  /** Number of PRs actually flipped to confirmed (may be < requested if
+   *  some were already in a non-pending state when the action ran). */
+  confirmedCount?: number;
+  /** Number of selected PRs that were skipped (not pending or wrong
+   *  account). */
+  skippedCount?: number;
+  message?: string;
+};
+
+/**
+ * Confirm an operator-selected set of PRs in one transaction. Unlike
+ * bulkConfirmPendingBatch (which confirms an entire Referencia), this
+ * takes an explicit PR-id list so the operator can pick any subset
+ * across batches / dates / PR refs.
+ *
+ * Validates every id belongs to this account and is in `pending` state.
+ * IDs that fail validation are silently skipped (operator's UI cleared
+ * stale selection); the count is reported back.
+ */
+export async function bulkConfirmPRs(args: {
+  accountId: string;
+  prTxnIds: string[];
+  justification: string;
+}): Promise<BulkConfirmPRsResult> {
+  const session = await requireReconWriter();
+  const supabase = await createSupabaseServerClient();
+
+  const justification = args.justification.trim();
+  if (justification.length < MIN_JUSTIFICATION) {
+    return {
+      status: "error",
+      message: `Justification must be at least ${MIN_JUSTIFICATION} characters.`,
+    };
+  }
+  if (justification.length > MAX_JUSTIFICATION) {
+    return {
+      status: "error",
+      message: `Justification is too long (max ${MAX_JUSTIFICATION}).`,
+    };
+  }
+  if (args.prTxnIds.length === 0) {
+    return { status: "error", message: "No PRs selected." };
+  }
+
+  // Validate the selection set — only flip rows that are pending PRs on
+  // this account. Refresh the operator's UI state if they tried to confirm
+  // something stale.
+  const ID_CHUNK = 100;
+  const validIds: string[] = [];
+  for (let i = 0; i < args.prTxnIds.length; i += ID_CHUNK) {
+    const chunk = args.prTxnIds.slice(i, i + ID_CHUNK);
+    const { data: rows, error } = await supabase
+      .from("recon_transactions")
+      .select("id, account_id, code, state")
+      .in("id", chunk);
+    if (error) return { status: "error", message: error.message };
+    for (const r of rows ?? []) {
+      if (
+        r.account_id === args.accountId &&
+        r.code === "PR" &&
+        r.state === "pending"
+      ) {
+        validIds.push(r.id as string);
+      }
+    }
+  }
+
+  const skippedCount = args.prTxnIds.length - validIds.length;
+  if (validIds.length === 0) {
+    return {
+      status: "error",
+      message: "None of the selected PRs are pending on this account anymore. Refresh and try again.",
+      skippedCount,
+    };
+  }
+
+  // One audit row per valid PR — bulk insert chunked.
+  for (let i = 0; i < validIds.length; i += ID_CHUNK) {
+    const chunk = validIds.slice(i, i + ID_CHUNK);
+    const auditRows = chunk.map((id) => ({
+      txn_id: id,
+      action: "force_confirm" as const,
+      prior_state: "pending" as const,
+      new_state: "confirmed" as const,
+      justification,
+      acted_by: session.userId,
+    }));
+    const { error: auditErr } = await supabase
+      .from("recon_manual_actions")
+      .insert(auditRows);
+    if (auditErr) return { status: "error", message: auditErr.message };
+  }
+
+  // Bulk state update — chunked.
+  for (let i = 0; i < validIds.length; i += ID_CHUNK) {
+    const chunk = validIds.slice(i, i + ID_CHUNK);
+    const { error: stateErr } = await supabase
+      .from("recon_transactions")
+      .update({ state: "confirmed" })
+      .in("id", chunk);
+    if (stateErr) {
+      return {
+        status: "ok",
+        confirmedCount: 0,
+        skippedCount,
+        message: `Audit rows written but state update failed: ${stateErr.message}. Click Recompute to heal.`,
+      };
+    }
+  }
+
+  revalidatePath(`/recon/accounts/${args.accountId}`);
+  return {
+    status: "ok",
+    confirmedCount: validIds.length,
+    skippedCount,
+  };
+}

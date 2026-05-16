@@ -18,7 +18,9 @@ import { formatDate, formatMinorUSD, lastWorkingDays } from "@/lib/recon/format"
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 import { BackfillButton } from "./backfill-button";
+import { BulkActionBar } from "./bulk-action-bar";
 import { BulkConfirmBatchButton } from "./bulk-confirm-batch-button";
+import { BulkSelectionProvider } from "./bulk-selection-context";
 import { LoanCreditRow } from "./loan-credit-row";
 import { MatchToPRButton } from "./match-to-pr-button";
 import { RecomputeButton } from "./recompute-button";
@@ -687,6 +689,7 @@ export default async function AccountDetailPage({
 
   return (
     <OperatorShell session={session}>
+      <BulkSelectionProvider>
       <header className="mb-8 flex flex-wrap items-end justify-between gap-4">
         <div>
           <div className="flex items-center gap-2 text-sm text-fg-muted">
@@ -1002,6 +1005,7 @@ export default async function AccountDetailPage({
                 <thead className="text-left text-xs uppercase tracking-wide text-fg-subtle">
                   <tr>
                     <th className="pb-3 pr-2 sr-only">Expand</th>
+                    <th className="pb-3 pr-2 sr-only">Select</th>
                     <SortHeader col="posted_at" label="Date" sort={sort} dir={dir} accountId={accountId} qs={baseQS} />
                     <SortHeader col="code" label="Code" sort={sort} dir={dir} accountId={accountId} qs={baseQS} />
                     <SortHeader col="description" label="Payer" sort={sort} dir={dir} accountId={accountId} qs={baseQS} />
@@ -1085,6 +1089,16 @@ export default async function AccountDetailPage({
                         prBatchSummary={ref ? prBatchSummary.get(ref) : undefined}
                       />
                     );
+                    // Bulk-selectable iff this is a pending PR. Other rows
+                    // (rejected, confirmed, 4C, 4E) don't have a bulk action
+                    // path and render an empty checkbox cell.
+                    const selectable =
+                      row.code === "PR" && row.state === "pending"
+                        ? {
+                            id: row.id as string,
+                            amountMinor: BigInt(String(row.credit_minor)),
+                          }
+                        : undefined;
                     return (
                       <LoanCreditRow
                         key={row.id}
@@ -1092,6 +1106,7 @@ export default async function AccountDetailPage({
                         cells={cells}
                         detail={detail}
                         cellCount={7}
+                        selectable={selectable}
                       />
                     );
                   })}
@@ -1134,6 +1149,9 @@ export default async function AccountDetailPage({
           </div>
         )}
       </Card>
+
+      <BulkActionBar accountId={accountId} />
+      </BulkSelectionProvider>
     </OperatorShell>
   );
 }
