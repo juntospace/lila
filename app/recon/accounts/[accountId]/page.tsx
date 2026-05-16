@@ -18,6 +18,7 @@ import { formatDate, formatMinorUSD, lastWorkingDays } from "@/lib/recon/format"
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 import { BackfillButton } from "./backfill-button";
+import { BulkConfirmBatchButton } from "./bulk-confirm-batch-button";
 import { LoanCreditRow } from "./loan-credit-row";
 import { MatchToPRButton } from "./match-to-pr-button";
 import { RecomputeButton } from "./recompute-button";
@@ -397,21 +398,23 @@ export default async function AccountDetailPage({
   // Used by the row detail panel to render the right confirmation reason
   // for confirmed PRs (batch-link vs manual).
   const consumedBatchRefs = new Set<string>();
-  // PR-batch summary per Referencia: { rejected, confirmed, pending, total }.
-  // Shown in the row detail panel so operators can quickly cross-check the
-  // algorithm against a manual reconciliation ("this PR is in batch X,
-  // which has K rejected + L confirmed + M pending PRs total").
+  // PR-batch summary per Referencia: { rejected, confirmed, pending, total }
+  // plus pendingAmountMinor + earliestPostedAt for the pending-batches list.
+  // Used by both the row detail panel (sibling state breakdown) and the
+  // dedicated "Pending PR batches" card.
   type PrBatchSummary = {
     total: number;
     rejected: number;
     confirmed: number;
     pending: number;
+    pendingAmountMinor: bigint;
+    earliestPostedAt: string | null;
   };
   const prBatchSummary = new Map<string, PrBatchSummary>();
   {
     const { data: accountPrRows } = await supabase
       .from("recon_transactions")
-      .select("id, rail_native_ref, state")
+      .select("id, rail_native_ref, state, credit_minor, posted_at")
       .eq("account_id", accountId)
       .eq("code", "PR");
     const refByPrId = new Map<string, string | null>();
@@ -424,12 +427,21 @@ export default async function AccountDetailPage({
           rejected: 0,
           confirmed: 0,
           pending: 0,
+          pendingAmountMinor: 0n,
+          earliestPostedAt: null as string | null,
         };
         s.total++;
         const state = r.state as string;
+        const postedAt = r.posted_at as string;
+        if (!s.earliestPostedAt || postedAt < s.earliestPostedAt) {
+          s.earliestPostedAt = postedAt;
+        }
         if (state === "rejected") s.rejected++;
         else if (state === "confirmed") s.confirmed++;
-        else if (state === "pending") s.pending++;
+        else if (state === "pending") {
+          s.pending++;
+          s.pendingAmountMinor += BigInt(String(r.credit_minor));
+        }
         prBatchSummary.set(ref, s);
       }
     }
@@ -749,6 +761,103 @@ export default async function AccountDetailPage({
           </CardBody>
         </Card>
       )}
+
+      {/* Pending PR batches — Referencias with ≥1 PR still in `pending`.
+          Each row offers a "Confirm batch" action that flips every
+          pending PR in that Referencia to `confirmed` in one shot. */}
+      {(() => {
+        const pendingBatches = Array.from(prBatchSummary.entries())
+          .filter(([, s]) => s.pending > 0)
+          .sort((a, b) => {
+            const da = a[1].earliestPostedAt ?? "";
+            const db = b[1].earliestPostedAt ?? "";
+            if (da !== db) return da < db ? -1 : 1;
+            return a[0] < b[0] ? -1 : 1;
+          });
+        if (pendingBatches.length === 0) return null;
+        const totalPendingPrs = pendingBatches.reduce(
+          (acc, [, s]) => acc + s.pending,
+          0,
+        );
+        const totalPendingMinor = pendingBatches.reduce(
+          (acc, [, s]) => acc + s.pendingAmountMinor,
+          0n,
+        );
+        return (
+          <Card className="mt-6 border-info/40">
+            <CardHeader>
+              <CardTitle>
+                Pending PR batches ({pendingBatches.length} batch
+                {pendingBatches.length === 1 ? "" : "es"} ·{" "}
+                {totalPendingPrs} PR{totalPendingPrs === 1 ? "" : "s"} ·{" "}
+                {formatMinorUSD(totalPendingMinor)})
+              </CardTitle>
+              <CardDescription>
+                Referencias with PRs still awaiting confirmation. Operator
+                can confirm an entire batch when the bank has indicated no
+                more DAs will arrive (e.g. end-of-day cutoff passed).
+                Otherwise leave them — they&apos;ll auto-confirm if a future
+                file&apos;s DA batch links to them.
+              </CardDescription>
+            </CardHeader>
+            <CardBody>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="text-left text-xs uppercase tracking-wide text-fg-subtle">
+                    <tr>
+                      <th className="pb-3 pr-4">Earliest posted</th>
+                      <th className="pb-3 pr-4">Referencia</th>
+                      <th className="pb-3 pr-4 text-right">Pending PRs</th>
+                      <th className="pb-3 pr-4 text-right">Pending amount</th>
+                      <th className="pb-3 pr-4">Batch state</th>
+                      <th className="pb-3">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border-subtle">
+                    {pendingBatches.map(([ref, summary]) => (
+                      <tr key={ref}>
+                        <td className="py-3 pr-4 text-fg-muted">
+                          {summary.earliestPostedAt
+                            ? formatDate(summary.earliestPostedAt)
+                            : "—"}
+                        </td>
+                        <td className="py-3 pr-4 font-mono text-xs text-fg">
+                          {ref}
+                        </td>
+                        <td className="py-3 pr-4 text-right tabular-nums text-fg">
+                          {summary.pending}
+                          <span className="text-fg-subtle"> / {summary.total}</span>
+                        </td>
+                        <td className="py-3 pr-4 text-right font-medium tabular-nums text-fg">
+                          {formatMinorUSD(summary.pendingAmountMinor)}
+                        </td>
+                        <td className="py-3 pr-4 text-xs text-fg-muted">
+                          <span className="text-warning">{summary.rejected}</span>
+                          {" rej · "}
+                          <span className="text-success">{summary.confirmed}</span>
+                          {" conf · "}
+                          <span className="text-info">{summary.pending}</span>
+                          {" pend"}
+                        </td>
+                        <td className="py-3 align-top">
+                          <BulkConfirmBatchButton
+                            accountId={accountId}
+                            railNativeRef={ref}
+                            pendingCount={summary.pending}
+                            pendingAmountLabel={formatMinorUSD(
+                              summary.pendingAmountMinor,
+                            )}
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </CardBody>
+          </Card>
+        );
+      })()}
 
       <Card className="mt-8">
         <CardHeader className="flex flex-wrap items-center justify-between gap-3">
