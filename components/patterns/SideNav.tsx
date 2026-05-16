@@ -2,13 +2,19 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { FileSpreadsheet, LayoutDashboard, UserCircle2 } from "lucide-react";
+import {
+  ClipboardList,
+  FileSpreadsheet,
+  LayoutDashboard,
+  UserCircle2,
+} from "lucide-react";
 
 import { cn } from "@/lib/utils/cn";
 
 const NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/recon/upload", label: "Reconciliation", icon: FileSpreadsheet },
+  { href: "/recon/audit", label: "Operator audit", icon: ClipboardList },
   { href: "/profile", label: "Profile", icon: UserCircle2 },
 ] as const;
 
