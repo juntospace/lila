@@ -497,10 +497,27 @@ export default async function AccountDetailPage({
     posted_at: string;
     state: string;
     description: string;
+    rail_native_ref: string | null;
   };
   type ClosestMatch = {
     count: number;
-    closest: { posted_at: string; state: string } | null;
+    pairedCount: number;
+    unpairedCount: number;
+    closest: {
+      posted_at: string;
+      state: string;
+      ref: string | null;
+      paired: boolean;
+      /** Snapshot of the closest PR's batch state at this moment. Helps
+       *  the operator decide whether a manual pair is reasonable
+       *  (the batch may already be locked to a different DA batch). */
+      batchSummary: {
+        total: number;
+        rejected: number;
+        confirmed: number;
+        pending: number;
+      } | null;
+    } | null;
     /** UNPAIRED candidates the operator can manually match this DA to. */
     pickable: CandidatePR[];
   };
@@ -511,7 +528,9 @@ export default async function AccountDetailPage({
     );
     const { data: candidatePool } = await supabase
       .from("recon_transactions")
-      .select("id, posted_at, description, state, credit_minor")
+      .select(
+        "id, posted_at, description, state, credit_minor, rail_native_ref",
+      )
       .eq("account_id", accountId)
       .eq("code", "PR")
       .in("credit_minor", uniqueAmounts)
@@ -538,7 +557,13 @@ export default async function AccountDetailPage({
     for (const da of unmatchedDAs) {
       const payerRaw = da.payer_name_raw as string | null;
       if (!payerRaw) {
-        closestByDaId.set(da.id, { count: 0, closest: null, pickable: [] });
+        closestByDaId.set(da.id, {
+          count: 0,
+          pairedCount: 0,
+          unpairedCount: 0,
+          closest: null,
+          pickable: [],
+        });
         continue;
       }
       const target = normalizeName(payerRaw);
@@ -557,15 +582,36 @@ export default async function AccountDetailPage({
           posted_at: m.posted_at as string,
           state: m.state as string,
           description: m.description as string,
+          rail_native_ref: (m.rail_native_ref as string | null) ?? null,
         }));
+      const pairedCount = matches.filter((m) =>
+        pairedPrIdSet.has(m.id as string),
+      ).length;
+      const unpairedCount = matches.length - pairedCount;
+      let closest: ClosestMatch["closest"] = null;
+      if (first) {
+        const ref = (first.rail_native_ref as string | null) ?? null;
+        const summary = ref ? prBatchSummary.get(ref) : undefined;
+        closest = {
+          posted_at: first.posted_at as string,
+          state: first.state as string,
+          ref,
+          paired: pairedPrIdSet.has(first.id as string),
+          batchSummary: summary
+            ? {
+                total: summary.total,
+                rejected: summary.rejected,
+                confirmed: summary.confirmed,
+                pending: summary.pending,
+              }
+            : null,
+        };
+      }
       closestByDaId.set(da.id, {
         count: matches.length,
-        closest: first
-          ? {
-              posted_at: first.posted_at as string,
-              state: first.state as string,
-            }
-          : null,
+        pairedCount,
+        unpairedCount,
+        closest,
         pickable,
       });
     }
@@ -1243,19 +1289,63 @@ function KpiCard({
 function ClosestPRCell({
   match,
 }: {
-  match: { count: number; closest: { posted_at: string; state: string } | null } | undefined;
+  match:
+    | {
+        count: number;
+        pairedCount: number;
+        unpairedCount: number;
+        closest: {
+          posted_at: string;
+          state: string;
+          ref: string | null;
+          paired: boolean;
+          batchSummary: {
+            total: number;
+            rejected: number;
+            confirmed: number;
+            pending: number;
+          } | null;
+        } | null;
+      }
+    | undefined;
 }) {
   if (!match || match.count === 0) {
     return <span className="text-fg-subtle">No matching PR found</span>;
   }
   const c = match.closest!;
-  const tone =
-    c.state === "rejected" ? "text-warning" : "text-info";
-  const reason = c.state === "rejected" ? "already paired" : c.state;
+  const headerTone = c.paired ? "text-warning" : "text-info";
   return (
-    <span className={tone}>
-      {match.count} PR{match.count === 1 ? "" : "s"} · oldest {formatDate(c.posted_at)} ({reason})
-    </span>
+    <div className="space-y-0.5">
+      <div className={headerTone}>
+        {match.count} candidate{match.count === 1 ? "" : "s"}
+        {match.unpairedCount > 0 && match.pairedCount > 0
+          ? ` · ${match.unpairedCount} unpaired, ${match.pairedCount} paired`
+          : c.paired
+            ? " · already paired"
+            : ` · ${c.state}`}
+      </div>
+      <div className="text-xs text-fg-muted">
+        Closest: {formatDate(c.posted_at)}
+        {c.ref ? (
+          <>
+            {" · ref "}
+            <code className="font-mono text-[11px] text-fg">{c.ref}</code>
+          </>
+        ) : null}
+      </div>
+      {c.batchSummary && (
+        <div className="text-[11px] text-fg-subtle">
+          Batch: {c.batchSummary.total} PR
+          {c.batchSummary.total === 1 ? "" : "s"} ·{" "}
+          <span className="text-warning">{c.batchSummary.rejected}</span> rej ·{" "}
+          <span className="text-success">{c.batchSummary.confirmed}</span> conf ·{" "}
+          <span className={c.batchSummary.pending > 0 ? "text-info" : ""}>
+            {c.batchSummary.pending}
+          </span>{" "}
+          pend
+        </div>
+      )}
+    </div>
   );
 }
 
