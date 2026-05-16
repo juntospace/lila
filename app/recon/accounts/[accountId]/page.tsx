@@ -397,15 +397,41 @@ export default async function AccountDetailPage({
   // Used by the row detail panel to render the right confirmation reason
   // for confirmed PRs (batch-link vs manual).
   const consumedBatchRefs = new Set<string>();
+  // PR-batch summary per Referencia: { rejected, confirmed, pending, total }.
+  // Shown in the row detail panel so operators can quickly cross-check the
+  // algorithm against a manual reconciliation ("this PR is in batch X,
+  // which has K rejected + L confirmed + M pending PRs total").
+  type PrBatchSummary = {
+    total: number;
+    rejected: number;
+    confirmed: number;
+    pending: number;
+  };
+  const prBatchSummary = new Map<string, PrBatchSummary>();
   {
     const { data: accountPrRows } = await supabase
       .from("recon_transactions")
-      .select("id, rail_native_ref")
+      .select("id, rail_native_ref, state")
       .eq("account_id", accountId)
       .eq("code", "PR");
     const refByPrId = new Map<string, string | null>();
     for (const r of accountPrRows ?? []) {
-      refByPrId.set(r.id as string, (r.rail_native_ref as string | null) ?? null);
+      const ref = (r.rail_native_ref as string | null) ?? null;
+      refByPrId.set(r.id as string, ref);
+      if (ref) {
+        const s = prBatchSummary.get(ref) ?? {
+          total: 0,
+          rejected: 0,
+          confirmed: 0,
+          pending: 0,
+        };
+        s.total++;
+        const state = r.state as string;
+        if (state === "rejected") s.rejected++;
+        else if (state === "confirmed") s.confirmed++;
+        else if (state === "pending") s.pending++;
+        prBatchSummary.set(ref, s);
+      }
     }
     const accountPrIds = Array.from(refByPrId.keys());
     const ID_CHUNK = 100;
@@ -901,6 +927,7 @@ export default async function AccountDetailPage({
                         manualActions={manualActionsByPrId.get(row.id as string) ?? []}
                         actors={actorById}
                         rejectCandidates={candidateDAsByPrId.get(row.id as string) ?? []}
+                        prBatchSummary={ref ? prBatchSummary.get(ref) : undefined}
                       />
                     );
                     return (

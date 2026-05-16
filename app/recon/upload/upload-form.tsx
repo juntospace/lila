@@ -101,6 +101,32 @@ function ResultPanel({
         </Button>
       </div>
 
+      {/* Hard error banner: DAs that could NOT pair against any PR. In
+          correctly-shaped BAC data this is always 0. Non-zero means the
+          algorithm hit a data anomaly (missing PR, alias gap, name
+          corruption) and operator should investigate before relying on
+          the totals. */}
+      {result.reversalsUnpaired > 0 && (
+        <div className="mt-3 rounded border border-danger/40 bg-danger-subtle px-3 py-2 text-sm text-danger">
+          <strong>{result.reversalsUnpaired}</strong> reversal
+          {result.reversalsUnpaired === 1 ? "" : "s"} could not be paired
+          against any PR. Open the account page and review the
+          &ldquo;Unmatched reversals&rdquo; section.
+        </div>
+      )}
+
+      {/* Soft info banner: PR batches with no DA returns at all. These
+          stay PENDING and may pair with a future file's DA batch, or the
+          operator can manually confirm them. */}
+      {result.prBatchesPending > 0 && (
+        <div className="mt-3 rounded border border-info/40 bg-info-subtle px-3 py-2 text-sm text-info">
+          <strong>{result.prBatchesPending}</strong> PR batch
+          {result.prBatchesPending === 1 ? "" : "es"} pending — no DAs
+          arrived for them. Will auto-confirm if a future file&apos;s DA
+          batch links to them; otherwise an operator can confirm manually.
+        </div>
+      )}
+
       <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4">
         <Stat label="Rows total" value={result.rowsTotal} />
         <Stat label="New" value={result.rowsNew} tone="success" />
@@ -113,12 +139,17 @@ function ResultPanel({
         <Stat
           label="Reversals unpaired"
           value={result.reversalsUnpaired}
-          tone={result.reversalsUnpaired > 0 ? "warning" : "muted"}
+          tone={result.reversalsUnpaired > 0 ? "danger" : "muted"}
         />
         <Stat
           label="PRs confirmed"
           value={result.prsConfirmedThisRun}
           tone="success"
+        />
+        <Stat
+          label="PR batches pending"
+          value={result.prBatchesPending}
+          tone={result.prBatchesPending > 0 ? "info" : "muted"}
         />
         {result.fileWasDuplicate && (
           <Stat label="File" value="duplicate" tone="warning" />
@@ -160,14 +191,18 @@ function Stat({
 }: {
   label: string;
   value: number | string;
-  tone?: "success" | "warning" | "muted";
+  tone?: "success" | "warning" | "info" | "danger" | "muted";
 }) {
   const color =
     tone === "success"
       ? "text-success"
       : tone === "warning"
         ? "text-warning"
-        : "text-fg";
+        : tone === "info"
+          ? "text-info"
+          : tone === "danger"
+            ? "text-danger"
+            : "text-fg";
   return (
     <div>
       <dt className="text-xs uppercase tracking-wide text-fg-subtle">{label}</dt>

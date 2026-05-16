@@ -48,6 +48,7 @@ export function RecomputeButton({ accountId }: { accountId: string }) {
               · wiped={result.stats.autoLinksWiped}
               · DAsIn={result.stats.unpairedDaInput}
               · prBatches={result.stats.prBatchesFound}/{result.stats.prBatchesConsumed}
+              · prPending={result.stats.prBatchesPending}
               · daBatches={result.stats.daBatchesLinked}/{result.stats.daBatchesFound}
               · unmatchedDAs={result.stats.unmatchedDaCount}
               · autoConfirm={result.stats.prsAutoConfirmedByBatch}
