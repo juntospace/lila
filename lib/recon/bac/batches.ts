@@ -1,54 +1,45 @@
 // BAC batch-aware reconciliation primitives.
 //
-// PRs go out in batches (rows sharing a `Referencia`); DAs come back in
-// batches (runs of consecutive sequence numbers across origin banks).
-// In practice a single DA batch is NOT always the bank's response to
-// one cleanly-partitioned PR submission group — BAC commonly mixes
-// returns from multiple PR batches into a single DA batch (recurring
-// payees with the same name appear in both, the bank's processing
-// order varies by rail/priority, etc).
+// PRs go out in batches (rows sharing a `Referencia`); DAs come back
+// in batches (runs of consecutive sequence numbers across origin
+// banks). Each PR batch is the bank's response to a specific
+// submission, so:
 //
-// Matching model — partial-claim:
+//   • Each PR batch is linked to EXACTLY ONE DA batch.
+//   • A single DA batch can be linked to MULTIPLE PR batches.
+//   • The PRs paired in a DA batch's link all come from PR batches
+//     assigned to that link.
+//   • PRs in an assigned PR batch that didn't pair with any DA in the
+//     linked DA batch are CONFIRMED (the bank kept the funds).
+//   • Date sanity: a PR batch can only be linked to a DA batch with
+//     posted_at >= the PR batch's posted_at.
 //
-//   1. Sort PR batches by reference ascending; sort DA batches in
-//      chronological order (date asc, then start sequence asc within
-//      a day).
-//   2. Pass 1 — walk DA batches in order. For each DA in each batch,
-//      find a match anywhere in the global PR pool. "Match" = exact
-//      amount + injected name match. A PR is excluded only if it has
-//      already paired with a prior DA OR if its batch's posted_at is
-//      AFTER this DA batch's date (the bank can't return PRs that
-//      hadn't been sent yet).
-//   3. PRs are individually claimed; PR batches are NOT eagerly
-//      claimed. Each DA grabs only the specific PR it needs.
-//   4. Pass 2 — post-hoc assignment. Each PR batch that had at least
-//      one pairing is "assigned" to the DA batch that paired the
-//      MOST of its PRs (the natural owner). Tie-break by earliest DA
-//      batch in chronological order.
-//   5. Pass 3 — build BatchLinks. Each DA batch's link contains: its
-//      pairings, the PR batches assigned to it in pass 2, the un-paired
-//      PRs in those batches as `confirmedPrIds`, and any DAs that
-//      didn't pair anywhere as `unmatchedDaIds`.
-//   6. PR batches with zero pairings remain unconsumed — they may
-//      pair with DAs in a later file's upload, or stay pending for
-//      operator confirmation.
+// Matching model — day-by-day bipartite assignment:
 //
-// Why partial-claim and not strict ref-order consume-on-walk:
-//   - On some days a DA batch mixes returns from PR batches in BOTH
-//     submission groups (Group A and Group B). Strict consume-on-walk
-//     drags the first DA batch into the second group's PR batches
-//     while searching for matches, exhausting them before the second
-//     DA batch can walk. Partial-claim avoids the over-claim because
-//     each DA only takes the one PR it needs.
+//   1. Process DA batches in chronological order, grouped by day.
+//   2. For each day, candidate PR batches = all PR batches with
+//      posted_at <= today AND not yet claimed by any prior link.
+//   3. Solve the bipartite many-to-one assignment: which PR batch goes
+//      with which DA batch (or stays unassigned for tomorrow)?
+//      Score = total DAs paired. Optimal assignment maximizes pairings.
+//      Brute force when (N+1)^M <= 200k; otherwise a greedy fallback.
+//   4. Lock the assignment. Within each (DA batch, assigned PR batches)
+//      group, do greedy DA→PR matching (amount + injected name match).
+//   5. Un-paired PRs in claimed batches → auto-confirmed. Un-paired
+//      DAs → unmatchedDaIds (data error signal). PR batches not
+//      assigned today → carry forward to the next day's pool.
 //
-// In typical BAC data DA.posted_at == PR.posted_at, occasionally
-// PR.posted_at + 1 working day; the algorithm doesn't enforce a strict
-// upper bound — only the lower bound (DA.day >= PR.day).
+// Why bipartite assignment vs naive greedy: BAC's actual link from
+// PR-submission to DA-batch isn't always lower-ref-to-lower-seq. Some
+// days the LATER PR submission gets the EARLIER DA batch (different
+// rails / priorities). Naive greedy mis-assigns recurring-payee PRs
+// across the two groups. Bipartite assignment finds the partition that
+// maximizes pairings — equivalent to your manual deductive process of
+// confirming batch links from unambiguous matches first.
 //
-// Critical invariant: every DA in every DA batch must end up paired.
-// Any DA still un-paired at the end is surfaced via
-// `BatchLink.unmatchedDaIds`. The recompute layer reports the count;
-// it does not silently drop the DAs.
+// Critical invariant: every DA in every DA batch must end up paired
+// under correct data. Any DA still un-paired is surfaced via
+// `BatchLink.unmatchedDaIds`. The recompute layer reports the count.
 //
 // This module only does the matching math — pure functions, no DB or
 // classifier coupling. The recompute layer threads these into
@@ -262,85 +253,181 @@ export interface LinkOptions {
 }
 
 /**
- * Pair each DA in `daBatch` against the first available PR (across
- * `availablePRBatches`) whose amount + name match. Skips PRs already
- * in `usedPrIds` (mutated to include each successful pairing) and PRs
- * in batches posted AFTER `daBatch.posted_at` (date sanity — bank
- * can't return PRs not yet sent).
- *
- * Returns pairings + unmatched DA ids + the set of PR batch refs that
- * received at least one pairing. Batch claim and `confirmedPrIds` are
- * decided post-hoc by `linkAllBatches`; this helper only does the
- * per-DA matching pass.
+ * Cap on enumeration scenarios. Above this, fall back to greedy. Real
+ * BAC data has at most ~10 PR batches per day with 2-3 DA batches per
+ * day, well under the cap. Anything larger is a data anomaly worth
+ * investigating manually.
  */
-export function tryLinkDABatch(
+const ASSIGNMENT_ENUM_CAP = 200_000;
+
+/**
+ * Greedy DA→PR matching inside a fixed `(daBatch, prBatches)` group.
+ * Returns pairings + ids of DAs that didn't find a match. Mutates
+ * `usedPrIds` to include every successful pairing.
+ */
+function matchWithinGroup(
   daBatch: DABatch,
-  availablePRBatches: PRBatch[],
+  prBatches: PRBatch[],
   usedPrIds: Set<string>,
   options: LinkOptions,
-): BatchLink {
+): { pairings: BatchPairing[]; unmatchedDaIds: string[] } {
   const pairings: BatchPairing[] = [];
   const unmatchedDaIds: string[] = [];
-  const batchRefs = new Set<string>();
-
   for (const da of daBatch.rows) {
-    const match = findMatchAcrossBatches(
-      da,
-      availablePRBatches,
-      daBatch.posted_at,
-      usedPrIds,
-      options,
-    );
-    if (match) {
-      pairings.push({ daId: da.id, prId: match.pr.id });
-      usedPrIds.add(match.pr.id);
-      batchRefs.add(match.batchRef);
+    if (!da.payerNameRaw) {
+      unmatchedDaIds.push(da.id);
+      continue;
+    }
+    const targetName = options.normalize(da.payerNameRaw);
+    let found: PRRowForBatch | null = null;
+    outer: for (const prBatch of prBatches) {
+      for (const pr of prBatch.rows) {
+        if (usedPrIds.has(pr.id)) continue;
+        if (pr.amountMinor !== da.amountMinor) continue;
+        const prName = options.extractPRPayer(pr.description);
+        if (!prName) continue;
+        if (options.nameMatcher(options.normalize(prName), targetName)) {
+          found = pr;
+          break outer;
+        }
+      }
+    }
+    if (found) {
+      pairings.push({ daId: da.id, prId: found.id });
+      usedPrIds.add(found.id);
     } else {
       unmatchedDaIds.push(da.id);
     }
   }
-
-  return {
-    daBatchId: daBatch.id,
-    prBatchReferences: Array.from(batchRefs),
-    pairings,
-    confirmedPrIds: [], // filled in by linkAllBatches' post-hoc pass
-    unmatchedDaIds,
-  };
+  return { pairings, unmatchedDaIds };
 }
 
 /**
- * Walk PR batches in order; for each, walk its PRs in order; return
- * the first PR whose amount + name match `da` and isn't already in
- * `usedPrIds`. PR batches posted after `daPostedAt` are skipped (date
- * sanity). Returns null for DAs without a payer name (can't pair).
+ * Score a hypothetical assignment without mutating state. Returns the
+ * total number of DAs that would pair if PR batches were partitioned
+ * per `assignment`. Used by `solveAssignment` to compare scenarios.
  */
-function findMatchAcrossBatches(
-  da: DABatch["rows"][number],
+function scoreAssignment(
   prBatches: PRBatch[],
-  daPostedAt: string,
+  daBatches: DABatch[],
+  assignment: Map<string, string>,
   usedPrIds: Set<string>,
   options: LinkOptions,
-): { pr: PRRowForBatch; batchRef: string } | null {
-  if (!da.payerNameRaw) return null;
-  const targetName = options.normalize(da.payerNameRaw);
-  for (const prBatch of prBatches) {
-    if (prBatch.posted_at > daPostedAt) continue;
-    for (const pr of prBatch.rows) {
-      if (usedPrIds.has(pr.id)) continue;
-      if (pr.amountMinor !== da.amountMinor) continue;
-      const prName = options.extractPRPayer(pr.description);
-      if (!prName) continue;
-      if (options.nameMatcher(options.normalize(prName), targetName)) {
-        return { pr, batchRef: prBatch.reference };
+): number {
+  const scratch = new Set(usedPrIds);
+  let total = 0;
+  for (const daBatch of daBatches) {
+    const assignedPRs = prBatches.filter(
+      (b) => assignment.get(b.reference) === daBatch.id,
+    );
+    const res = matchWithinGroup(daBatch, assignedPRs, scratch, options);
+    total += res.pairings.length;
+  }
+  return total;
+}
+
+/**
+ * Solve the bipartite many-to-one assignment: each PR batch picks one
+ * DA batch (or stays unassigned for a later day). Maximises total
+ * pairings. Brute-force enumeration when (N+1)^M is tractable;
+ * greedy-by-pair-score fallback above the cap.
+ *
+ * Date sanity is enforced: a PR batch can't be assigned to a DA batch
+ * with posted_at < the PR batch's posted_at.
+ */
+function solveAssignment(
+  prBatches: PRBatch[],
+  daBatches: DABatch[],
+  usedPrIds: Set<string>,
+  options: LinkOptions,
+): Map<string, string> {
+  const M = prBatches.length;
+  const N = daBatches.length;
+  if (M === 0 || N === 0) return new Map();
+
+  const totalScenarios = Math.pow(N + 1, M);
+  if (totalScenarios > ASSIGNMENT_ENUM_CAP) {
+    return solveAssignmentGreedy(prBatches, daBatches, usedPrIds, options);
+  }
+
+  let bestAssignment = new Map<string, string>();
+  let bestScore = -1;
+  let bestUnassigned = M + 1;
+
+  for (let scenario = 0; scenario < totalScenarios; scenario++) {
+    const assignment = new Map<string, string>();
+    let unassigned = 0;
+    let s = scenario;
+    let valid = true;
+    for (let i = 0; i < M; i++) {
+      const choice = s % (N + 1);
+      s = Math.floor(s / (N + 1));
+      if (choice < N) {
+        const da = daBatches[choice];
+        if (prBatches[i].posted_at > da.posted_at) {
+          valid = false;
+          break;
+        }
+        assignment.set(prBatches[i].reference, da.id);
+      } else {
+        unassigned++;
       }
     }
+    if (!valid) continue;
+    const score = scoreAssignment(
+      prBatches,
+      daBatches,
+      assignment,
+      usedPrIds,
+      options,
+    );
+    // Primary: max pairings. Secondary: minimum unassigned PR batches
+    // (assigning more PR batches today reduces carryover load).
+    if (
+      score > bestScore ||
+      (score === bestScore && unassigned < bestUnassigned)
+    ) {
+      bestScore = score;
+      bestUnassigned = unassigned;
+      bestAssignment = assignment;
+    }
   }
-  return null;
+  return bestAssignment;
+}
+
+/**
+ * Greedy fallback when brute force is too expensive. For each
+ * (PR batch, DA batch) pair, compute how many of the DA batch's DAs
+ * could pair against the PR batch's PRs alone. Sort pairs by descending
+ * score. Walk: assign PR batch → DA batch IF the PR batch isn't already
+ * assigned and the score is non-zero. This is suboptimal in
+ * pathological cases but handles the common cases fine.
+ */
+function solveAssignmentGreedy(
+  prBatches: PRBatch[],
+  daBatches: DABatch[],
+  usedPrIds: Set<string>,
+  options: LinkOptions,
+): Map<string, string> {
+  const scores: { prRef: string; daId: string; score: number }[] = [];
+  for (const p of prBatches) {
+    for (const d of daBatches) {
+      if (p.posted_at > d.posted_at) continue;
+      const scratch = new Set(usedPrIds);
+      const score = matchWithinGroup(d, [p], scratch, options).pairings.length;
+      if (score > 0) scores.push({ prRef: p.reference, daId: d.id, score });
+    }
+  }
+  scores.sort((a, b) => b.score - a.score);
+  const out = new Map<string, string>();
+  for (const { prRef, daId } of scores) {
+    if (!out.has(prRef)) out.set(prRef, daId);
+  }
+  return out;
 }
 
 // =============================================================
-// Driver: link as many DA batches as possible
+// Driver
 // =============================================================
 
 export interface BatchLinkingResult {
@@ -351,26 +438,13 @@ export interface BatchLinkingResult {
 }
 
 /**
- * Three-pass orchestrator over all DA batches:
- *
- *   Pass 1 — Pair each DA against any available PR (partial-claim).
- *     Walks DA batches in chronological order; for each DA finds the
- *     first matching PR across the global pool. Records pairings per
- *     DA batch; PRs themselves are individually claimed (not batches).
- *
- *   Pass 2 — Post-hoc batch assignment. For each PR batch that had at
- *     least one pairing, assign it to the DA batch that paired the
- *     MOST of its PRs (the natural owner). Tie-break by earliest DA
- *     batch in chronological order.
- *
- *   Pass 3 — Build BatchLinks. Each DA batch's link carries: its own
- *     pairings, the PR batches it was assigned in pass 2, the un-paired
- *     PRs in those batches as `confirmedPrIds`, and any DAs that didn't
- *     pair anywhere as `unmatchedDaIds`.
- *
- *   PR batches with zero pairings remain unconsumed — they may pair
- *   with DAs in a future file's upload, or stay pending for operator
- *   confirmation.
+ * Process DA batches day-by-day in chronological order. Each day:
+ *   - Candidate PR batches = all PR batches with posted_at <= today
+ *     AND not yet claimed by a prior day's link.
+ *   - Solve the bipartite assignment for today's DA batches.
+ *   - Build a BatchLink per DA batch with the assigned PR batches.
+ *   - Un-paired PRs in claimed batches → confirmedPrIds.
+ *   - PR batches not assigned today → carry forward to the next day.
  */
 export function linkAllBatches(
   prBatches: PRBatch[],
@@ -378,70 +452,76 @@ export function linkAllBatches(
   options: LinkOptions,
 ): BatchLinkingResult {
   const usedPrIds = new Set<string>();
-  const pass1Links: BatchLink[] = [];
-
-  // Pass 1: pair each DA against the global pool.
-  for (const daBatch of daBatches) {
-    pass1Links.push(tryLinkDABatch(daBatch, prBatches, usedPrIds, options));
-  }
-
-  // Pass 2: count pairings per (prBatchRef, daBatchId) so we can pick
-  // the DA batch that "owns" each touched PR batch.
-  const prToBatchRef = new Map<string, string>();
-  for (const prBatch of prBatches) {
-    for (const pr of prBatch.rows) prToBatchRef.set(pr.id, prBatch.reference);
-  }
-  const countsByPrBatch = new Map<string, Map<string, number>>();
-  const daBatchOrder = new Map<string, number>();
-  for (let i = 0; i < daBatches.length; i++) daBatchOrder.set(daBatches[i].id, i);
-  for (const link of pass1Links) {
-    for (const p of link.pairings) {
-      const prBatchRef = prToBatchRef.get(p.prId);
-      if (!prBatchRef) continue;
-      const sub = countsByPrBatch.get(prBatchRef) ?? new Map<string, number>();
-      sub.set(link.daBatchId, (sub.get(link.daBatchId) ?? 0) + 1);
-      countsByPrBatch.set(prBatchRef, sub);
-    }
-  }
-  const prBatchOwner = new Map<string, string>();
-  for (const [prBatchRef, counts] of countsByPrBatch) {
-    let bestDaBatch = "";
-    let bestCount = -1;
-    let bestOrdinal = Infinity;
-    for (const [daBatchId, count] of counts) {
-      const ord = daBatchOrder.get(daBatchId) ?? Infinity;
-      if (count > bestCount || (count === bestCount && ord < bestOrdinal)) {
-        bestCount = count;
-        bestDaBatch = daBatchId;
-        bestOrdinal = ord;
-      }
-    }
-    prBatchOwner.set(prBatchRef, bestDaBatch);
-  }
-
-  // Pass 3: build final links with consumedRefs + confirmedPrIds.
+  const claimedRefs = new Set<string>();
   const finalLinks: BatchLink[] = [];
-  for (const link of pass1Links) {
-    const consumedRefs: string[] = [];
-    const confirmedPrIds: string[] = [];
-    for (const prBatch of prBatches) {
-      if (prBatchOwner.get(prBatch.reference) !== link.daBatchId) continue;
-      consumedRefs.push(prBatch.reference);
-      for (const pr of prBatch.rows) {
-        if (!usedPrIds.has(pr.id)) confirmedPrIds.push(pr.id);
-      }
+
+  // Sort DA batches by (date, startSequence) — already done by
+  // groupDABatches, but we don't trust the caller to have done it.
+  const sortedDAs = [...daBatches].sort((a, b) => {
+    if (a.posted_at !== b.posted_at) return a.posted_at < b.posted_at ? -1 : 1;
+    return a.startSequence - b.startSequence;
+  });
+
+  let i = 0;
+  while (i < sortedDAs.length) {
+    const sameDate = sortedDAs[i].posted_at;
+    const dayDAs: DABatch[] = [];
+    while (i < sortedDAs.length && sortedDAs[i].posted_at === sameDate) {
+      dayDAs.push(sortedDAs[i]);
+      i++;
     }
-    finalLinks.push({
-      daBatchId: link.daBatchId,
-      prBatchReferences: consumedRefs,
-      pairings: link.pairings,
-      confirmedPrIds,
-      unmatchedDaIds: link.unmatchedDaIds,
-    });
+
+    const candidates = prBatches
+      .filter(
+        (p) => !claimedRefs.has(p.reference) && p.posted_at <= sameDate,
+      )
+      .sort((a, b) => (a.reference < b.reference ? -1 : 1));
+
+    const assignment = solveAssignment(candidates, dayDAs, usedPrIds, options);
+
+    for (const daBatch of dayDAs) {
+      const assignedPRs = candidates.filter(
+        (p) => assignment.get(p.reference) === daBatch.id,
+      );
+      const { pairings, unmatchedDaIds } = matchWithinGroup(
+        daBatch,
+        assignedPRs,
+        usedPrIds,
+        options,
+      );
+      // Post-process: a PR batch that contributed ZERO pairings to its
+      // assigned DA batch isn't truly linked — leave it unconsumed so
+      // it can carry forward or be operator-handled. Only the batches
+      // that produced at least one pairing become consumed.
+      const pairedPrIds = new Set(pairings.map((p) => p.prId));
+      const contributedRefs = new Set<string>();
+      for (const prBatch of assignedPRs) {
+        if (prBatch.rows.some((pr) => pairedPrIds.has(pr.id))) {
+          contributedRefs.add(prBatch.reference);
+        }
+      }
+      const consumedRefs: string[] = [];
+      const confirmedPrIds: string[] = [];
+      for (const prBatch of assignedPRs) {
+        if (!contributedRefs.has(prBatch.reference)) continue;
+        consumedRefs.push(prBatch.reference);
+        claimedRefs.add(prBatch.reference);
+        for (const pr of prBatch.rows) {
+          if (!usedPrIds.has(pr.id)) confirmedPrIds.push(pr.id);
+        }
+      }
+      finalLinks.push({
+        daBatchId: daBatch.id,
+        prBatchReferences: consumedRefs,
+        pairings,
+        confirmedPrIds,
+        unmatchedDaIds,
+      });
+    }
   }
 
   const unconsumedPRBatchReferences = prBatches
-    .filter((b) => !prBatchOwner.has(b.reference))
+    .filter((b) => !claimedRefs.has(b.reference))
     .map((b) => b.reference);
 
   return { links: finalLinks, unconsumedPRBatchReferences };
