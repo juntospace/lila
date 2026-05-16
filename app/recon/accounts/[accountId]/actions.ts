@@ -710,3 +710,97 @@ export async function manuallyRejectPR(args: {
   }
   return { status: "ok" };
 }
+
+// =============================================================
+// bulkConfirmPendingBatch
+// =============================================================
+
+export type BulkConfirmBatchResult = {
+  status: "ok" | "error";
+  /** How many PRs in the batch were actually confirmed (≤ requested). */
+  confirmedCount?: number;
+  message?: string;
+};
+
+/**
+ * Confirm every PR that is currently `pending` AND shares the given
+ * `rail_native_ref` (PR batch) on this account. The bank didn't return
+ * DAs for any of them, so the operator declares the whole batch confirmed.
+ *
+ * Writes one `recon_manual_actions` audit row per PR with the same
+ * justification + actor. Updates state in a single chunked UPDATE. Skips
+ * PRs that have already moved (not pending) — those are reported in the
+ * count of confirmed vs requested.
+ */
+export async function bulkConfirmPendingBatch(args: {
+  accountId: string;
+  railNativeRef: string;
+  justification: string;
+}): Promise<BulkConfirmBatchResult> {
+  const session = await requireReconWriter();
+  const supabase = await createSupabaseServerClient();
+
+  const justification = args.justification.trim();
+  if (justification.length < MIN_JUSTIFICATION) {
+    return {
+      status: "error",
+      message: `Justification must be at least ${MIN_JUSTIFICATION} characters.`,
+    };
+  }
+  if (justification.length > MAX_JUSTIFICATION) {
+    return {
+      status: "error",
+      message: `Justification is too long (max ${MAX_JUSTIFICATION}).`,
+    };
+  }
+  if (!args.railNativeRef) {
+    return { status: "error", message: "Missing Referencia." };
+  }
+
+  // Find every pending PR on this account with the given ref.
+  const { data: prs, error: lookupErr } = await supabase
+    .from("recon_transactions")
+    .select("id")
+    .eq("account_id", args.accountId)
+    .eq("code", "PR")
+    .eq("state", "pending")
+    .eq("rail_native_ref", args.railNativeRef);
+  if (lookupErr) return { status: "error", message: lookupErr.message };
+  const prIds = (prs ?? []).map((r) => r.id as string);
+  if (prIds.length === 0) {
+    return {
+      status: "error",
+      message: "No pending PRs match this Referencia. Refresh and try again.",
+    };
+  }
+
+  // Audit rows first — bulk insert.
+  const auditRows = prIds.map((id) => ({
+    txn_id: id,
+    action: "force_confirm" as const,
+    prior_state: "pending" as const,
+    new_state: "confirmed" as const,
+    justification,
+    acted_by: session.userId,
+  }));
+  const { error: auditErr } = await supabase
+    .from("recon_manual_actions")
+    .insert(auditRows);
+  if (auditErr) return { status: "error", message: auditErr.message };
+
+  // State update.
+  const { error: stateErr } = await supabase
+    .from("recon_transactions")
+    .update({ state: "confirmed" })
+    .in("id", prIds);
+  if (stateErr) {
+    return {
+      status: "ok",
+      confirmedCount: 0,
+      message: `Audit rows written but state update failed: ${stateErr.message}. Click Recompute to heal.`,
+    };
+  }
+
+  revalidatePath(`/recon/accounts/${args.accountId}`);
+  return { status: "ok", confirmedCount: prIds.length };
+}
