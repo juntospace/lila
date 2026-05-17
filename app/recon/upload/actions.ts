@@ -12,6 +12,17 @@ import {
   type IngestResult,
 } from "@/lib/recon/bac";
 import { recomputeAccount } from "@/lib/recon/bac/recompute";
+import {
+  BGParseError,
+  ingestBGAchDetailFile,
+  ingestBGStatementFile,
+  isBGAchDetailSheet,
+  isBGStatementSheet,
+  parseBGAchDetail,
+  parseBGStatement,
+  type BGAchDetailIngestResult,
+  type BGStatementIngestResult,
+} from "@/lib/recon/bg";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 // =============================================================
@@ -19,6 +30,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 // =============================================================
 
 const AccountSchema = z.object({
+  rail: z.enum(["bac", "bg"]),
   account_number: z
     .string()
     .trim()
@@ -45,6 +57,7 @@ export async function createBankAccount(
   await requireReconWriter();
 
   const parsed = AccountSchema.safeParse({
+    rail: formData.get("rail") ?? "bac",
     account_number: formData.get("account_number"),
     holder_name: formData.get("holder_name"),
     currency: formData.get("currency") ?? "USD",
@@ -61,7 +74,7 @@ export async function createBankAccount(
 
   const supabase = await createSupabaseServerClient();
   const { error } = await supabase.from("bank_accounts").insert({
-    rail: "bac",
+    rail: parsed.data.rail,
     account_number: parsed.data.account_number,
     holder_name: parsed.data.holder_name,
     currency: parsed.data.currency,
@@ -89,10 +102,32 @@ const UploadSchema = z.object({
   account_id: z.string().uuid("Pick an account."),
 });
 
+export type BACIngestSurface = IngestResult & {
+  rail: "bac";
+  accountLabel?: string;
+};
+
+export type BGStatementIngestSurface = BGStatementIngestResult & {
+  rail: "bg";
+  fileKind: "statement";
+  accountLabel?: string;
+};
+
+export type BGAchDetailIngestSurface = BGAchDetailIngestResult & {
+  rail: "bg";
+  fileKind: "ach_detail";
+  accountLabel?: string;
+};
+
+export type UploadResultSurface =
+  | BACIngestSurface
+  | BGStatementIngestSurface
+  | BGAchDetailIngestSurface;
+
 export type UploadActionState = {
   status: "idle" | "success" | "error";
   message?: string;
-  result?: IngestResult & { accountLabel?: string };
+  result?: UploadResultSurface;
 };
 
 const ALLOWED_MIME = new Set([
@@ -141,23 +176,135 @@ export async function uploadStatement(
   }
 
   const fileBytes = new Uint8Array(await file.arrayBuffer());
+  const accountLabel = `${account.account_number} · ${account.holder_name}`;
 
+  let workbook: XLSX.WorkBook;
+  try {
+    workbook = XLSX.read(fileBytes, { type: "array", cellDates: true });
+  } catch (err) {
+    return {
+      status: "error",
+      message: `Could not read the Excel file: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    };
+  }
+  const firstSheetName = workbook.SheetNames[0];
+  if (!firstSheetName) {
+    return { status: "error", message: "The workbook has no sheets." };
+  }
+
+  // ----- BG rail --------------------------------------------------------
+  if (account.rail === "bg") {
+    if (isBGAchDetailSheet(workbook)) {
+      const name = workbook.SheetNames.find((n) =>
+        /BGPACHRejectedDetailList/i.test(n),
+      )!;
+      let parseResult;
+      try {
+        parseResult = parseBGAchDetail(workbook.Sheets[name]);
+      } catch (err) {
+        if (err instanceof BGParseError) {
+          return { status: "error", message: `BG ACH detail: ${err.message}` };
+        }
+        throw err;
+      }
+      let result: BGAchDetailIngestResult;
+      try {
+        result = await ingestBGAchDetailFile({
+          supabase,
+          accountId: account.id,
+          fileBytes,
+          originalFilename: file.name,
+          uploadedBy: session.userId,
+          parseResult,
+        });
+      } catch (err) {
+        return {
+          status: "error",
+          message: `Ingest failed: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+      revalidatePath("/recon/upload");
+      revalidatePath(`/recon/accounts/${account.id}`);
+      return {
+        status: "success",
+        message: result.fileWasDuplicate
+          ? "Same ACH detail file was already ingested — no new rows."
+          : `Ingested ${result.rowsNew} ACH detail row${result.rowsNew === 1 ? "" : "s"}.`,
+        result: { ...result, rail: "bg", fileKind: "ach_detail", accountLabel },
+      };
+    }
+    if (isBGStatementSheet(workbook)) {
+      const name = workbook.SheetNames.find((n) =>
+        /BGPCheckingMovementsExcel/i.test(n),
+      )!;
+      let parseResult;
+      try {
+        parseResult = parseBGStatement(workbook.Sheets[name]);
+      } catch (err) {
+        if (err instanceof BGParseError) {
+          return { status: "error", message: `BG statement: ${err.message}` };
+        }
+        throw err;
+      }
+      // Sanity: file must match the selected account number. BG numbers
+      // carry dashes; compare digits-only.
+      if (
+        parseResult.header.accountNumber &&
+        parseResult.header.accountNumber.replace(/\D/g, "") !==
+          account.account_number.replace(/\D/g, "")
+      ) {
+        return {
+          status: "error",
+          message: `File is for account ${parseResult.header.accountNumber}, but you picked ${account.account_number}.`,
+        };
+      }
+      let result: BGStatementIngestResult;
+      try {
+        result = await ingestBGStatementFile({
+          supabase,
+          accountId: account.id,
+          fileBytes,
+          originalFilename: file.name,
+          uploadedBy: session.userId,
+          parseResult,
+        });
+      } catch (err) {
+        return {
+          status: "error",
+          message: `Ingest failed: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+      revalidatePath("/recon/upload");
+      revalidatePath(`/recon/accounts/${account.id}`);
+      return {
+        status: "success",
+        message: result.fileWasDuplicate
+          ? "Same statement was already ingested — no new rows."
+          : `Ingested ${result.rowsNew} new statement row${result.rowsNew === 1 ? "" : "s"}.`,
+        result: { ...result, rail: "bg", fileKind: "statement", accountLabel },
+      };
+    }
+    return {
+      status: "error",
+      message:
+        "Unrecognized BG file. Expected a Movimientos statement or a Detalle ACH detail file.",
+    };
+  }
+
+  // ----- BAC rail (default) --------------------------------------------
   let matrix: unknown[][];
   try {
-    // SheetJS handles both .xlsx (OOXML zip) and .xls (legacy OLE compound
-    // document) — BAC's default export is .xls. We pull the first sheet as
-    // an array-of-arrays matching the parser's Cell[][] contract.
-    const workbook = XLSX.read(fileBytes, { type: "array", cellDates: true });
-    const firstSheetName = workbook.SheetNames[0];
-    if (!firstSheetName) {
-      return { status: "error", message: "The workbook has no sheets." };
-    }
-    matrix = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[firstSheetName], {
-      header: 1,
-      raw: true,
-      defval: null,
-      blankrows: true,
-    });
+    matrix = XLSX.utils.sheet_to_json<unknown[]>(
+      workbook.Sheets[firstSheetName],
+      {
+        header: 1,
+        raw: true,
+        defval: null,
+        blankrows: true,
+      },
+    );
   } catch (err) {
     return {
       status: "error",
@@ -169,8 +316,6 @@ export async function uploadStatement(
 
   let parseResult;
   try {
-    // The parser tolerates Cell = string | number | Date | null | undefined,
-    // which is exactly what read-excel-file/node returns.
     parseResult = parseBACSheet(matrix as never);
   } catch (err) {
     if (err instanceof BACParseError) {
@@ -179,7 +324,6 @@ export async function uploadStatement(
     throw err;
   }
 
-  // Sanity check: the file's account number must match the picked account.
   if (
     parseResult.header.accountNumber &&
     parseResult.header.accountNumber.replace(/\D/g, "") !==
@@ -215,10 +359,7 @@ export async function uploadStatement(
     message: result.fileWasDuplicate
       ? "Same file was already ingested — no new rows."
       : `Ingested ${result.rowsNew} new rows.`,
-    result: {
-      ...result,
-      accountLabel: `${account.account_number} · ${account.holder_name}`,
-    },
+    result: { ...result, rail: "bac", accountLabel },
   };
 }
 

@@ -101,11 +101,32 @@ function ResultPanel({
         </Button>
       </div>
 
-      {/* Hard error banner: DAs that could NOT pair against any PR. In
-          correctly-shaped BAC data this is always 0. Non-zero means the
-          algorithm hit a data anomaly (missing PR, alias gap, name
-          corruption) and operator should investigate before relying on
-          the totals. */}
+      {result.rail === "bac" && <BACStats result={result} />}
+      {result.rail === "bg" && result.fileKind === "statement" && (
+        <BGStatementStats result={result} />
+      )}
+      {result.rail === "bg" && result.fileKind === "ach_detail" && (
+        <BGAchDetailStats result={result} />
+      )}
+
+      {result.warnings.length > 0 && (
+        <ul className="mt-3 list-disc space-y-1 pl-5 text-xs text-warning">
+          {result.warnings.map((w, i) => (
+            <li key={i}>{w}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function BACStats({
+  result,
+}: {
+  result: Extract<NonNullable<UploadActionState["result"]>, { rail: "bac" }>;
+}) {
+  return (
+    <>
       {result.reversalsUnpaired > 0 && (
         <div className="mt-3 rounded border border-danger/40 bg-danger-subtle px-3 py-2 text-sm text-danger">
           <strong>{result.reversalsUnpaired}</strong> reversal
@@ -114,10 +135,6 @@ function ResultPanel({
           &ldquo;Unmatched reversals&rdquo; section.
         </div>
       )}
-
-      {/* Soft info banner: PR batches with no DA returns at all. These
-          stay PENDING and may pair with a future file's DA batch, or the
-          operator can manually confirm them. */}
       {result.prBatchesPending > 0 && (
         <div className="mt-3 rounded border border-info/40 bg-info-subtle px-3 py-2 text-sm text-info">
           <strong>{result.prBatchesPending}</strong> PR batch
@@ -172,15 +189,76 @@ function ResultPanel({
           )}
         </div>
       )}
+    </>
+  );
+}
 
-      {result.warnings.length > 0 && (
-        <ul className="mt-3 list-disc space-y-1 pl-5 text-xs text-warning">
-          {result.warnings.map((w, i) => (
-            <li key={i}>{w}</li>
-          ))}
-        </ul>
+function BGStatementStats({
+  result,
+}: {
+  result: Extract<
+    NonNullable<UploadActionState["result"]>,
+    { rail: "bg"; fileKind: "statement" }
+  >;
+}) {
+  return (
+    <>
+      {result.unknownCodeRows > 0 && (
+        <div className="mt-3 rounded border border-warning/40 bg-warning-subtle px-3 py-2 text-sm text-warning">
+          <strong>{result.unknownCodeRows}</strong> row
+          {result.unknownCodeRows === 1 ? "" : "s"} had unfamiliar transaction
+          codes — review them on the account page so we can extend the
+          classifier.
+        </div>
       )}
-    </div>
+      <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4">
+        <Stat label="Rows total" value={result.rowsTotal} />
+        <Stat label="New" value={result.rowsNew} tone="success" />
+        <Stat label="Duplicate" value={result.rowsDuplicate} tone="muted" />
+        <Stat
+          label="Loan inflows"
+          value={result.loanInflowRows}
+          tone="success"
+        />
+        <Stat label="Non-loan" value={result.nonLoanRows} tone="muted" />
+        <Stat
+          label="Unknown codes"
+          value={result.unknownCodeRows}
+          tone={result.unknownCodeRows > 0 ? "warning" : "muted"}
+        />
+        {result.fileWasDuplicate && (
+          <Stat label="File" value="duplicate" tone="warning" />
+        )}
+      </dl>
+    </>
+  );
+}
+
+function BGAchDetailStats({
+  result,
+}: {
+  result: Extract<
+    NonNullable<UploadActionState["result"]>,
+    { rail: "bg"; fileKind: "ach_detail" }
+  >;
+}) {
+  return (
+    <>
+      <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4">
+        <Stat label="Rows total" value={result.rowsTotal} />
+        <Stat label="New" value={result.rowsNew} tone="success" />
+        <Stat label="Duplicate" value={result.rowsDuplicate} tone="muted" />
+        <Stat label="Approved" value={result.approvedRows} tone="success" />
+        <Stat
+          label="Rejected"
+          value={result.rejectedRows}
+          tone={result.rejectedRows > 0 ? "warning" : "muted"}
+        />
+        {result.fileWasDuplicate && (
+          <Stat label="File" value="duplicate" tone="warning" />
+        )}
+      </dl>
+    </>
   );
 }
 
