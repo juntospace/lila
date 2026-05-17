@@ -20,7 +20,20 @@ export function AddAccountForm() {
 
   return (
     <form ref={formRef} action={action} className="space-y-3 border-t border-border-subtle pt-4">
-      <p className="text-xs uppercase tracking-wide text-fg-subtle">Add BAC account</p>
+      <p className="text-xs uppercase tracking-wide text-fg-subtle">Add account</p>
+
+      <div className="space-y-1.5">
+        <Label htmlFor="acct_rail">Rail</Label>
+        <select
+          id="acct_rail"
+          name="rail"
+          defaultValue="bac"
+          className="block w-full rounded border border-border bg-bg-inset px-3 py-2 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+        >
+          <option value="bac">BAC</option>
+          <option value="bg">Banco General</option>
+        </select>
+      </div>
 
       <div className="space-y-1.5">
         <Label htmlFor="acct_number">Account number</Label>
@@ -28,7 +41,7 @@ export function AddAccountForm() {
           id="acct_number"
           name="account_number"
           required
-          placeholder="100412600"
+          placeholder="100412600 or 03-43-01-106691-6"
           aria-invalid={!!state.fieldErrors?.account_number || undefined}
         />
         {state.fieldErrors?.account_number && (

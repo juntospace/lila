@@ -106,6 +106,81 @@ export type Database = {
         }
         Relationships: []
       }
+      recon_ach_batch_lines: {
+        Row: {
+          id: string
+          upload_id: string
+          account_id: string
+          batch_filename: string
+          batch_effective_date: string
+          routing_code: string
+          target_account: string
+          amount_minor: number
+          beneficiary_id: string | null
+          beneficiary_name: string | null
+          addenda: string | null
+          error_code: string | null
+          error_description: string | null
+          observations: string | null
+          row_hash: string
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          upload_id: string
+          account_id: string
+          batch_filename: string
+          batch_effective_date: string
+          routing_code: string
+          target_account: string
+          amount_minor: number | string
+          beneficiary_id?: string | null
+          beneficiary_name?: string | null
+          addenda?: string | null
+          error_code?: string | null
+          error_description?: string | null
+          observations?: string | null
+          row_hash: string
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          upload_id?: string
+          account_id?: string
+          batch_filename?: string
+          batch_effective_date?: string
+          routing_code?: string
+          target_account?: string
+          amount_minor?: number | string
+          beneficiary_id?: string | null
+          beneficiary_name?: string | null
+          addenda?: string | null
+          error_code?: string | null
+          error_description?: string | null
+          observations?: string | null
+          row_hash?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "recon_ach_batch_lines_upload_id_fkey"
+            columns: ["upload_id"]
+            isOneToOne: false
+            referencedRelation: "recon_uploads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "recon_ach_batch_lines_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "bank_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       recon_links: {
         Row: {
           da_txn_id: string
@@ -419,7 +494,7 @@ export type Database = {
       is_recon_writer: { Args: never; Returns: boolean }
     }
     Enums: {
-      bank_accounts_rail_enum: "bac"
+      bank_accounts_rail_enum: "bac" | "bg"
       bank_accounts_status_enum: "active" | "archived"
       operator_language: "en" | "es"
       operator_role: "agent" | "loan_officer" | "risk_analyst" | "admin"
@@ -443,7 +518,7 @@ export type Database = {
         | "rejected"
         | "non_loan"
         | "pending_pair"
-      recon_uploads_method_enum: "statement_excel"
+      recon_uploads_method_enum: "statement_excel" | "statement_bg_excel" | "ach_detail_bg_excel"
       recon_uploads_status_enum: "parsed" | "committed" | "failed"
     }
     CompositeTypes: {
@@ -572,7 +647,7 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
-      bank_accounts_rail_enum: ["bac"],
+      bank_accounts_rail_enum: ["bac", "bg"],
       bank_accounts_status_enum: ["active", "archived"],
       operator_language: ["en", "es"],
       operator_role: ["agent", "loan_officer", "risk_analyst", "admin"],
@@ -596,7 +671,7 @@ export const Constants = {
         "non_loan",
         "pending_pair",
       ],
-      recon_uploads_method_enum: ["statement_excel"],
+      recon_uploads_method_enum: ["statement_excel", "statement_bg_excel", "ach_detail_bg_excel"],
       recon_uploads_status_enum: ["parsed", "committed", "failed"],
     },
   },
