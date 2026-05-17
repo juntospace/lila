@@ -108,75 +108,75 @@ export type Database = {
       }
       recon_ach_batch_lines: {
         Row: {
-          id: string
-          upload_id: string
           account_id: string
-          batch_filename: string
-          batch_effective_date: string
-          routing_code: string
-          target_account: string
+          addenda: string | null
           amount_minor: number
+          batch_effective_date: string
+          batch_filename: string
           beneficiary_id: string | null
           beneficiary_name: string | null
-          addenda: string | null
+          created_at: string
           error_code: string | null
           error_description: string | null
+          id: string
           observations: string | null
+          routing_code: string
           row_hash: string
-          created_at: string
+          target_account: string
           updated_at: string
+          upload_id: string
         }
         Insert: {
-          id?: string
-          upload_id: string
           account_id: string
-          batch_filename: string
+          addenda?: string | null
+          amount_minor: number
           batch_effective_date: string
-          routing_code: string
-          target_account: string
-          amount_minor: number | string
+          batch_filename: string
           beneficiary_id?: string | null
           beneficiary_name?: string | null
-          addenda?: string | null
+          created_at?: string
           error_code?: string | null
           error_description?: string | null
+          id?: string
           observations?: string | null
+          routing_code: string
           row_hash: string
-          created_at?: string
+          target_account: string
           updated_at?: string
+          upload_id: string
         }
         Update: {
-          id?: string
-          upload_id?: string
           account_id?: string
-          batch_filename?: string
+          addenda?: string | null
+          amount_minor?: number
           batch_effective_date?: string
-          routing_code?: string
-          target_account?: string
-          amount_minor?: number | string
+          batch_filename?: string
           beneficiary_id?: string | null
           beneficiary_name?: string | null
-          addenda?: string | null
+          created_at?: string
           error_code?: string | null
           error_description?: string | null
+          id?: string
           observations?: string | null
+          routing_code?: string
           row_hash?: string
-          created_at?: string
+          target_account?: string
           updated_at?: string
+          upload_id?: string
         }
         Relationships: [
-          {
-            foreignKeyName: "recon_ach_batch_lines_upload_id_fkey"
-            columns: ["upload_id"]
-            isOneToOne: false
-            referencedRelation: "recon_uploads"
-            referencedColumns: ["id"]
-          },
           {
             foreignKeyName: "recon_ach_batch_lines_account_id_fkey"
             columns: ["account_id"]
             isOneToOne: false
             referencedRelation: "bank_accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "recon_ach_batch_lines_upload_id_fkey"
+            columns: ["upload_id"]
+            isOneToOne: false
+            referencedRelation: "recon_uploads"
             referencedColumns: ["id"]
           },
         ]
@@ -501,8 +501,8 @@ export type Database = {
       operator_status: "active" | "disabled"
       recon_links_strategy_enum:
         | "auto_fifo_name_amount"
-        | "auto_batch_link"
         | "manual"
+        | "auto_batch_link"
       recon_manual_actions_action_enum:
         | "force_confirm"
         | "force_reject"
@@ -518,7 +518,10 @@ export type Database = {
         | "rejected"
         | "non_loan"
         | "pending_pair"
-      recon_uploads_method_enum: "statement_excel" | "statement_bg_excel" | "ach_detail_bg_excel"
+      recon_uploads_method_enum:
+        | "statement_excel"
+        | "statement_bg_excel"
+        | "ach_detail_bg_excel"
       recon_uploads_status_enum: "parsed" | "committed" | "failed"
     }
     CompositeTypes: {
@@ -652,7 +655,11 @@ export const Constants = {
       operator_language: ["en", "es"],
       operator_role: ["agent", "loan_officer", "risk_analyst", "admin"],
       operator_status: ["active", "disabled"],
-      recon_links_strategy_enum: ["auto_fifo_name_amount", "auto_batch_link", "manual"],
+      recon_links_strategy_enum: [
+        "auto_fifo_name_amount",
+        "manual",
+        "auto_batch_link",
+      ],
       recon_manual_actions_action_enum: [
         "force_confirm",
         "force_reject",
@@ -671,7 +678,11 @@ export const Constants = {
         "non_loan",
         "pending_pair",
       ],
-      recon_uploads_method_enum: ["statement_excel", "statement_bg_excel", "ach_detail_bg_excel"],
+      recon_uploads_method_enum: [
+        "statement_excel",
+        "statement_bg_excel",
+        "ach_detail_bg_excel",
+      ],
       recon_uploads_status_enum: ["parsed", "committed", "failed"],
     },
   },
