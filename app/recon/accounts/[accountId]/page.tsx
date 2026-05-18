@@ -18,6 +18,7 @@ import { formatDate, formatMinorUSD, lastWorkingDays } from "@/lib/recon/format"
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 import { BackfillButton } from "./backfill-button";
+import { BGAchBatchRow } from "./bg-ach-batch-row";
 import { BulkActionBar } from "./bulk-action-bar";
 import { BulkConfirmBatchButton } from "./bulk-confirm-batch-button";
 import { BulkSelectionProvider } from "./bulk-selection-context";
@@ -461,6 +462,106 @@ export default async function AccountDetailPage({
         if (ref) consumedBatchRefs.add(ref);
       }
     }
+  }
+
+  // BG-rail: aggregate ACH Debit batches from recon_ach_batch_lines.
+  // Each (batch_filename, batch_effective_date) tuple is one batch
+  // submission; lines within it are per-debtor outcomes. We render this
+  // only when the account is on the BG rail, so the query is gated by
+  // account.rail to keep it cheap on BAC accounts.
+  type AchLine = {
+    id: string;
+    batch_filename: string;
+    batch_effective_date: string;
+    routing_code: string;
+    target_account: string;
+    amount_minor: bigint;
+    beneficiary_id: string | null;
+    beneficiary_name: string | null;
+    addenda: string | null;
+    error_code: string | null;
+    error_description: string | null;
+  };
+  type AchBatchSummary = {
+    filename: string;
+    effectiveDate: string;
+    totalLines: number;
+    approvedLines: number;
+    rejectedLines: number;
+    totalAmountMinor: bigint;
+    approvedAmountMinor: bigint;
+    rejectedAmountMinor: bigint;
+    /** Per R-code: count + total amount. */
+    rejectionsByCode: Map<string, { count: number; amountMinor: bigint }>;
+    lines: AchLine[];
+  };
+  const achBatches: AchBatchSummary[] = [];
+  if (account.rail === "bg") {
+    const { data: lineRows } = await supabase
+      .from("recon_ach_batch_lines")
+      .select(
+        "id, batch_filename, batch_effective_date, routing_code, target_account, amount_minor, beneficiary_id, beneficiary_name, addenda, error_code, error_description",
+      )
+      .eq("account_id", accountId)
+      .order("batch_effective_date", { ascending: false })
+      .order("batch_filename", { ascending: true });
+    const byBatch = new Map<string, AchBatchSummary>();
+    for (const r of lineRows ?? []) {
+      const filename = r.batch_filename as string;
+      const effectiveDate = r.batch_effective_date as string;
+      const key = `${effectiveDate}|${filename}`;
+      let slot = byBatch.get(key);
+      if (!slot) {
+        slot = {
+          filename,
+          effectiveDate,
+          totalLines: 0,
+          approvedLines: 0,
+          rejectedLines: 0,
+          totalAmountMinor: 0n,
+          approvedAmountMinor: 0n,
+          rejectedAmountMinor: 0n,
+          rejectionsByCode: new Map(),
+          lines: [],
+        };
+        byBatch.set(key, slot);
+      }
+      const amount = BigInt(String(r.amount_minor));
+      const errorCode = (r.error_code as string | null) ?? null;
+      const line: AchLine = {
+        id: r.id as string,
+        batch_filename: filename,
+        batch_effective_date: effectiveDate,
+        routing_code: r.routing_code as string,
+        target_account: r.target_account as string,
+        amount_minor: amount,
+        beneficiary_id: (r.beneficiary_id as string | null) ?? null,
+        beneficiary_name: (r.beneficiary_name as string | null) ?? null,
+        addenda: (r.addenda as string | null) ?? null,
+        error_code: errorCode,
+        error_description: (r.error_description as string | null) ?? null,
+      };
+      slot.lines.push(line);
+      slot.totalLines++;
+      slot.totalAmountMinor += amount;
+      if (errorCode) {
+        slot.rejectedLines++;
+        slot.rejectedAmountMinor += amount;
+        const codeKey = errorCode;
+        const codeSlot = slot.rejectionsByCode.get(codeKey) ?? {
+          count: 0,
+          amountMinor: 0n,
+        };
+        codeSlot.count++;
+        codeSlot.amountMinor += amount;
+        slot.rejectionsByCode.set(codeKey, codeSlot);
+      } else {
+        slot.approvedLines++;
+        slot.approvedAmountMinor += amount;
+      }
+    }
+    // Preserve the SQL order (effective_date DESC, filename ASC).
+    achBatches.push(...byBatch.values());
   }
 
   // Surface a one-time hint if any rejected DAs in the system still have a
@@ -907,6 +1008,184 @@ export default async function AccountDetailPage({
           </Card>
         );
       })()}
+
+      {/* BG-rail only: ACH Debit batches view. Each row is one batch
+          (per .txt file uploaded). Summary stats + expandable per-debtor
+          breakdown. Statement-lump pairing arrives in a later chunk. */}
+      {account.rail === "bg" && achBatches.length > 0 && (
+        <Card className="mt-6 border-info/40">
+          <CardHeader>
+            <CardTitle>
+              ACH Debit batches ({achBatches.length} batch
+              {achBatches.length === 1 ? "" : "es"} ·{" "}
+              {formatMinorUSD(
+                achBatches.reduce((a, b) => a + b.totalAmountMinor, 0n),
+              )}{" "}
+              gross)
+            </CardTitle>
+            <CardDescription>
+              One row per ACH Debit batch (the bank&apos;s response file
+              for one outbound submission). Click a row to drill into the
+              per-debtor outcomes. Linking to the statement&apos;s lump
+              credit / debit rows comes in a later chunk.
+            </CardDescription>
+          </CardHeader>
+          <CardBody>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-left text-xs uppercase tracking-wide text-fg-subtle">
+                  <tr>
+                    <th className="pb-3 pr-2 sr-only">Expand</th>
+                    <th className="pb-3 pr-4">Effective</th>
+                    <th className="pb-3 pr-4">Filename</th>
+                    <th className="pb-3 pr-4 text-right">Transactions</th>
+                    <th className="pb-3 pr-4 text-right">Gross</th>
+                    <th className="pb-3 pr-4 text-right">Approved</th>
+                    <th className="pb-3 pr-4 text-right">Rejected</th>
+                    <th className="pb-3 pr-4">R-codes</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border-subtle">
+                  {achBatches.map((batch) => {
+                    const rCodeLabel =
+                      batch.rejectionsByCode.size === 0
+                        ? "—"
+                        : Array.from(batch.rejectionsByCode.entries())
+                            .sort((a, b) => b[1].count - a[1].count)
+                            .map(([code, info]) => `${code}×${info.count}`)
+                            .join(" · ");
+                    const cells = (
+                      <>
+                        <td className="py-3 pr-4 text-xs text-fg-muted">
+                          {formatDate(batch.effectiveDate)}
+                        </td>
+                        <td className="py-3 pr-4 font-mono text-xs text-fg max-w-[280px] truncate">
+                          {batch.filename}
+                        </td>
+                        <td className="py-3 pr-4 text-right tabular-nums text-fg">
+                          {batch.totalLines}
+                        </td>
+                        <td className="py-3 pr-4 text-right font-medium tabular-nums text-fg">
+                          {formatMinorUSD(batch.totalAmountMinor)}
+                        </td>
+                        <td className="py-3 pr-4 text-right text-success tabular-nums">
+                          {batch.approvedLines}
+                          <span className="text-fg-subtle">
+                            {" · "}
+                            {formatMinorUSD(batch.approvedAmountMinor)}
+                          </span>
+                        </td>
+                        <td className="py-3 pr-4 text-right text-warning tabular-nums">
+                          {batch.rejectedLines}
+                          <span className="text-fg-subtle">
+                            {" · "}
+                            {formatMinorUSD(batch.rejectedAmountMinor)}
+                          </span>
+                        </td>
+                        <td className="py-3 pr-4 text-xs text-fg-muted max-w-[260px] truncate">
+                          {rCodeLabel}
+                        </td>
+                      </>
+                    );
+                    const detail = (
+                      <div className="space-y-3">
+                        <div className="text-xs text-fg-muted">
+                          {batch.totalLines} lines · approved{" "}
+                          <span className="text-success">
+                            {batch.approvedLines}
+                          </span>{" "}
+                          ({formatMinorUSD(batch.approvedAmountMinor)}) ·
+                          rejected{" "}
+                          <span className="text-warning">
+                            {batch.rejectedLines}
+                          </span>{" "}
+                          ({formatMinorUSD(batch.rejectedAmountMinor)})
+                        </div>
+                        {batch.rejectionsByCode.size > 0 && (
+                          <div className="flex flex-wrap gap-2 text-xs">
+                            {Array.from(batch.rejectionsByCode.entries())
+                              .sort((a, b) => b[1].count - a[1].count)
+                              .map(([code, info]) => (
+                                <span
+                                  key={code}
+                                  className="rounded border border-border-subtle bg-bg-surface px-2 py-1"
+                                >
+                                  <span className="font-mono text-fg">
+                                    {code}
+                                  </span>
+                                  <span className="text-fg-subtle">
+                                    {" · "}
+                                    {info.count} ·{" "}
+                                    {formatMinorUSD(info.amountMinor)}
+                                  </span>
+                                </span>
+                              ))}
+                          </div>
+                        )}
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs">
+                            <thead className="text-left text-[10px] uppercase tracking-wide text-fg-subtle">
+                              <tr>
+                                <th className="pb-2 pr-3">Target account</th>
+                                <th className="pb-2 pr-3 text-right">Amount</th>
+                                <th className="pb-2 pr-3">Beneficiary ID</th>
+                                <th className="pb-2 pr-3">Name</th>
+                                <th className="pb-2 pr-3">R-code</th>
+                                <th className="pb-2 pr-3">Reason</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-border-subtle">
+                              {batch.lines.map((line) => (
+                                <tr key={line.id}>
+                                  <td className="py-2 pr-3 font-mono text-[11px] text-fg-muted">
+                                    {line.target_account}
+                                  </td>
+                                  <td className="py-2 pr-3 text-right font-medium tabular-nums text-fg">
+                                    {formatMinorUSD(line.amount_minor)}
+                                  </td>
+                                  <td className="py-2 pr-3 font-mono text-[11px] text-fg-muted">
+                                    {line.beneficiary_id ?? "—"}
+                                  </td>
+                                  <td className="py-2 pr-3 text-fg">
+                                    {line.beneficiary_name ?? "—"}
+                                  </td>
+                                  <td className="py-2 pr-3 font-mono text-[11px]">
+                                    {line.error_code ? (
+                                      <span className="text-warning">
+                                        {line.error_code}
+                                      </span>
+                                    ) : (
+                                      <span className="text-success">
+                                        OK
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="py-2 pr-3 text-fg-muted">
+                                    {line.error_description ?? "—"}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    );
+                    return (
+                      <BGAchBatchRow
+                        key={`${batch.effectiveDate}|${batch.filename}`}
+                        rowKey={`${batch.effectiveDate}|${batch.filename}`}
+                        cells={cells}
+                        detail={detail}
+                        cellCount={7}
+                      />
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </CardBody>
+        </Card>
+      )}
 
       <Card className="mt-8">
         <CardHeader className="flex flex-wrap items-center justify-between gap-3">
