@@ -32,6 +32,8 @@ function loan(overrides: Partial<LoanFact> = {}): LoanFact {
   return {
     loanPk: "pk-1",
     sourceLoanId: "L1",
+    sourceBorrowerRef: null,
+    resolvedSourceBorrowerId: null,
     entityId: "E1",
     snapshotId: "S1",
     snapshotDate: "2026-06-13",

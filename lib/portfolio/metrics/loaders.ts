@@ -85,7 +85,7 @@ export async function loadMetricFactBundle(
   const { data: rows, error } = await supabase
     .from("portfolio_loan_metric_facts")
     .select(
-      "loan_pk, snapshot_id, entity_id, snapshot_date, source_loan_id, balance_amount_minor, principal_amount_minor, paid_amount_minor, past_due_minor, days_past_due, status_normalized, product_group, management_vintage, portfolio_segment, ifrs_stage, is_npl, released_date, maturity_date, loan_officer_raw, cohort_month, cash_collected_minor, write_off_minor, cash_count, finiquito_count",
+      "loan_pk, snapshot_id, entity_id, snapshot_date, source_loan_id, source_borrower_ref, resolved_source_borrower_id, balance_amount_minor, principal_amount_minor, paid_amount_minor, past_due_minor, days_past_due, status_normalized, product_group, management_vintage, portfolio_segment, ifrs_stage, is_npl, released_date, maturity_date, loan_officer_raw, cohort_month, cash_collected_minor, write_off_minor, cash_count, finiquito_count",
     )
     .eq("snapshot_id", resolved.snapshotId)
     .limit(SUPABASE_HARD_LIMIT);
@@ -119,6 +119,77 @@ export async function loadMetricFacts(
   const resolved = await resolveSnapshot(supabase, args);
   if (!resolved) return null;
   return loadMetricFactBundle(supabase, resolved);
+}
+
+/**
+ * Resolve the immediately-prior completed snapshot before `snapshotDate`,
+ * for the same entity. Used to drive snapshot-pair / diff KPIs.
+ */
+export async function resolvePriorSnapshot(
+  supabase: AnySupabase,
+  args: { entityId: string; snapshotDate: string },
+): Promise<ResolvedSnapshot | null> {
+  const { data: snap } = await supabase
+    .from("portfolio_snapshots")
+    .select("id, snapshot_date, status, entity_id")
+    .eq("entity_id", args.entityId)
+    .eq("status", "completed")
+    .lt("snapshot_date", args.snapshotDate)
+    .order("snapshot_date", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!snap) return null;
+  const { data: entity } = await supabase
+    .from("portfolio_entities")
+    .select("id, code, display_name")
+    .eq("id", args.entityId)
+    .single();
+  if (!entity) return null;
+  return {
+    snapshotId: snap.id as string,
+    snapshotDate: snap.snapshot_date as string,
+    entityId: entity.id as string,
+    entityCode: entity.code as string,
+    entityDisplayName: entity.display_name as string,
+    status: snap.status as string,
+  };
+}
+
+/**
+ * Load every completed snapshot for an entity, oldest first. Used by
+ * the vintage compute. Returns an empty array if the entity doesn't
+ * exist or has no snapshots.
+ */
+export async function loadSnapshotHistory(
+  supabase: AnySupabase,
+  entityCode: string,
+): Promise<MetricFactBundle[]> {
+  const { data: entity } = await supabase
+    .from("portfolio_entities")
+    .select("id, code, display_name")
+    .eq("code", entityCode)
+    .maybeSingle();
+  if (!entity) return [];
+  const { data: snaps } = await supabase
+    .from("portfolio_snapshots")
+    .select("id, snapshot_date, status, entity_id")
+    .eq("entity_id", entity.id as string)
+    .eq("status", "completed")
+    .order("snapshot_date", { ascending: true });
+  if (!snaps || snaps.length === 0) return [];
+  const bundles: MetricFactBundle[] = [];
+  for (const snap of snaps) {
+    const resolved: ResolvedSnapshot = {
+      snapshotId: snap.id as string,
+      snapshotDate: snap.snapshot_date as string,
+      entityId: entity.id as string,
+      entityCode: entity.code as string,
+      entityDisplayName: entity.display_name as string,
+      status: snap.status as string,
+    };
+    bundles.push(await loadMetricFactBundle(supabase, resolved));
+  }
+  return bundles;
 }
 
 // =============================================================
@@ -192,6 +263,9 @@ function mapRow(row: Record<string, unknown>): LoanFact {
   return {
     loanPk: row.loan_pk as string,
     sourceLoanId: row.source_loan_id as string,
+    sourceBorrowerRef: (row.source_borrower_ref as string | null) ?? null,
+    resolvedSourceBorrowerId:
+      (row.resolved_source_borrower_id as string | null) ?? null,
     entityId: row.entity_id as string,
     snapshotId: row.snapshot_id as string,
     snapshotDate: row.snapshot_date as string,

@@ -11,7 +11,8 @@ import {
 import { requirePortfolioWriter } from "@/lib/auth/guard";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
-import { IngestSampleButton } from "./ingest-sample-button";
+import { discoverAvailableBackfills } from "./actions";
+import { BackfillPanel } from "./backfill-panel";
 
 export const dynamic = "force-dynamic";
 
@@ -84,6 +85,13 @@ export default async function PortfolioPage() {
     const list = snapshotsByEntity.get(s.entity_id) ?? [];
     list.push(s);
     snapshotsByEntity.set(s.entity_id, list);
+  }
+
+  // Discover backfill folders and map existing snapshot status per date.
+  const backfills = await discoverAvailableBackfills();
+  const existingByDate: Record<string, string> = {};
+  for (const s of snapshotList) {
+    existingByDate[s.snapshot_date] = s.status;
   }
 
   return (
@@ -204,18 +212,22 @@ export default async function PortfolioPage() {
         <aside className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle>Local sample ingest</CardTitle>
+              <CardTitle>Backfill from samples</CardTitle>
               <CardDescription>
-                Reads the LoanDisk export from{" "}
+                Each{" "}
                 <code className="rounded bg-bg-raised px-1 py-0.5 text-xs">
-                  tmp/samples/70136/
+                  tmp/samples/&lt;YYYY-MM-DD&gt;/
                 </code>{" "}
-                and writes a Crediclaro snapshot for today. Re-running replaces
-                the day.
+                folder becomes a Crediclaro snapshot for that date. Re-running
+                replaces the day. Backfill multiple days to unlock slice 2 KPIs
+                (roll rate, cure rate, vintage curves).
               </CardDescription>
             </CardHeader>
             <CardBody>
-              <IngestSampleButton />
+              <BackfillPanel
+                backfills={backfills}
+                existingByDate={existingByDate}
+              />
             </CardBody>
           </Card>
         </aside>
