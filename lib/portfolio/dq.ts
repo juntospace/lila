@@ -76,13 +76,19 @@ export function computeDqMetrics(args: ComputeDqArgs): DqMetric[] {
   metrics.push(completeness(borrowers, "mobile", (b) => b.mobile));
 
   // ---------- Control totals ----------
+  // borrowers."Open Loans Balance" is total amount owed on open loans
+  // (principal + interest + fees + penalty), not principal alone — so
+  // compare it against loans."Balance Amount", not totalPrincipalBalance.
+  // The smoke validation against the Crediclaro sample showed comparing
+  // against totalPrincipalBalance produces a misleading 28% "drift" that
+  // is really just the interest/fee component being excluded.
   const borrowerOpenSum = sumBigInt(borrowers, (b) =>
     b.openLoansBalanceMinor ?? 0n,
   );
   const loanOpenSum = sumBigInt(loans, (l, i) =>
     loanClassifications[i].statusNormalized === "closed"
       ? 0n
-      : l.totalPrincipalBalanceMinor ?? 0n,
+      : l.balanceAmountMinor ?? 0n,
   );
   metrics.push(
     controlTotalMetric(

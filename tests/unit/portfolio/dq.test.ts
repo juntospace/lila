@@ -302,7 +302,7 @@ describe("computeDqMetrics", () => {
         sourceLoanId: "L1",
         statusRaw: "Current",
         daysPastDue: 0,
-        totalPrincipalBalanceMinor: 99000n, // 1% drift
+        balanceAmountMinor: 99000n, // 1% drift vs borrower aggregate
       }),
     ];
     const cls = loans.map((l) => classifyLoan(l, POLICY));
