@@ -1128,7 +1128,60 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      portfolio_loan_metric_facts: {
+        Row: {
+          balance_amount_minor: number | null
+          cash_collected_minor: number | null
+          cash_count: number | null
+          cohort_month: string | null
+          days_past_due: number | null
+          entity_id: string | null
+          finiquito_count: number | null
+          ifrs_stage:
+            | Database["public"]["Enums"]["portfolio_loans_ifrs_stage_enum"]
+            | null
+          is_npl: boolean | null
+          loan_officer_raw: string | null
+          loan_pk: string | null
+          management_vintage:
+            | Database["public"]["Enums"]["portfolio_loans_management_vintage_enum"]
+            | null
+          maturity_date: string | null
+          paid_amount_minor: number | null
+          past_due_minor: number | null
+          portfolio_segment:
+            | Database["public"]["Enums"]["portfolio_loans_portfolio_segment_enum"]
+            | null
+          principal_amount_minor: number | null
+          product_group:
+            | Database["public"]["Enums"]["portfolio_loans_product_group_enum"]
+            | null
+          released_date: string | null
+          snapshot_date: string | null
+          snapshot_id: string | null
+          source_loan_id: string | null
+          status_normalized:
+            | Database["public"]["Enums"]["portfolio_loans_status_enum"]
+            | null
+          write_off_minor: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "portfolio_loans_entity_id_fkey"
+            columns: ["entity_id"]
+            isOneToOne: false
+            referencedRelation: "portfolio_entities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portfolio_loans_snapshot_id_fkey"
+            columns: ["snapshot_id"]
+            isOneToOne: false
+            referencedRelation: "portfolio_snapshots"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Functions: {
       is_active_operator: { Args: never; Returns: boolean }
