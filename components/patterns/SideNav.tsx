@@ -6,6 +6,7 @@ import {
   ClipboardList,
   FileSpreadsheet,
   LayoutDashboard,
+  PieChart,
   UserCircle2,
 } from "lucide-react";
 
@@ -13,6 +14,7 @@ import { cn } from "@/lib/utils/cn";
 
 const NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/portfolio", label: "Portfolio", icon: PieChart },
   { href: "/recon/upload", label: "Reconciliation", icon: FileSpreadsheet },
   { href: "/recon/audit", label: "Operator audit", icon: ClipboardList },
   { href: "/profile", label: "Profile", icon: UserCircle2 },

@@ -97,3 +97,16 @@ export async function requireReconWriter(): Promise<OperatorSession> {
   }
   return session;
 }
+
+/**
+ * Guard for portfolio-writer routes (ingesting LoanDisk snapshots,
+ * editing portfolio policy). Mirrors `is_portfolio_writer()`.
+ */
+export async function requirePortfolioWriter(): Promise<OperatorSession> {
+  const session = await requireOperator();
+  const role = session.profile.role;
+  if (role !== "loan_officer" && role !== "admin") {
+    redirect("/?error=insufficient_role");
+  }
+  return session;
+}
