@@ -9,11 +9,26 @@ import {
   CardTitle,
 } from "@/components/ui/Card";
 import { requirePortfolioWriter } from "@/lib/auth/guard";
-import { loadMetricFacts, computeKpiReport } from "@/lib/portfolio/metrics";
+import {
+  computeConcentration,
+  computeKpiReport,
+  computeRepeatBorrowers,
+  computeSnapshotDiff,
+  computeVintageReport,
+  layoutRollMatrix,
+  loadMetricFactBundle,
+  loadMetricFacts,
+  loadSnapshotHistory,
+  resolvePriorSnapshot,
+  vintageAtMob,
+} from "@/lib/portfolio/metrics";
 import type {
   AgingDistributionBucket,
   KpiValue,
+  MatrixLayout,
   SegmentBreakdown,
+  SnapshotDiffReport,
+  VintageCheckpoint,
 } from "@/lib/portfolio/metrics";
 import type { PortfolioEntityCode } from "@/lib/portfolio/types";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
@@ -69,6 +84,25 @@ export default async function PortfolioBoardPage({ searchParams }: PageProps) {
   // Split totals into Old vs New management — the founder's primary lens.
   const oldManagement = report.byManagementVintage.find((s) => s.key === "old");
   const newManagement = report.byManagementVintage.find((s) => s.key === "new");
+
+  // Slice-2 metrics. All single-snapshot ones compute today; the
+  // pair-based ones (diff + vintage) degrade gracefully when there's
+  // only one snapshot.
+  const concentration = computeConcentration(bundle.loans);
+  const repeatBorrowers = computeRepeatBorrowers(bundle.loans);
+
+  const prior = await resolvePriorSnapshot(supabase, {
+    entityId: bundle.entityId,
+    snapshotDate: bundle.snapshotDate,
+  });
+  let diff: SnapshotDiffReport | null = null;
+  if (prior) {
+    const priorBundle = await loadMetricFactBundle(supabase, prior);
+    diff = computeSnapshotDiff(priorBundle, bundle);
+  }
+
+  const history = await loadSnapshotHistory(supabase, entityCode);
+  const vintage = history.length >= 2 ? computeVintageReport(history) : null;
 
   return (
     <OperatorShell session={session}>
@@ -258,6 +292,106 @@ export default async function PortfolioBoardPage({ searchParams }: PageProps) {
             <OfficerTable rows={report.byLoanOfficer.slice(0, 10)} totalGlp={report.total.glpMinor} />
           </CardBody>
         </Card>
+      </Section>
+
+      {/* ============ Borrower concentration ============ */}
+      <Section
+        title="Borrower concentration"
+        subtitle="Largest exposures + how much of the book sits behind the top borrowers. Standard investor-diligence number."
+      >
+        <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
+          <Card>
+            <CardBody>
+              <ConcentrationTable concentration={concentration} />
+            </CardBody>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Repeat-borrower rate</CardTitle>
+              <CardDescription>
+                Cheap, lower-risk growth comes from re-loaning to known
+                borrowers. Tracks share of active borrowers with multiple
+                open loans.
+              </CardDescription>
+            </CardHeader>
+            <CardBody>
+              <dl className="grid grid-cols-2 gap-3 text-sm">
+                <Stat
+                  label="Active borrowers"
+                  value={repeatBorrowers.activeBorrowers.toLocaleString()}
+                />
+                <Stat
+                  label="Repeat (≥ 2 open)"
+                  value={repeatBorrowers.repeatBorrowers.toLocaleString()}
+                />
+                <Stat
+                  label="Repeat rate"
+                  value={fmtPct(repeatBorrowers.repeatBorrowerRate)}
+                />
+                <Stat
+                  label="Largest exposure"
+                  value={fmtPct(concentration.largestExposureShare)}
+                />
+              </dl>
+            </CardBody>
+          </Card>
+        </div>
+      </Section>
+
+      {/* ============ Snapshot diff ============ */}
+      <Section
+        title="Change vs. previous snapshot"
+        subtitle="Roll-rate matrix, cure rate, early roll — the leading indicators. Compares this snapshot to the prior one for this entity."
+      >
+        {diff ? (
+          <SnapshotDiffSection diff={diff} />
+        ) : (
+          <Card>
+            <CardBody>
+              <p className="text-sm text-fg-muted">
+                Need a second snapshot for this entity to compute change.
+                Drop more days under{" "}
+                <code className="rounded bg-bg-raised px-1 py-0.5 text-xs">
+                  tmp/samples/&lt;YYYY-MM-DD&gt;/
+                </code>{" "}
+                and backfill from{" "}
+                <Link
+                  href="/portfolio"
+                  className="underline-offset-4 hover:underline"
+                >
+                  Portfolio
+                </Link>
+                .
+              </p>
+            </CardBody>
+          </Card>
+        )}
+      </Section>
+
+      {/* ============ Vintage / cohort curves ============ */}
+      <Section
+        title="Vintage curves"
+        subtitle="Each origination cohort's PAR30 / NPL at months-on-book. Apples-to-apples comparison across cohorts: did underwriting get better or worse?"
+      >
+        {vintage ? (
+          <VintageSection
+            entity={bundle.entityDisplayName}
+            historyCount={history.length}
+            mob3={vintageAtMob(vintage, 3)}
+            mob6={vintageAtMob(vintage, 6)}
+            mob12={vintageAtMob(vintage, 12)}
+          />
+        ) : (
+          <Card>
+            <CardBody>
+              <p className="text-sm text-fg-muted">
+                Need at least two snapshots over time to build vintage curves.
+                Current history: {history.length} snapshot
+                {history.length === 1 ? "" : "s"}.
+              </p>
+            </CardBody>
+          </Card>
+        )}
       </Section>
     </OperatorShell>
   );
@@ -684,4 +818,314 @@ function severityForRatio(ratio: number, alarmAt: number): KpiTone {
   if (!Number.isFinite(ratio)) return "default";
   if (ratio >= alarmAt) return "warn";
   return "default";
+}
+
+// =============================================================
+// Slice-2 sections
+// =============================================================
+
+function ConcentrationTable({
+  concentration,
+}: {
+  concentration: import("@/lib/portfolio/metrics").ConcentrationReport;
+}) {
+  const rows = concentration.top.slice(0, 15);
+  return (
+    <div>
+      <div className="mb-3 grid grid-cols-3 gap-3 text-sm">
+        <Stat label="Active borrowers" value={concentration.activeBorrowers.toLocaleString()} />
+        <Stat label="Top-10 share" value={fmtPct(concentration.top10Share)} />
+        <Stat label="Top-25 share" value={fmtPct(concentration.top25Share)} />
+      </div>
+      {rows.length === 0 ? (
+        <p className="text-sm text-fg-muted">No active borrowers.</p>
+      ) : (
+        <table className="w-full text-sm">
+          <thead className="text-left text-xs uppercase tracking-wide text-fg-subtle">
+            <tr>
+              <th className="pb-2 pr-4">#</th>
+              <th className="pb-2 pr-4">Borrower</th>
+              <th className="pb-2 pr-4 text-right">Open loans</th>
+              <th className="pb-2 pr-4 text-right">GLP</th>
+              <th className="pb-2 pr-4 text-right">% of book</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((e, i) => (
+              <tr key={e.borrowerId + i} className="border-t border-border-subtle">
+                <td className="py-2 pr-4 text-fg-muted">{i + 1}</td>
+                <td className="py-2 pr-4 font-mono text-xs text-fg">
+                  {e.unresolved ? "(unresolved) " : ""}
+                  {e.borrowerId}
+                </td>
+                <td className="py-2 pr-4 text-right tabular-nums">
+                  {e.openLoanCount.toLocaleString()}
+                </td>
+                <td className="py-2 pr-4 text-right tabular-nums">{fmtMoney(e.glpMinor)}</td>
+                <td className="py-2 pr-4 text-right tabular-nums text-fg-muted">
+                  {concentration.glpMinor === 0n
+                    ? "—"
+                    : fmtPct(Number(e.glpMinor) / Number(concentration.glpMinor))}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+function SnapshotDiffSection({ diff }: { diff: SnapshotDiffReport }) {
+  const layout = layoutRollMatrix(diff.rollMatrix);
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">
+            {diff.from.snapshotDate} → {diff.to.snapshotDate}
+          </CardTitle>
+          <CardDescription>
+            {diff.daysBetween} day{diff.daysBetween === 1 ? "" : "s"} apart.
+          </CardDescription>
+        </CardHeader>
+        <CardBody>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Kpi
+              label="Cure rate"
+              value={fmtPct(diff.cureRate)}
+              sub={`${fmtMoney(diff.cureBalanceMinor)} of ${fmtMoney(diff.delinquentT0Minor)} delinquent at t-1`}
+              tone={
+                Number.isFinite(diff.cureRate) && diff.cureRate >= 0.35
+                  ? "good"
+                  : "warn"
+              }
+            />
+            <Kpi
+              label="Early roll (Current → 1-30)"
+              value={fmtPct(diff.earlyRollRate)}
+              sub={`${fmtMoney(diff.earlyRollBalanceMinor)} of ${fmtMoney(diff.currentT0Minor)} current at t-1`}
+              tone={
+                Number.isFinite(diff.earlyRollRate) && diff.earlyRollRate > 0.05
+                  ? "warn"
+                  : "good"
+              }
+            />
+            <Kpi
+              label="Flow to default (61-90 → 91+)"
+              value={fmtPct(diff.flowToDefaultRate)}
+              sub={`${fmtMoney(diff.flowToDefaultBalanceMinor)} of ${fmtMoney(diff.band6190T0Minor)} in 61-90 at t-1`}
+              tone={
+                Number.isFinite(diff.flowToDefaultRate) &&
+                diff.flowToDefaultRate > 0.5
+                  ? "warn"
+                  : "default"
+              }
+            />
+            <Kpi
+              label="New originations"
+              value={diff.newLoanCount.toLocaleString()}
+              sub={`${fmtMoney(diff.newLoanPrincipalMinor)} disbursed`}
+            />
+            <Kpi
+              label="Cash collected (Δ)"
+              value={fmtMoney(diff.cashCollectedMinor)}
+              sub={`Δ paid_amount across all loans`}
+            />
+            <Kpi
+              label="GLP change"
+              value={
+                diff.glpDeltaMinor >= 0n
+                  ? `+${fmtMoney(diff.glpDeltaMinor)}`
+                  : `${fmtMoney(diff.glpDeltaMinor)}`
+              }
+              sub={`${diff.countOpenDelta >= 0 ? "+" : ""}${diff.countOpenDelta} open loans`}
+            />
+            <Kpi
+              label="PAR30 ratio Δ"
+              value={
+                Number.isFinite(diff.par30RatioDelta)
+                  ? `${diff.par30RatioDelta >= 0 ? "+" : ""}${(diff.par30RatioDelta * 100).toFixed(2)} pp`
+                  : "—"
+              }
+              tone={
+                Number.isFinite(diff.par30RatioDelta) && diff.par30RatioDelta > 0
+                  ? "warn"
+                  : "default"
+              }
+            />
+            <Kpi
+              label="Old → New share Δ"
+              value={
+                Number.isFinite(diff.newGlpShareDelta)
+                  ? `${diff.newGlpShareDelta >= 0 ? "+" : ""}${(diff.newGlpShareDelta * 100).toFixed(2)} pp`
+                  : "—"
+              }
+              sub={`${fmtPct(diff.newGlpShareFrom)} → ${fmtPct(diff.newGlpShareTo)}`}
+            />
+          </div>
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Roll-rate matrix (by balance)</CardTitle>
+          <CardDescription>
+            Where each bucket&apos;s balance at t-1 ended up at t. Diagonal = no
+            movement; above-diagonal = curing; below-diagonal = worsening.
+          </CardDescription>
+        </CardHeader>
+        <CardBody>
+          <RollMatrixView layout={layout} />
+        </CardBody>
+      </Card>
+    </div>
+  );
+}
+
+function RollMatrixView({ layout }: { layout: MatrixLayout }) {
+  // Suppress rows whose entire balance is zero to keep the table small.
+  const usefulFrom = layout.fromBuckets.filter((fb) =>
+    layout.toBuckets.some((tb) => layout.balance[fb][tb] !== 0n),
+  );
+  if (usefulFrom.length === 0) {
+    return <p className="text-sm text-fg-muted">No transitions to show.</p>;
+  }
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-fg-subtle">
+            <th className="border-b border-border-subtle pb-2 pr-3 text-left">
+              t-1 \ t
+            </th>
+            {layout.toBuckets.map((tb) => (
+              <th
+                key={tb}
+                className="border-b border-border-subtle pb-2 pr-3 text-right font-mono"
+              >
+                {tb}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {usefulFrom.map((fb) => {
+            const rowTotal = layout.toBuckets.reduce(
+              (acc, tb) => acc + layout.balance[fb][tb],
+              0n,
+            );
+            return (
+              <tr key={fb} className="border-t border-border-subtle">
+                <td className="py-1.5 pr-3 font-mono text-fg">{fb}</td>
+                {layout.toBuckets.map((tb) => {
+                  const bal = layout.balance[fb][tb];
+                  const count = layout.count[fb][tb];
+                  if (bal === 0n) {
+                    return (
+                      <td key={tb} className="py-1.5 pr-3 text-right text-fg-subtle">
+                        —
+                      </td>
+                    );
+                  }
+                  const share = rowTotal === 0n ? 0 : Number(bal) / Number(rowTotal);
+                  return (
+                    <td
+                      key={tb}
+                      className="py-1.5 pr-3 text-right tabular-nums text-fg"
+                      title={`${count} loan${count === 1 ? "" : "s"}`}
+                    >
+                      <div>{fmtMoney(bal)}</div>
+                      <div className="text-[10px] text-fg-muted">
+                        {(share * 100).toFixed(0)}%
+                      </div>
+                    </td>
+                  );
+                })}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function VintageSection({
+  entity,
+  historyCount,
+  mob3,
+  mob6,
+  mob12,
+}: {
+  entity: string;
+  historyCount: number;
+  mob3: VintageCheckpoint[];
+  mob6: VintageCheckpoint[];
+  mob12: VintageCheckpoint[];
+}) {
+  const cohorts = Array.from(
+    new Set([...mob3, ...mob6, ...mob12].map((c) => c.cohortMonth)),
+  ).sort((a, b) => b.localeCompare(a));
+  const findRate = (
+    list: VintageCheckpoint[],
+    cohort: string,
+    field: "par30Rate" | "nplRate",
+  ): number | null => {
+    const c = list.find((x) => x.cohortMonth === cohort);
+    if (!c || !c.observation) return null;
+    return c.observation[field];
+  };
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">
+          {entity} · {historyCount} snapshots in history
+        </CardTitle>
+        <CardDescription>
+          NPL share by months-on-book. Recent cohorts top. &quot;@N&quot; columns
+          fall back to the latest snapshot at or before that MoB.
+        </CardDescription>
+      </CardHeader>
+      <CardBody>
+        <table className="w-full text-sm">
+          <thead className="text-left text-xs uppercase tracking-wide text-fg-subtle">
+            <tr>
+              <th className="pb-2 pr-4">Cohort</th>
+              <th className="pb-2 pr-4 text-right">NPL @3</th>
+              <th className="pb-2 pr-4 text-right">NPL @6</th>
+              <th className="pb-2 pr-4 text-right">NPL @12</th>
+              <th className="pb-2 pr-4 text-right">PAR30 @6</th>
+            </tr>
+          </thead>
+          <tbody>
+            {cohorts.slice(0, 18).map((c) => (
+              <tr key={c} className="border-t border-border-subtle">
+                <td className="py-2 pr-4 font-mono text-xs text-fg">
+                  {c.slice(0, 7)}
+                </td>
+                <td className="py-2 pr-4 text-right tabular-nums">
+                  {fmtPctOrDash(findRate(mob3, c, "nplRate"))}
+                </td>
+                <td className="py-2 pr-4 text-right tabular-nums">
+                  {fmtPctOrDash(findRate(mob6, c, "nplRate"))}
+                </td>
+                <td className="py-2 pr-4 text-right tabular-nums">
+                  {fmtPctOrDash(findRate(mob12, c, "nplRate"))}
+                </td>
+                <td className="py-2 pr-4 text-right tabular-nums">
+                  {fmtPctOrDash(findRate(mob6, c, "par30Rate"))}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </CardBody>
+    </Card>
+  );
+}
+
+function fmtPctOrDash(v: number | null): string {
+  if (v === null || !Number.isFinite(v)) return "—";
+  return `${(v * 100).toFixed(1)}%`;
 }

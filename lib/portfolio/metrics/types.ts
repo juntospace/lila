@@ -24,6 +24,10 @@ import type {
 export interface LoanFact {
   loanPk: string;
   sourceLoanId: string;
+  sourceBorrowerRef: string | null;
+  /** Resolved borrower (best-effort by the join resolver). Null when
+   *  the resolver couldn't link the loan back to a borrower. */
+  resolvedSourceBorrowerId: string | null;
   entityId: string;
   snapshotId: string;
   snapshotDate: string;

@@ -1157,8 +1157,10 @@ export type Database = {
             | Database["public"]["Enums"]["portfolio_loans_product_group_enum"]
             | null
           released_date: string | null
+          resolved_source_borrower_id: string | null
           snapshot_date: string | null
           snapshot_id: string | null
+          source_borrower_ref: string | null
           source_loan_id: string | null
           status_normalized:
             | Database["public"]["Enums"]["portfolio_loans_status_enum"]
