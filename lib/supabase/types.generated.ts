@@ -106,6 +106,647 @@ export type Database = {
         }
         Relationships: []
       }
+      portfolio_borrowers: {
+        Row: {
+          address: string | null
+          age: number | null
+          borrower_status_raw: string | null
+          business: string | null
+          cedula_normalized: string | null
+          city: string | null
+          country: string | null
+          created_at: string
+          created_date: string | null
+          credit_score: number | null
+          currency: string
+          date_of_birth: string | null
+          email: string | null
+          entity_id: string
+          first_name: string | null
+          full_name: string | null
+          gender: string | null
+          id: string
+          landline: string | null
+          last_name: string | null
+          loan_officer_raw: string | null
+          mobile: string | null
+          normalized_name: string | null
+          number_of_defaulted_loans: number | null
+          number_of_denied_loans: number | null
+          number_of_fully_paid_loans: number | null
+          number_of_loans: number | null
+          number_of_not_taken_up_loans: number | null
+          number_of_open_loans: number | null
+          number_of_processing_loans: number | null
+          number_of_restructured_loans: number | null
+          open_loans_balance_minor: number | null
+          province: string | null
+          raw: Json
+          snapshot_date: string
+          snapshot_id: string
+          source_borrower_id: string
+          total_paid_amount_minor: number | null
+          unique_number: string | null
+          updated_at: string
+          working_status: string | null
+          zipcode: string | null
+        }
+        Insert: {
+          address?: string | null
+          age?: number | null
+          borrower_status_raw?: string | null
+          business?: string | null
+          cedula_normalized?: string | null
+          city?: string | null
+          country?: string | null
+          created_at?: string
+          created_date?: string | null
+          credit_score?: number | null
+          currency?: string
+          date_of_birth?: string | null
+          email?: string | null
+          entity_id: string
+          first_name?: string | null
+          full_name?: string | null
+          gender?: string | null
+          id?: string
+          landline?: string | null
+          last_name?: string | null
+          loan_officer_raw?: string | null
+          mobile?: string | null
+          normalized_name?: string | null
+          number_of_defaulted_loans?: number | null
+          number_of_denied_loans?: number | null
+          number_of_fully_paid_loans?: number | null
+          number_of_loans?: number | null
+          number_of_not_taken_up_loans?: number | null
+          number_of_open_loans?: number | null
+          number_of_processing_loans?: number | null
+          number_of_restructured_loans?: number | null
+          open_loans_balance_minor?: number | null
+          province?: string | null
+          raw?: Json
+          snapshot_date: string
+          snapshot_id: string
+          source_borrower_id: string
+          total_paid_amount_minor?: number | null
+          unique_number?: string | null
+          updated_at?: string
+          working_status?: string | null
+          zipcode?: string | null
+        }
+        Update: {
+          address?: string | null
+          age?: number | null
+          borrower_status_raw?: string | null
+          business?: string | null
+          cedula_normalized?: string | null
+          city?: string | null
+          country?: string | null
+          created_at?: string
+          created_date?: string | null
+          credit_score?: number | null
+          currency?: string
+          date_of_birth?: string | null
+          email?: string | null
+          entity_id?: string
+          first_name?: string | null
+          full_name?: string | null
+          gender?: string | null
+          id?: string
+          landline?: string | null
+          last_name?: string | null
+          loan_officer_raw?: string | null
+          mobile?: string | null
+          normalized_name?: string | null
+          number_of_defaulted_loans?: number | null
+          number_of_denied_loans?: number | null
+          number_of_fully_paid_loans?: number | null
+          number_of_loans?: number | null
+          number_of_not_taken_up_loans?: number | null
+          number_of_open_loans?: number | null
+          number_of_processing_loans?: number | null
+          number_of_restructured_loans?: number | null
+          open_loans_balance_minor?: number | null
+          province?: string | null
+          raw?: Json
+          snapshot_date?: string
+          snapshot_id?: string
+          source_borrower_id?: string
+          total_paid_amount_minor?: number | null
+          unique_number?: string | null
+          updated_at?: string
+          working_status?: string | null
+          zipcode?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "portfolio_borrowers_entity_id_fkey"
+            columns: ["entity_id"]
+            isOneToOne: false
+            referencedRelation: "portfolio_entities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portfolio_borrowers_snapshot_id_fkey"
+            columns: ["snapshot_id"]
+            isOneToOne: false
+            referencedRelation: "portfolio_snapshots"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      portfolio_entities: {
+        Row: {
+          code: Database["public"]["Enums"]["portfolio_entities_code_enum"]
+          created_at: string
+          display_name: string
+          id: string
+          is_active: boolean
+          legal_name: string
+          updated_at: string
+        }
+        Insert: {
+          code: Database["public"]["Enums"]["portfolio_entities_code_enum"]
+          created_at?: string
+          display_name: string
+          id?: string
+          is_active?: boolean
+          legal_name: string
+          updated_at?: string
+        }
+        Update: {
+          code?: Database["public"]["Enums"]["portfolio_entities_code_enum"]
+          created_at?: string
+          display_name?: string
+          id?: string
+          is_active?: boolean
+          legal_name?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      portfolio_loan_repayments: {
+        Row: {
+          approved_by: string | null
+          bank_account_payment_raw: string | null
+          collected_by: string | null
+          collection_date: string | null
+          created_at: string
+          currency: string
+          description: string | null
+          edit_date: string | null
+          entity_id: string
+          fees_paid_minor: number
+          id: string
+          interest_paid_minor: number
+          is_cash_collection: boolean
+          loan_officer_raw: string | null
+          method: string | null
+          penalty_paid_minor: number
+          principal_paid_minor: number
+          raw: Json
+          snapshot_date: string
+          snapshot_id: string
+          source_borrower_ref: string | null
+          source_loan_id: string
+          source_repayment_id: string
+          total_paid_minor: number
+          updated_at: string
+        }
+        Insert: {
+          approved_by?: string | null
+          bank_account_payment_raw?: string | null
+          collected_by?: string | null
+          collection_date?: string | null
+          created_at?: string
+          currency?: string
+          description?: string | null
+          edit_date?: string | null
+          entity_id: string
+          fees_paid_minor?: number
+          id?: string
+          interest_paid_minor?: number
+          is_cash_collection?: boolean
+          loan_officer_raw?: string | null
+          method?: string | null
+          penalty_paid_minor?: number
+          principal_paid_minor?: number
+          raw?: Json
+          snapshot_date: string
+          snapshot_id: string
+          source_borrower_ref?: string | null
+          source_loan_id: string
+          source_repayment_id: string
+          total_paid_minor?: number
+          updated_at?: string
+        }
+        Update: {
+          approved_by?: string | null
+          bank_account_payment_raw?: string | null
+          collected_by?: string | null
+          collection_date?: string | null
+          created_at?: string
+          currency?: string
+          description?: string | null
+          edit_date?: string | null
+          entity_id?: string
+          fees_paid_minor?: number
+          id?: string
+          interest_paid_minor?: number
+          is_cash_collection?: boolean
+          loan_officer_raw?: string | null
+          method?: string | null
+          penalty_paid_minor?: number
+          principal_paid_minor?: number
+          raw?: Json
+          snapshot_date?: string
+          snapshot_id?: string
+          source_borrower_ref?: string | null
+          source_loan_id?: string
+          source_repayment_id?: string
+          total_paid_minor?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "portfolio_loan_repayments_entity_id_fkey"
+            columns: ["entity_id"]
+            isOneToOne: false
+            referencedRelation: "portfolio_entities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portfolio_loan_repayments_snapshot_id_fkey"
+            columns: ["snapshot_id"]
+            isOneToOne: false
+            referencedRelation: "portfolio_snapshots"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      portfolio_loans: {
+        Row: {
+          balance_amount_minor: number | null
+          bank_account_loan_released: string | null
+          borrower_join_confidence: Database["public"]["Enums"]["portfolio_loans_borrower_join_enum"]
+          created_at: string
+          currency: string
+          days_past_due: number | null
+          days_past_maturity: number | null
+          days_to_maturity: number | null
+          duration_months: number | null
+          entity_id: string
+          id: string
+          ifrs_stage:
+            | Database["public"]["Enums"]["portfolio_loans_ifrs_stage_enum"]
+            | null
+          interest_rate_raw: string | null
+          is_npl: boolean | null
+          last_payment_amount_minor: number | null
+          last_payment_date: string | null
+          loan_officer_raw: string | null
+          management_vintage:
+            | Database["public"]["Enums"]["portfolio_loans_management_vintage_enum"]
+            | null
+          maturity_date: string | null
+          next_installment_amount_minor: number | null
+          next_installment_date: string | null
+          paid_amount_minor: number | null
+          past_due_minor: number | null
+          pending_due_minor: number | null
+          pending_principal_due_minor: number | null
+          portfolio_segment:
+            | Database["public"]["Enums"]["portfolio_loans_portfolio_segment_enum"]
+            | null
+          principal_amount_minor: number | null
+          product_group: Database["public"]["Enums"]["portfolio_loans_product_group_enum"]
+          product_raw: string | null
+          raw: Json
+          released_date: string | null
+          repayment_cycle: string | null
+          resolved_source_borrower_id: string | null
+          snapshot_date: string
+          snapshot_id: string
+          source_borrower_ref: string | null
+          source_loan_id: string
+          source_loan_number: string | null
+          status_normalized:
+            | Database["public"]["Enums"]["portfolio_loans_status_enum"]
+            | null
+          status_raw: string | null
+          total_fees_balance_minor: number | null
+          total_fees_paid_minor: number | null
+          total_interest_balance_minor: number | null
+          total_interest_paid_minor: number | null
+          total_penalty_balance_minor: number | null
+          total_penalty_paid_minor: number | null
+          total_principal_balance_minor: number | null
+          total_principal_paid_minor: number | null
+          updated_at: string
+        }
+        Insert: {
+          balance_amount_minor?: number | null
+          bank_account_loan_released?: string | null
+          borrower_join_confidence?: Database["public"]["Enums"]["portfolio_loans_borrower_join_enum"]
+          created_at?: string
+          currency?: string
+          days_past_due?: number | null
+          days_past_maturity?: number | null
+          days_to_maturity?: number | null
+          duration_months?: number | null
+          entity_id: string
+          id?: string
+          ifrs_stage?:
+            | Database["public"]["Enums"]["portfolio_loans_ifrs_stage_enum"]
+            | null
+          interest_rate_raw?: string | null
+          is_npl?: boolean | null
+          last_payment_amount_minor?: number | null
+          last_payment_date?: string | null
+          loan_officer_raw?: string | null
+          management_vintage?:
+            | Database["public"]["Enums"]["portfolio_loans_management_vintage_enum"]
+            | null
+          maturity_date?: string | null
+          next_installment_amount_minor?: number | null
+          next_installment_date?: string | null
+          paid_amount_minor?: number | null
+          past_due_minor?: number | null
+          pending_due_minor?: number | null
+          pending_principal_due_minor?: number | null
+          portfolio_segment?:
+            | Database["public"]["Enums"]["portfolio_loans_portfolio_segment_enum"]
+            | null
+          principal_amount_minor?: number | null
+          product_group?: Database["public"]["Enums"]["portfolio_loans_product_group_enum"]
+          product_raw?: string | null
+          raw?: Json
+          released_date?: string | null
+          repayment_cycle?: string | null
+          resolved_source_borrower_id?: string | null
+          snapshot_date: string
+          snapshot_id: string
+          source_borrower_ref?: string | null
+          source_loan_id: string
+          source_loan_number?: string | null
+          status_normalized?:
+            | Database["public"]["Enums"]["portfolio_loans_status_enum"]
+            | null
+          status_raw?: string | null
+          total_fees_balance_minor?: number | null
+          total_fees_paid_minor?: number | null
+          total_interest_balance_minor?: number | null
+          total_interest_paid_minor?: number | null
+          total_penalty_balance_minor?: number | null
+          total_penalty_paid_minor?: number | null
+          total_principal_balance_minor?: number | null
+          total_principal_paid_minor?: number | null
+          updated_at?: string
+        }
+        Update: {
+          balance_amount_minor?: number | null
+          bank_account_loan_released?: string | null
+          borrower_join_confidence?: Database["public"]["Enums"]["portfolio_loans_borrower_join_enum"]
+          created_at?: string
+          currency?: string
+          days_past_due?: number | null
+          days_past_maturity?: number | null
+          days_to_maturity?: number | null
+          duration_months?: number | null
+          entity_id?: string
+          id?: string
+          ifrs_stage?:
+            | Database["public"]["Enums"]["portfolio_loans_ifrs_stage_enum"]
+            | null
+          interest_rate_raw?: string | null
+          is_npl?: boolean | null
+          last_payment_amount_minor?: number | null
+          last_payment_date?: string | null
+          loan_officer_raw?: string | null
+          management_vintage?:
+            | Database["public"]["Enums"]["portfolio_loans_management_vintage_enum"]
+            | null
+          maturity_date?: string | null
+          next_installment_amount_minor?: number | null
+          next_installment_date?: string | null
+          paid_amount_minor?: number | null
+          past_due_minor?: number | null
+          pending_due_minor?: number | null
+          pending_principal_due_minor?: number | null
+          portfolio_segment?:
+            | Database["public"]["Enums"]["portfolio_loans_portfolio_segment_enum"]
+            | null
+          principal_amount_minor?: number | null
+          product_group?: Database["public"]["Enums"]["portfolio_loans_product_group_enum"]
+          product_raw?: string | null
+          raw?: Json
+          released_date?: string | null
+          repayment_cycle?: string | null
+          resolved_source_borrower_id?: string | null
+          snapshot_date?: string
+          snapshot_id?: string
+          source_borrower_ref?: string | null
+          source_loan_id?: string
+          source_loan_number?: string | null
+          status_normalized?:
+            | Database["public"]["Enums"]["portfolio_loans_status_enum"]
+            | null
+          status_raw?: string | null
+          total_fees_balance_minor?: number | null
+          total_fees_paid_minor?: number | null
+          total_interest_balance_minor?: number | null
+          total_interest_paid_minor?: number | null
+          total_penalty_balance_minor?: number | null
+          total_penalty_paid_minor?: number | null
+          total_principal_balance_minor?: number | null
+          total_principal_paid_minor?: number | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "portfolio_loans_entity_id_fkey"
+            columns: ["entity_id"]
+            isOneToOne: false
+            referencedRelation: "portfolio_entities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portfolio_loans_snapshot_id_fkey"
+            columns: ["snapshot_id"]
+            isOneToOne: false
+            referencedRelation: "portfolio_snapshots"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      portfolio_policy: {
+        Row: {
+          cash_advance_always_new: boolean
+          charge_off_dpd_threshold: number
+          created_at: string
+          ecl_stage_1_coverage: number | null
+          ecl_stage_2_coverage: number | null
+          ecl_stage_3_coverage: number | null
+          effective_from: string
+          id: string
+          management_cutoff_date: string
+          notes: string | null
+          npl_dpd_min: number
+          stage_2_dpd_min: number
+          stage_3_dpd_min: number
+          updated_at: string
+        }
+        Insert: {
+          cash_advance_always_new?: boolean
+          charge_off_dpd_threshold?: number
+          created_at?: string
+          ecl_stage_1_coverage?: number | null
+          ecl_stage_2_coverage?: number | null
+          ecl_stage_3_coverage?: number | null
+          effective_from: string
+          id?: string
+          management_cutoff_date?: string
+          notes?: string | null
+          npl_dpd_min?: number
+          stage_2_dpd_min?: number
+          stage_3_dpd_min?: number
+          updated_at?: string
+        }
+        Update: {
+          cash_advance_always_new?: boolean
+          charge_off_dpd_threshold?: number
+          created_at?: string
+          ecl_stage_1_coverage?: number | null
+          ecl_stage_2_coverage?: number | null
+          ecl_stage_3_coverage?: number | null
+          effective_from?: string
+          id?: string
+          management_cutoff_date?: string
+          notes?: string | null
+          npl_dpd_min?: number
+          stage_2_dpd_min?: number
+          stage_3_dpd_min?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      portfolio_snapshot_dq: {
+        Row: {
+          created_at: string
+          detail: Json
+          id: string
+          metric: string
+          severity: Database["public"]["Enums"]["portfolio_snapshot_dq_severity_enum"]
+          snapshot_id: string
+          value_numeric: number | null
+          value_text: string | null
+        }
+        Insert: {
+          created_at?: string
+          detail?: Json
+          id?: string
+          metric: string
+          severity?: Database["public"]["Enums"]["portfolio_snapshot_dq_severity_enum"]
+          snapshot_id: string
+          value_numeric?: number | null
+          value_text?: string | null
+        }
+        Update: {
+          created_at?: string
+          detail?: Json
+          id?: string
+          metric?: string
+          severity?: Database["public"]["Enums"]["portfolio_snapshot_dq_severity_enum"]
+          snapshot_id?: string
+          value_numeric?: number | null
+          value_text?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "portfolio_snapshot_dq_snapshot_id_fkey"
+            columns: ["snapshot_id"]
+            isOneToOne: false
+            referencedRelation: "portfolio_snapshots"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      portfolio_snapshots: {
+        Row: {
+          borrower_row_count: number
+          created_at: string
+          entity_id: string
+          error_message: string | null
+          finalized_at: string | null
+          id: string
+          imported_at: string
+          imported_by: string | null
+          loan_row_count: number
+          loans_with_borrower_match: number
+          loans_without_borrower_match: number
+          policy_id: string
+          repayment_row_count: number
+          snapshot_date: string
+          source_files: Json
+          status: Database["public"]["Enums"]["portfolio_snapshots_status_enum"]
+          updated_at: string
+        }
+        Insert: {
+          borrower_row_count?: number
+          created_at?: string
+          entity_id: string
+          error_message?: string | null
+          finalized_at?: string | null
+          id?: string
+          imported_at?: string
+          imported_by?: string | null
+          loan_row_count?: number
+          loans_with_borrower_match?: number
+          loans_without_borrower_match?: number
+          policy_id: string
+          repayment_row_count?: number
+          snapshot_date: string
+          source_files?: Json
+          status?: Database["public"]["Enums"]["portfolio_snapshots_status_enum"]
+          updated_at?: string
+        }
+        Update: {
+          borrower_row_count?: number
+          created_at?: string
+          entity_id?: string
+          error_message?: string | null
+          finalized_at?: string | null
+          id?: string
+          imported_at?: string
+          imported_by?: string | null
+          loan_row_count?: number
+          loans_with_borrower_match?: number
+          loans_without_borrower_match?: number
+          policy_id?: string
+          repayment_row_count?: number
+          snapshot_date?: string
+          source_files?: Json
+          status?: Database["public"]["Enums"]["portfolio_snapshots_status_enum"]
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "portfolio_snapshots_entity_id_fkey"
+            columns: ["entity_id"]
+            isOneToOne: false
+            referencedRelation: "portfolio_entities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portfolio_snapshots_policy_id_fkey"
+            columns: ["policy_id"]
+            isOneToOne: false
+            referencedRelation: "portfolio_policy"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       recon_ach_batch_lines: {
         Row: {
           account_id: string
@@ -491,6 +1132,7 @@ export type Database = {
     }
     Functions: {
       is_active_operator: { Args: never; Returns: boolean }
+      is_portfolio_writer: { Args: never; Returns: boolean }
       is_recon_writer: { Args: never; Returns: boolean }
     }
     Enums: {
@@ -499,6 +1141,34 @@ export type Database = {
       operator_language: "en" | "es"
       operator_role: "agent" | "loan_officer" | "risk_analyst" | "admin"
       operator_status: "active" | "disabled"
+      portfolio_entities_code_enum: "crediclaro" | "junto_soluciones"
+      portfolio_loans_borrower_join_enum:
+        | "exact_unique_number"
+        | "normalized_name"
+        | "unresolved"
+      portfolio_loans_ifrs_stage_enum:
+        | "stage_1"
+        | "stage_2"
+        | "stage_3"
+        | "closed"
+      portfolio_loans_management_vintage_enum: "old" | "new"
+      portfolio_loans_portfolio_segment_enum:
+        | "old_personal"
+        | "new_personal"
+        | "cash_advance"
+        | "other"
+      portfolio_loans_product_group_enum:
+        | "personal_collateralized"
+        | "personal_uncollateralized"
+        | "cash_advance"
+        | "other"
+      portfolio_loans_status_enum:
+        | "closed"
+        | "performing"
+        | "delinquent"
+        | "legacy_delinquent"
+      portfolio_snapshot_dq_severity_enum: "ok" | "warn" | "critical"
+      portfolio_snapshots_status_enum: "in_progress" | "completed" | "failed"
       recon_links_strategy_enum:
         | "auto_fifo_name_amount"
         | "manual"
@@ -655,6 +1325,39 @@ export const Constants = {
       operator_language: ["en", "es"],
       operator_role: ["agent", "loan_officer", "risk_analyst", "admin"],
       operator_status: ["active", "disabled"],
+      portfolio_entities_code_enum: ["crediclaro", "junto_soluciones"],
+      portfolio_loans_borrower_join_enum: [
+        "exact_unique_number",
+        "normalized_name",
+        "unresolved",
+      ],
+      portfolio_loans_ifrs_stage_enum: [
+        "stage_1",
+        "stage_2",
+        "stage_3",
+        "closed",
+      ],
+      portfolio_loans_management_vintage_enum: ["old", "new"],
+      portfolio_loans_portfolio_segment_enum: [
+        "old_personal",
+        "new_personal",
+        "cash_advance",
+        "other",
+      ],
+      portfolio_loans_product_group_enum: [
+        "personal_collateralized",
+        "personal_uncollateralized",
+        "cash_advance",
+        "other",
+      ],
+      portfolio_loans_status_enum: [
+        "closed",
+        "performing",
+        "delinquent",
+        "legacy_delinquent",
+      ],
+      portfolio_snapshot_dq_severity_enum: ["ok", "warn", "critical"],
+      portfolio_snapshots_status_enum: ["in_progress", "completed", "failed"],
       recon_links_strategy_enum: [
         "auto_fifo_name_amount",
         "manual",
