@@ -26,6 +26,35 @@ const LEGACY_DIR = "70136"; // first sample drop, dated as today
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
+// LoanDisk's native daily-export folder name: `70136 (06JUN)` etc.
+// Year is assumed current; if a December export is dropped in January
+// the user should rename to the explicit YYYY-MM-DD form.
+const LOANDISK_PATTERN = /^70136\s*\((\d{1,2})([A-Z]{3})\)$/;
+const MONTH_CODES: Record<string, number> = {
+  JAN: 1, FEB: 2, MAR: 3, APR: 4, MAY: 5, JUN: 6,
+  JUL: 7, AUG: 8, SEP: 9, OCT: 10, NOV: 11, DEC: 12,
+};
+
+/**
+ * Derive the snapshot ISO date for a sample folder. Accepts:
+ *   YYYY-MM-DD                — used as-is
+ *   70136                     — today
+ *   70136 (06JUN) / 70136(06JUN) — DDMMM in current year
+ * Returns null if the folder name doesn't fit any supported format.
+ */
+function folderToSnapshotDate(folder: string): string | null {
+  if (DATE_PATTERN.test(folder)) return folder;
+  if (folder === LEGACY_DIR) return todayIso();
+  const m = LOANDISK_PATTERN.exec(folder);
+  if (!m) return null;
+  const day = Number.parseInt(m[1], 10);
+  const month = MONTH_CODES[m[2]];
+  if (!month) return null;
+  if (day < 1 || day > 31) return null;
+  const year = new Date().getUTCFullYear();
+  return `${year}-${month.toString().padStart(2, "0")}-${day.toString().padStart(2, "0")}`;
+}
+
 // =============================================================
 // Discovery
 // =============================================================
@@ -56,14 +85,16 @@ export async function discoverAvailableBackfills(): Promise<AvailableBackfill[]>
   } catch {
     return [];
   }
-  const candidates: string[] = [];
+  const candidates: Array<{ folder: string; snapshotDate: string }> = [];
   for (const d of dirs) {
-    if (DATE_PATTERN.test(d) || d === LEGACY_DIR) candidates.push(d);
+    const snapshotDate = folderToSnapshotDate(d);
+    if (snapshotDate) candidates.push({ folder: d, snapshotDate });
   }
-  candidates.sort();
+  // Order by snapshot date ascending so backfill runs oldest-first.
+  candidates.sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
 
   const results: AvailableBackfill[] = [];
-  for (const folder of candidates) {
+  for (const { folder, snapshotDate } of candidates) {
     const dir = join(SAMPLES_ROOT, folder);
     const missing: string[] = [];
     for (const f of Object.values(FILES)) {
@@ -75,7 +106,7 @@ export async function discoverAvailableBackfills(): Promise<AvailableBackfill[]>
     }
     results.push({
       folder,
-      snapshotDate: folder === LEGACY_DIR ? todayIso() : folder,
+      snapshotDate,
       ready: missing.length === 0,
       missing,
     });
@@ -103,14 +134,13 @@ export async function ingestCrediclaroFolder(
 ): Promise<IngestSampleState> {
   const session = await requirePortfolioWriter();
 
-  if (!isAllowedFolder(folder)) {
+  const snapshotDate = folderToSnapshotDate(folder);
+  if (!snapshotDate) {
     return {
       status: "error",
-      message: `Unsupported folder name "${folder}". Use YYYY-MM-DD.`,
+      message: `Unsupported folder name "${folder}". Use YYYY-MM-DD or LoanDisk's "70136 (DDMMM)" form.`,
     };
   }
-  const snapshotDate =
-    folder === LEGACY_DIR ? todayIso() : folder;
   const dir = join(SAMPLES_ROOT, folder);
 
   try {
@@ -216,10 +246,6 @@ export async function runFullBackfill(): Promise<BackfillRunState> {
 // =============================================================
 // Helpers
 // =============================================================
-
-function isAllowedFolder(folder: string): boolean {
-  return DATE_PATTERN.test(folder) || folder === LEGACY_DIR;
-}
 
 function todayIso(): string {
   const d = new Date();
