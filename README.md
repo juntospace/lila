@@ -25,4 +25,3 @@ lila/
 
 ---
 _Managed by Vero 6️⃣7️⃣_
-
