@@ -46,6 +46,8 @@ _(To be defined with Antonio)_
 - 2026-07-21: Configured default BAC account (`100412600` · `JUNTO SOLUCIONES, S.A.`) in seeds and local database for reconciliation testing.
 - 2026-07-21: Created private Supabase Storage bucket `recon-statements` with RLS policies in migration `20260721223000_recon_storage_bucket.sql`.
 - 2026-07-22: Linked BAC Excel statement upload in `uploadStatement` with private Supabase Storage bucket `recon-statements` (path: `<account_id>/<file_sha256>.<ext>`) and concurrent `bac-recon` Edge Function validation. Added `storage_path text` column to `recon_uploads` in migration `20260721230000_recon_uploads_storage_path.sql` and ensured transactional rollback (removing storage object and deleting records on error) as well as storage object deletion upon calling `deleteUpload`.
+- 2026-07-22: Modularized the BAC reconciliation logic inside Supabase Edge Function `bac-recon` (`parser.ts`, `storage.ts`, `ingest.ts`, `classify.ts`, `reconcile.ts`, `batches.ts`, `recompute.ts`, `report.ts`), delegating processing directly to the Edge Function from server actions.
+- 2026-07-22: Added integration test suite for `bac-recon` Edge Function (`supabase/functions/bac-recon/tests/integration_test.ts`) covering auth validation, multipart form parsing, BAC Excel parsing, and end-to-end reconciliation flow, integrated with Deno test runner (`pnpm test:recon`).
 
 ---
 _Last updated: 2026-07-22_
