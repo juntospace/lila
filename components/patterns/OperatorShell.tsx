@@ -13,7 +13,7 @@ export function OperatorShell({
 }) {
   const initials = (session.profile.full_name ?? session.email)
     .split(/\s+/)
-    .map((s) => s[0])
+    .map((s: string) => s[0])
     .filter(Boolean)
     .slice(0, 2)
     .join("")

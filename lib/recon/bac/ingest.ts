@@ -28,6 +28,7 @@ export interface IngestArgs {
   originalFilename: string;
   uploadedBy?: string;
   parseResult: BACParseResult;
+  storagePath?: string;
 }
 
 export interface IngestResult {
@@ -68,7 +69,7 @@ interface ReconTxnInsert {
 }
 
 export async function ingestBACFile(args: IngestArgs): Promise<IngestResult> {
-  const { supabase, accountId, fileBytes, originalFilename, uploadedBy, parseResult } = args;
+  const { supabase, accountId, fileBytes, originalFilename, uploadedBy, parseResult, storagePath } = args;
   const warnings = [...parseResult.warnings];
 
   const fileSha256 = computeFileSha256(fileBytes);
@@ -79,6 +80,7 @@ export async function ingestBACFile(args: IngestArgs): Promise<IngestResult> {
     account_id: accountId,
     method: "statement_excel",
     file_sha256: fileSha256,
+    storage_path: storagePath ?? null,
     original_filename: originalFilename,
     uploaded_by: uploadedBy ?? null,
     date_range_start: header.dateRangeStart || null,
