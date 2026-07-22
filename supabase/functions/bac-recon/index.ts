@@ -1,3 +1,4 @@
+import "@supabase/functions-js/edge-runtime.d.ts";
 import * as XLSX from "npm:xlsx@0.18.5";
 
 import { requireAuth } from "./auth.ts";
