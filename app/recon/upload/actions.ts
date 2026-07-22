@@ -298,128 +298,39 @@ export async function uploadStatement(
   }
 
   // ----- BAC rail (default) --------------------------------------------
-  let matrix: unknown[][];
+  let edgeData: any;
   try {
-    matrix = XLSX.utils.sheet_to_json<unknown[]>(
-      workbook.Sheets[firstSheetName],
-      {
-        header: 1,
-        raw: true,
-        defval: null,
-        blankrows: true,
+    const edgeFormData = new FormData();
+    const edgeFile = new File([fileBytes], file.name, {
+      type: file.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    edgeFormData.append("file", edgeFile);
+    edgeFormData.append("account_id", account.id);
+
+    const { publicEnv, serverEnv } = await import("@/lib/env");
+    const serviceKey = serverEnv().SUPABASE_SERVICE_ROLE_KEY;
+    const fnUrl = `${publicEnv.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/bac-recon?format=json&account_id=${account.id}`;
+
+    const response = await fetch(fnUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${serviceKey}`,
+        apikey: publicEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+        "x-user-id": session.userId,
       },
-    );
-  } catch (err) {
-    return {
-      status: "error",
-      message: `Could not read the Excel file: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    };
-  }
-
-  let parseResult;
-  try {
-    parseResult = parseBACSheet(matrix as never);
-  } catch (err) {
-    if (err instanceof BACParseError) {
-      return { status: "error", message: `Parser: ${err.message}` };
-    }
-    throw err;
-  }
-
-  if (
-    parseResult.header.accountNumber &&
-    parseResult.header.accountNumber.replace(/\D/g, "") !==
-      account.account_number.replace(/\D/g, "")
-  ) {
-    return {
-      status: "error",
-      message: `File is for account ${parseResult.header.accountNumber}, but you picked ${account.account_number}.`,
-    };
-  }
-
-  const fileSha256 = computeFileSha256(fileBytes);
-  const ext = file.name.endsWith(".xls") ? "xls" : "xlsx";
-  const storagePath = `${account.id}/${fileSha256}.${ext}`;
-
-  let uploadedToStorage = false;
-
-  let result: IngestResult;
-  try {
-    // Subida al bucket de Storage e Invocación de la Edge Function 'bac-recon'
-    const storagePromise = (async () => {
-      const adminSupabase = createSupabaseServiceClient();
-      const { error: storageErr } = await adminSupabase.storage
-        .from("recon-statements")
-        .upload(storagePath, fileBytes, {
-          contentType: file.type || "application/octet-stream",
-          upsert: true,
-        });
-      if (storageErr) {
-        throw new Error(`Storage upload failed: ${storageErr.message}`);
-      }
-      uploadedToStorage = true;
-    })();
-
-    const edgeFunctionPromise = (async () => {
-      const edgeFormData = new FormData();
-      const edgeFile = new File([fileBytes], file.name, {
-        type: file.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      });
-      edgeFormData.append("file", edgeFile);
-
-      const { publicEnv, serverEnv } = await import("@/lib/env");
-      const serviceKey = serverEnv().SUPABASE_SERVICE_ROLE_KEY;
-      const fnUrl = `${publicEnv.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/bac-recon?format=json`;
-
-      const response = await fetch(fnUrl, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${serviceKey}`,
-          apikey: publicEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-        },
-        body: edgeFormData,
-      });
-
-      if (!response.ok) {
-        const text = await response.text().catch(() => "");
-        throw new Error(`Edge Function bac-recon returned HTTP ${response.status}: ${text}`);
-      }
-
-      const edgeData = await response.json();
-      if (edgeData && typeof edgeData === "object" && "error" in edgeData) {
-        throw new Error(`Edge Function bac-recon error: ${edgeData.error}`);
-      }
-      return edgeData;
-    })();
-
-    const ingestPromise = ingestBACFile({
-      supabase,
-      accountId: account.id,
-      fileBytes,
-      originalFilename: file.name,
-      uploadedBy: session.userId,
-      parseResult,
-      storagePath,
+      body: edgeFormData,
     });
 
-    // Ejecutar subida, invocación de Edge Function e ingesta de manera concurrente
-    const [, , ingestRes] = await Promise.all([
-      storagePromise,
-      edgeFunctionPromise,
-      ingestPromise,
-    ]);
-
-    result = ingestRes;
-  } catch (err: unknown) {
-    // ROLLBACK: Si el archivo fue subido en este intento, limpiarlo del storage
-    if (uploadedToStorage) {
-      await supabase.storage.from("recon-statements").remove([storagePath]).catch(() => {
-        // Ignorar error de limpieza en el rollback
-      });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(`Edge Function bac-recon returned HTTP ${response.status}: ${text}`);
     }
 
+    edgeData = await response.json();
+    if (edgeData && typeof edgeData === "object" && "error" in edgeData) {
+      throw new Error(`Edge Function bac-recon error: ${edgeData.error}`);
+    }
+  } catch (err: unknown) {
     let errorMessage = "An unknown error occurred.";
     if (err instanceof Error) {
       errorMessage = err.message;
@@ -443,6 +354,33 @@ export async function uploadStatement(
       status: "error",
       message: `Ingest failed: ${errorMessage}`,
     };
+  }
+
+  const result: IngestResult = edgeData.ingestResult || {
+    uploadId: null,
+    fileWasDuplicate: false,
+    rowsTotal: edgeData.items?.length || 0,
+    rowsNew: edgeData.items?.length || 0,
+    rowsDuplicate: 0,
+    dateRangeAdded: null,
+    dateRangeOverlap: null,
+    prsConfirmedThisRun: 0,
+    reversalsPaired: 0,
+    reversalsUnpaired: 0,
+    prBatchesPending: 0,
+    warnings: edgeData.issues || [],
+  };
+
+  if (!result.fileWasDuplicate && result.rowsNew > 0) {
+    try {
+      const recomputeStats = await recomputeAccount(supabase, account.id, session.userId);
+      result.prsConfirmedThisRun = recomputeStats.prsConfirmed;
+      result.reversalsPaired = recomputeStats.reversalsPaired;
+      result.reversalsUnpaired = recomputeStats.reversalsUnpaired;
+      result.prBatchesPending = recomputeStats.prBatchesPending;
+    } catch (e) {
+      console.error("Recompute after Edge Function ingest failed:", e);
+    }
   }
 
   revalidatePath("/recon/upload");

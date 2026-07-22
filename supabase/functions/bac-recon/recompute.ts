@@ -48,7 +48,7 @@
 //   pair are auto-confirmed (the bank kept the funds). No date filter
 //   is applied — the linker trusts reference order alone.
 
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 
 import {
   groupDABatches,
@@ -57,15 +57,15 @@ import {
   type BatchLink,
   type DARowForBatch,
   type PRRowForBatch,
-} from "./batches";
+} from "./batches.ts";
 import {
   aliasMatch,
   extractPRPayerName,
   namesMatch,
   normalizeName,
   type AliasMap,
-} from "./classify";
-import { parseDvtoDescription } from "./parser";
+} from "./classify.ts";
+import { parseDvtoDescription } from "./parser.ts";
 
 const SUPABASE_PAGE_LIMIT = 1000;
 const SUPABASE_PAGE_SAFETY_CAP = 200_000;
@@ -528,46 +528,44 @@ async function recomputePRStates(
   linkedPrIds: Set<string>,
   autoConfirmedPrIds: Set<string>,
 ): Promise<{ confirmed: number; rejected: number; pending: number }> {
-  const prRows: { id: string; posted_at: string }[] = [];
+  const prIds: string[] = [];
   let cursor = 0;
   while (cursor < SUPABASE_PAGE_SAFETY_CAP) {
     const { data, error } = await supabase
       .from("recon_transactions")
-      .select("id, posted_at")
+      .select("id")
       .eq("account_id", accountId)
       .eq("code", "PR")
       .order("id", { ascending: true })
       .range(cursor, cursor + SUPABASE_PAGE_LIMIT - 1);
     if (error) throw error;
     if (!data || data.length === 0) break;
-    for (const pr of data) {
-      prRows.push({ id: pr.id as string, posted_at: pr.posted_at as string });
-    }
+    for (const pr of data) prIds.push(pr.id as string);
     if (data.length < SUPABASE_PAGE_LIMIT) break;
     cursor += SUPABASE_PAGE_LIMIT;
   }
 
-  const prIds = prRows.map((r) => r.id);
-
-  // Obtener la fecha máxima de PRs presentes en la cuenta para saber si la ventana de devoluciones cerró
-  let maxPrDate: string | null = null;
-  for (const pr of prRows) {
-    if (!maxPrDate || pr.posted_at > maxPrDate) {
-      maxPrDate = pr.posted_at;
-    }
-  }
-
-  // Phase 2: load latest manual override per PR.
+  // Phase 2: load latest manual override per PR. Operator-curated state
+  // beats the auto rules — if the operator manually confirmed a pending
+  // PR, we must not overwrite it back to pending here.
   const overrides = await fetchManualOverrides(supabase, prIds);
 
-  // Phase 3: bucket.
+  // Phase 3: bucket. Order of precedence:
+  //   1. Auto-rejected via recon_links (the strongest signal — a DA
+  //      physically arrived for this PR).
+  //   2. Operator's latest manual override, if any.
+  //   3. Auto-confirmed because PR's batch was consumed and PR didn't pair.
+  //   4. Default 'pending'.
+  //
+  // File-clock confirmation was retired in Tier 5 PR 3. confirmable_after
+  // is no longer consulted; a PR confirms only via batch-link consumption
+  // or explicit operator action.
   const buckets = {
     confirmed: [] as string[],
     rejected: [] as string[],
     pending: [] as string[],
   };
-  for (const pr of prRows) {
-    const id = pr.id;
+  for (const id of prIds) {
     if (linkedPrIds.has(id)) {
       buckets.rejected.push(id);
       continue;
@@ -577,8 +575,7 @@ async function recomputePRStates(
       buckets[override].push(id);
       continue;
     }
-    // Un PR solo se auto-confirma si pertenece a un lote consumido Y existe un día con PR posterior cargado
-    if (autoConfirmedPrIds.has(id) && maxPrDate && pr.posted_at < maxPrDate) {
+    if (autoConfirmedPrIds.has(id)) {
       buckets.confirmed.push(id);
       continue;
     }
