@@ -15,7 +15,8 @@
     "db:types": "supabase gen types typescript --linked --schema public | sed '/^Initialising/d' > lib/supabase/types.generated.ts",
     "test": "vitest run --exclude='tests/integration/**'",
     "test:watch": "vitest",
-    "test:integration": "vitest run tests/integration"
+    "test:integration": "vitest run tests/integration",
+    "test:recon": "deno test --no-check --allow-net --allow-env supabase/functions/bac-recon/tests/integration_test.ts"
   },
   "dependencies": {
     "@radix-ui/react-label": "^2.1.8",
