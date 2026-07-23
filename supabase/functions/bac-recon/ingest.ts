@@ -11,15 +11,15 @@
 //   - Link-level: recon_links has pr_txn_id as PRIMARY KEY and da_txn_id as
 //     UNIQUE, so first-DA-wins-per-PR is enforced by the database.
 
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 
 import {
   classifyBACRow,
   computeFileSha256,
   computeRowHash,
-} from "./classify";
-import type { BACParseResult } from "./parser";
-import { recomputeAccount } from "./recompute";
+} from "./classify.ts";
+import type { BACParseResult } from "./parser.ts";
+import { recomputeAccount } from "./recompute.ts";
 
 export interface IngestArgs {
   supabase: SupabaseClient;
@@ -72,7 +72,7 @@ export async function ingestBACFile(args: IngestArgs): Promise<IngestResult> {
   const { supabase, accountId, fileBytes, originalFilename, uploadedBy, parseResult, storagePath } = args;
   const warnings = [...parseResult.warnings];
 
-  const fileSha256 = computeFileSha256(fileBytes);
+  const fileSha256 = await computeFileSha256(fileBytes);
   const { header, rows, integrity } = parseResult;
 
   // ----- recon_uploads (file-level dedup) ----------------------------------
@@ -148,25 +148,10 @@ export async function ingestBACFile(args: IngestArgs): Promise<IngestResult> {
   );
 
   // ----- recon_transactions (row-level dedup, classification) --------------
-  const txnsToInsert: ReconTxnInsert[] = rows.map((r) => {
-    const classification = classifyBACRow(r);
-    return {
-      upload_id: uploadId,
-      account_id: accountId,
-      posted_at: r.postedAt,
-      rail_native_ref: r.reference,
-      code: r.code,
-      description: r.description,
-      debit_minor: r.debitMinor.toString(),
-      credit_minor: r.creditMinor.toString(),
-      balance_minor: r.balanceMinor.toString(),
-      currency: header.currency,
-      return_code: r.returnCode ?? null,
-      payer_name_raw: r.payerNameRaw ?? null,
-      kind: classification.kind,
-      state: classification.state,
-      confirmable_after: classification.confirmableAfter,
-      row_hash: computeRowHash({
+  const txnsToInsert: ReconTxnInsert[] = await Promise.all(
+    rows.map(async (r) => {
+      const classification = classifyBACRow(r);
+      const rowHash = await computeRowHash({
         accountId,
         postedAt: r.postedAt,
         reference: r.reference,
@@ -175,9 +160,27 @@ export async function ingestBACFile(args: IngestArgs): Promise<IngestResult> {
         debitMinor: r.debitMinor,
         creditMinor: r.creditMinor,
         balanceMinor: r.balanceMinor,
-      }),
-    };
-  });
+      });
+      return {
+        upload_id: uploadId,
+        account_id: accountId,
+        posted_at: r.postedAt,
+        rail_native_ref: r.reference,
+        code: r.code,
+        description: r.description,
+        debit_minor: r.debitMinor.toString(),
+        credit_minor: r.creditMinor.toString(),
+        balance_minor: r.balanceMinor.toString(),
+        currency: header.currency,
+        return_code: r.returnCode ?? null,
+        payer_name_raw: r.payerNameRaw ?? null,
+        kind: classification.kind,
+        state: classification.state,
+        confirmable_after: classification.confirmableAfter,
+        row_hash: rowHash,
+      };
+    })
+  );
 
   // Insert in chunks of 500 — keeps any single PostgREST request under
   // the body-size limit, and we don't rely on the .select() response to
@@ -199,17 +202,6 @@ export async function ingestBACFile(args: IngestArgs): Promise<IngestResult> {
   }
   const rowsDuplicate = rows.length - rowsNew;
 
-  // ----- Pair every unpaired DA + re-evaluate state (paginated) ------------
-  // Recompute is paginated end-to-end so it's correct for accounts with
-  // tens of thousands of rows. Self-healing: even if a previous ingest
-  // left DAs unpaired (the upsert-response-cap bug), running a fresh
-  // ingest now picks them up and corrects PR/DA states.
-  const recomputeStats = await recomputeAccount(supabase, accountId, uploadedBy ?? null);
-  const reversalsPaired = recomputeStats.reversalsPaired;
-  const reversalsUnpaired = recomputeStats.reversalsUnpaired;
-  const prsConfirmedThisRun = recomputeStats.prsConfirmed;
-  const prBatchesPending = recomputeStats.prBatchesPending;
-
   // ----- Finalize the upload row -------------------------------------------
   await supabase
     .from("recon_uploads")
@@ -228,10 +220,10 @@ export async function ingestBACFile(args: IngestArgs): Promise<IngestResult> {
     rowsDuplicate,
     dateRangeAdded: added,
     dateRangeOverlap: overlap,
-    prsConfirmedThisRun,
-    reversalsPaired,
-    reversalsUnpaired,
-    prBatchesPending,
+    prsConfirmedThisRun: 0,
+    reversalsPaired: 0,
+    reversalsUnpaired: 0,
+    prBatchesPending: 0,
     warnings,
   };
 }

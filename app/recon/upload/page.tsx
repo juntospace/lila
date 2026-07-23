@@ -24,6 +24,7 @@ type RecentUpload = {
   id: string;
   uploaded_at: string;
   original_filename: string | null;
+  storage_path: string | null;
   account_id: string;
   uploaded_by: string | null;
   status: string;
@@ -32,6 +33,7 @@ type RecentUpload = {
   rows_duplicate: number;
   date_range_start: string | null;
   date_range_end: string | null;
+  download_url?: string | null;
 };
 
 export default async function ReconUploadPage() {
@@ -47,14 +49,27 @@ export default async function ReconUploadPage() {
     supabase
       .from("recon_uploads")
       .select(
-        "id, uploaded_at, original_filename, account_id, uploaded_by, status, rows_total, rows_new, rows_duplicate, date_range_start, date_range_end",
+        "id, uploaded_at, original_filename, storage_path, account_id, uploaded_by, status, rows_total, rows_new, rows_duplicate, date_range_start, date_range_end",
       )
       .order("uploaded_at", { ascending: false })
       .limit(10),
   ]);
 
   const activeAccounts: Account[] = accounts ?? [];
-  const recentUploads: RecentUpload[] = recents ?? [];
+  const recentUploads: RecentUpload[] = await Promise.all(
+    (recents ?? []).map(async (u) => {
+      if (!u.storage_path) return u;
+      const { data } = await supabase.storage
+        .from("recon-statements")
+        .createSignedUrl(u.storage_path, 3600, {
+          download: u.original_filename ?? true,
+        });
+      return {
+        ...u,
+        download_url: data?.signedUrl ?? null,
+      };
+    }),
+  );
   const accountById = new Map(activeAccounts.map((a) => [a.id, a]));
 
   // Look up uploader names. recon_uploads.uploaded_by is auth.users(id), and
@@ -205,7 +220,18 @@ export default async function ReconUploadPage() {
                             </Link>
                           </td>
                           <td className="py-3 pr-4 max-w-[280px] truncate">
-                            {u.original_filename ?? "—"}
+                            {u.download_url ? (
+                              <a
+                                href={u.download_url}
+                                download={u.original_filename ?? true}
+                                className="font-medium text-accent hover:underline"
+                                title={`Descargar ${u.original_filename ?? "archivo"}`}
+                              >
+                                {u.original_filename ?? "—"}
+                              </a>
+                            ) : (
+                              u.original_filename ?? "—"
+                            )}
                           </td>
                           <td className="py-3 pr-4 text-xs text-fg-muted">
                             {u.date_range_start && u.date_range_end

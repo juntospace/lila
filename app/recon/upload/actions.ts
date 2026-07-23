@@ -5,12 +5,7 @@ import * as XLSX from "xlsx";
 import { z } from "zod";
 
 import { requireReconWriter } from "@/lib/auth/guard";
-import {
-  BACParseError,
-  ingestBACFile,
-  parseBACSheet,
-  type IngestResult,
-} from "@/lib/recon/bac";
+import { type IngestResult } from "@/lib/recon/bac";
 import { recomputeAccount } from "@/lib/recon/bac/recompute";
 import {
   BGParseError,
@@ -23,7 +18,10 @@ import {
   type BGAchDetailIngestResult,
   type BGStatementIngestResult,
 } from "@/lib/recon/bg";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import {
+  createSupabaseServerClient,
+  createSupabaseServiceClient,
+} from "@/lib/supabase/server";
 
 // =============================================================
 // createBankAccount
@@ -293,63 +291,95 @@ export async function uploadStatement(
     };
   }
 
-  // ----- BAC rail (default) --------------------------------------------
-  let matrix: unknown[][];
-  try {
-    matrix = XLSX.utils.sheet_to_json<unknown[]>(
-      workbook.Sheets[firstSheetName],
-      {
-        header: 1,
-        raw: true,
-        defval: null,
-        blankrows: true,
-      },
-    );
-  } catch (err) {
-    return {
-      status: "error",
-      message: `Could not read the Excel file: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    };
+  interface BacEdgeResponse {
+    ingestResult?: IngestResult;
+    items?: unknown[];
+    issues?: string[];
+    error?: string;
   }
-
-  let parseResult;
+  let edgeData: BacEdgeResponse | null = null;
   try {
-    parseResult = parseBACSheet(matrix as never);
-  } catch (err) {
-    if (err instanceof BACParseError) {
-      return { status: "error", message: `Parser: ${err.message}` };
-    }
-    throw err;
-  }
-
-  if (
-    parseResult.header.accountNumber &&
-    parseResult.header.accountNumber.replace(/\D/g, "") !==
-      account.account_number.replace(/\D/g, "")
-  ) {
-    return {
-      status: "error",
-      message: `File is for account ${parseResult.header.accountNumber}, but you picked ${account.account_number}.`,
-    };
-  }
-
-  let result: IngestResult;
-  try {
-    result = await ingestBACFile({
-      supabase,
-      accountId: account.id,
-      fileBytes,
-      originalFilename: file.name,
-      uploadedBy: session.userId,
-      parseResult,
+    const edgeFormData = new FormData();
+    const edgeFile = new File([fileBytes], file.name, {
+      type: file.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     });
-  } catch (err) {
+    edgeFormData.append("file", edgeFile);
+    edgeFormData.append("account_id", account.id);
+
+    const { publicEnv, serverEnv } = await import("@/lib/env");
+    const serviceKey = serverEnv().SUPABASE_SERVICE_ROLE_KEY;
+    const fnUrl = `${publicEnv.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/bac-recon?format=json&account_id=${account.id}`;
+
+    const response = await fetch(fnUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${serviceKey}`,
+        apikey: publicEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+        "x-user-id": session.userId,
+      },
+      body: edgeFormData,
+    });
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(`Edge Function bac-recon returned HTTP ${response.status}: ${text}`);
+    }
+
+    edgeData = (await response.json()) as BacEdgeResponse;
+    if (edgeData && typeof edgeData === "object" && "error" in edgeData && edgeData.error) {
+      throw new Error(`Edge Function bac-recon error: ${edgeData.error}`);
+    }
+  } catch (err: unknown) {
+    let errorMessage = "An unknown error occurred.";
+    if (err instanceof Error) {
+      errorMessage = err.message;
+    } else if (err && typeof err === "object") {
+      if ("message" in err && typeof err.message === "string") {
+        errorMessage = err.message;
+      } else if ("error_description" in err && typeof err.error_description === "string") {
+        errorMessage = err.error_description;
+      } else {
+        try {
+          errorMessage = JSON.stringify(err);
+        } catch {
+          errorMessage = String(err);
+        }
+      }
+    } else if (typeof err === "string") {
+      errorMessage = err;
+    }
+
     return {
       status: "error",
-      message: `Ingest failed: ${err instanceof Error ? err.message : String(err)}`,
+      message: `Ingest failed: ${errorMessage}`,
     };
+  }
+
+  const result: IngestResult = edgeData?.ingestResult || {
+    uploadId: null,
+    fileWasDuplicate: false,
+    rowsTotal: edgeData?.items?.length || 0,
+    rowsNew: edgeData?.items?.length || 0,
+    rowsDuplicate: 0,
+    dateRangeAdded: null,
+    dateRangeOverlap: null,
+    prsConfirmedThisRun: 0,
+    reversalsPaired: 0,
+    reversalsUnpaired: 0,
+    prBatchesPending: 0,
+    warnings: edgeData?.issues || [],
+  };
+
+  if (!result.fileWasDuplicate && result.rowsNew > 0) {
+    try {
+      const recomputeStats = await recomputeAccount(supabase, account.id, session.userId);
+      result.prsConfirmedThisRun = recomputeStats.prsConfirmed;
+      result.reversalsPaired = recomputeStats.reversalsPaired;
+      result.reversalsUnpaired = recomputeStats.reversalsUnpaired;
+      result.prBatchesPending = recomputeStats.prBatchesPending;
+    } catch (e) {
+      console.error("Recompute after Edge Function ingest failed:", e);
+    }
   }
 
   revalidatePath("/recon/upload");
@@ -389,13 +419,14 @@ export async function deleteUpload(uploadId: string): Promise<DeleteUploadResult
 
   const { data: upload, error: lookupErr } = await supabase
     .from("recon_uploads")
-    .select("id, account_id, original_filename")
+    .select("id, account_id, original_filename, storage_path")
     .eq("id", uploadId)
     .maybeSingle();
   if (lookupErr) return { status: "error", message: lookupErr.message };
   if (!upload) return { status: "error", message: "Upload not found." };
 
   const accountId = upload.account_id as string;
+  const storagePath = upload.storage_path as string | null;
   const ID_CHUNK = 200;
   const PAGE = 1000;
 
@@ -443,9 +474,16 @@ export async function deleteUpload(uploadId: string): Promise<DeleteUploadResult
     .eq("upload_id", uploadId);
   if (txnErr) return { status: "error", message: txnErr.message };
 
-  // 4. Delete the upload row.
+  // 4. Delete the upload row & storage file.
   const { error: upErr } = await supabase.from("recon_uploads").delete().eq("id", uploadId);
   if (upErr) return { status: "error", message: upErr.message };
+
+  if (storagePath) {
+    const adminSupabase = createSupabaseServiceClient();
+    await adminSupabase.storage.from("recon-statements").remove([storagePath]).catch(() => {
+      // Ignorar error si el archivo ya no existía en el bucket
+    });
+  }
 
   // 5. Recompute the account so PRs whose linked DA just disappeared, or
   //    whose batch was consumed by a now-deleted DA batch, settle back to
