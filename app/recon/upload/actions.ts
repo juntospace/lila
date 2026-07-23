@@ -5,13 +5,7 @@ import * as XLSX from "xlsx";
 import { z } from "zod";
 
 import { requireReconWriter } from "@/lib/auth/guard";
-import {
-  BACParseError,
-  computeFileSha256,
-  ingestBACFile,
-  parseBACSheet,
-  type IngestResult,
-} from "@/lib/recon/bac";
+import { type IngestResult } from "@/lib/recon/bac";
 import { recomputeAccount } from "@/lib/recon/bac/recompute";
 import {
   BGParseError,
@@ -297,8 +291,13 @@ export async function uploadStatement(
     };
   }
 
-  // ----- BAC rail (default) --------------------------------------------
-  let edgeData: any;
+  interface BacEdgeResponse {
+    ingestResult?: IngestResult;
+    items?: unknown[];
+    issues?: string[];
+    error?: string;
+  }
+  let edgeData: BacEdgeResponse | null = null;
   try {
     const edgeFormData = new FormData();
     const edgeFile = new File([fileBytes], file.name, {
@@ -326,8 +325,8 @@ export async function uploadStatement(
       throw new Error(`Edge Function bac-recon returned HTTP ${response.status}: ${text}`);
     }
 
-    edgeData = await response.json();
-    if (edgeData && typeof edgeData === "object" && "error" in edgeData) {
+    edgeData = (await response.json()) as BacEdgeResponse;
+    if (edgeData && typeof edgeData === "object" && "error" in edgeData && edgeData.error) {
       throw new Error(`Edge Function bac-recon error: ${edgeData.error}`);
     }
   } catch (err: unknown) {
@@ -356,11 +355,11 @@ export async function uploadStatement(
     };
   }
 
-  const result: IngestResult = edgeData.ingestResult || {
+  const result: IngestResult = edgeData?.ingestResult || {
     uploadId: null,
     fileWasDuplicate: false,
-    rowsTotal: edgeData.items?.length || 0,
-    rowsNew: edgeData.items?.length || 0,
+    rowsTotal: edgeData?.items?.length || 0,
+    rowsNew: edgeData?.items?.length || 0,
     rowsDuplicate: 0,
     dateRangeAdded: null,
     dateRangeOverlap: null,
@@ -368,7 +367,7 @@ export async function uploadStatement(
     reversalsPaired: 0,
     reversalsUnpaired: 0,
     prBatchesPending: 0,
-    warnings: edgeData.issues || [],
+    warnings: edgeData?.issues || [],
   };
 
   if (!result.fileWasDuplicate && result.rowsNew > 0) {
