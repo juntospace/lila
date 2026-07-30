@@ -127,14 +127,25 @@ export async function ingestBACFile(args: IngestArgs): Promise<IngestResult> {
   const uploadId = insertedUpload!.id as string;
 
   // ----- date-range overlap (computed BEFORE any rows are inserted) --------
-  const { data: priorRange } = await supabase
-    .from("recon_transactions")
-    .select("posted_at")
-    .eq("account_id", accountId)
-    .order("posted_at", { ascending: true });
+  const [{ data: minRow }, { data: maxRow }] = await Promise.all([
+    supabase
+      .from("recon_transactions")
+      .select("posted_at")
+      .eq("account_id", accountId)
+      .order("posted_at", { ascending: true })
+      .limit(1)
+      .maybeSingle(),
+    supabase
+      .from("recon_transactions")
+      .select("posted_at")
+      .eq("account_id", accountId)
+      .order("posted_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
 
-  const priorStart = priorRange?.[0]?.posted_at ?? null;
-  const priorEnd = priorRange?.[priorRange.length - 1]?.posted_at ?? null;
+  const priorStart = (minRow?.posted_at as string | undefined) ?? null;
+  const priorEnd = (maxRow?.posted_at as string | undefined) ?? null;
   const overlap = rangeIntersection(
     header.dateRangeStart,
     header.dateRangeEnd,

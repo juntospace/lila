@@ -181,19 +181,25 @@ export async function recomputeAccount(
   // wipes + recreates links, so the in-memory linker output IS the
   // authoritative state.
   const autoConfirmedPrIds = new Set<string>();
+  const allPairings: { prId: string; daId: string }[] = [];
+
   for (const link of linkResult.links) {
-    const persisted = await persistBatchLink(
-      supabase,
-      link,
-      uploadedBy ?? null,
-      linkedPrIds,
-      linkedDaIds,
-    );
-    reversalsPaired += persisted.paired;
-    unpairedLinkConflict += persisted.conflicts;
     unmatchedDaCount += link.unmatchedDaIds.length;
     for (const id of link.confirmedPrIds) autoConfirmedPrIds.add(id);
+    for (const p of link.pairings) {
+      allPairings.push(p);
+    }
   }
+
+  const persisted = await persistAllBatchLinks(
+    supabase,
+    allPairings,
+    uploadedBy ?? null,
+    linkedPrIds,
+    linkedDaIds,
+  );
+  reversalsPaired = persisted.paired;
+  unpairedLinkConflict = persisted.conflicts;
   const reversalsUnpaired = unmatchedDaCount;
   const prsAutoConfirmedByBatch = autoConfirmedPrIds.size;
 
@@ -276,6 +282,23 @@ async function fetchAliasMap(
 // Internals
 // =============================================================
 
+const BATCH_INSERT_CHUNK = 500;
+
+function checkError(error: unknown): void {
+  if (!error) return;
+  if (error instanceof Error) throw error;
+  if (typeof error === "object") {
+    const errObj = error as Record<string, unknown>;
+    const msg =
+      (errObj.message as string) ||
+      (errObj.details as string) ||
+      (errObj.error_description as string) ||
+      JSON.stringify(error);
+    throw new Error(msg);
+  }
+  throw new Error(String(error));
+}
+
 async function reparseUnparsedDAs(
   supabase: SupabaseClient,
   accountId: string,
@@ -291,21 +314,29 @@ async function reparseUnparsedDAs(
       .is("return_code", null)
       .order("id", { ascending: true })
       .range(cursor, cursor + SUPABASE_PAGE_LIMIT - 1);
-    if (error) throw error;
+    checkError(error);
     if (!data || data.length === 0) break;
+    const updates = [];
     for (const row of data) {
       const parsed = parseDvtoDescription((row.description as string | null) ?? "");
       if (!parsed.returnCode) continue;
-      const { error: upErr } = await supabase
-        .from("recon_transactions")
-        .update({
-          return_code: parsed.returnCode,
-          payer_name_raw:
-            (row.payer_name_raw as string | null) ?? parsed.payerNameRaw ?? null,
-        })
-        .eq("id", row.id);
-      if (upErr) throw upErr;
-      updated++;
+      updates.push(
+        supabase
+          .from("recon_transactions")
+          .update({
+            return_code: parsed.returnCode,
+            payer_name_raw:
+              (row.payer_name_raw as string | null) ?? parsed.payerNameRaw ?? null,
+          })
+          .eq("id", row.id),
+      );
+    }
+    if (updates.length > 0) {
+      const results = await Promise.all(updates);
+      for (const r of results) {
+        checkError(r.error);
+      }
+      updated += updates.length;
     }
     if (data.length < SUPABASE_PAGE_LIMIT) break;
     cursor += SUPABASE_PAGE_LIMIT;
@@ -321,9 +352,7 @@ interface LinkRow {
 
 /**
  * Walk every recon_links row whose PR or DA lives in this account and build
- * Sets of their ids plus the raw link rows. We can't filter recon_links by
- * account_id directly (no such column), so we first list the account's
- * txn ids and then chunk a join via .in() against pr_txn_id and da_txn_id.
+ * Sets of their ids plus the raw link rows.
  */
 async function fetchLinkedTxnIds(
   supabase: SupabaseClient,
@@ -337,6 +366,7 @@ async function fetchLinkedTxnIds(
   const linkedDaIds = new Set<string>();
   const linksByPrId = new Map<string, LinkRow>();
 
+  // 1. Collect all transaction IDs for this account (paginated).
   const txnIds: string[] = [];
   let cursor = 0;
   while (cursor < SUPABASE_PAGE_SAFETY_CAP) {
@@ -346,30 +376,36 @@ async function fetchLinkedTxnIds(
       .eq("account_id", accountId)
       .order("id", { ascending: true })
       .range(cursor, cursor + SUPABASE_PAGE_LIMIT - 1);
-    if (error) throw error;
+
+    checkError(error);
     if (!data || data.length === 0) break;
     for (const r of data) txnIds.push(r.id as string);
     if (data.length < SUPABASE_PAGE_LIMIT) break;
     cursor += SUPABASE_PAGE_LIMIT;
   }
 
-  for (const side of ["pr_txn_id", "da_txn_id"] as const) {
-    for (let i = 0; i < txnIds.length; i += ID_CHUNK) {
-      const chunk = txnIds.slice(i, i + ID_CHUNK);
-      const { data, error } = await supabase
-        .from("recon_links")
-        .select("pr_txn_id, da_txn_id, match_strategy")
-        .in(side, chunk);
-      if (error) throw error;
-      for (const l of data ?? []) {
-        const prId = l.pr_txn_id as string;
-        linkedPrIds.add(prId);
-        linkedDaIds.add(l.da_txn_id as string);
-        linksByPrId.set(prId, {
-          pr_txn_id: prId,
-          da_txn_id: l.da_txn_id as string,
-          match_strategy: l.match_strategy as string,
-        });
+  // 2. Query recon_links referencing these transaction IDs in chunks of 100 (URL query limit).
+  if (txnIds.length > 0) {
+    for (const side of ["pr_txn_id", "da_txn_id"] as const) {
+      for (let i = 0; i < txnIds.length; i += ID_CHUNK) {
+        const chunk = txnIds.slice(i, i + ID_CHUNK);
+        const { data, error } = await supabase
+          .from("recon_links")
+          .select("pr_txn_id, da_txn_id, match_strategy")
+          .in(side, chunk);
+
+        checkError(error);
+        for (const l of data ?? []) {
+          const prId = l.pr_txn_id as string;
+          const daId = l.da_txn_id as string;
+          linkedPrIds.add(prId);
+          linkedDaIds.add(daId);
+          linksByPrId.set(prId, {
+            pr_txn_id: prId,
+            da_txn_id: daId,
+            match_strategy: l.match_strategy as string,
+          });
+        }
       }
     }
   }
@@ -383,10 +419,6 @@ const AUTO_STRATEGIES = new Set(["auto_fifo_name_amount", "auto_batch_link"]);
  * Delete every auto recon_link in the account (both `auto_batch_link`
  * and the legacy `auto_fifo_name_amount` strategy) and remove their ids
  * from the in-memory Sets. Manual operator pairings stay put.
- *
- * Wiping + re-linking on every recompute makes the function idempotent
- * regardless of starting DB state — same input always produces the same
- * output, and operator-curated overrides are honoured.
  */
 async function wipeAutoLinks(
   supabase: SupabaseClient,
@@ -409,7 +441,7 @@ async function wipeAutoLinks(
       .from("recon_links")
       .delete()
       .in("pr_txn_id", chunk);
-    if (error) throw error;
+    checkError(error);
   }
   for (const id of autoPrIds) linkedPrIds.delete(id);
   for (const id of autoDaIds) linkedDaIds.delete(id);
@@ -432,7 +464,7 @@ async function fetchUnpairedPRs(
       .order("posted_at", { ascending: true })
       .order("id", { ascending: true })
       .range(cursor, cursor + SUPABASE_PAGE_LIMIT - 1);
-    if (error) throw error;
+    checkError(error);
     if (!data || data.length === 0) break;
     for (const row of data) {
       const id = row.id as string;
@@ -469,7 +501,7 @@ async function fetchUnpairedDAs(
       .order("posted_at", { ascending: true })
       .order("id", { ascending: true })
       .range(cursor, cursor + SUPABASE_PAGE_LIMIT - 1);
-    if (error) throw error;
+    checkError(error);
     if (!data || data.length === 0) break;
     for (const row of data) {
       const id = row.id as string;
@@ -490,35 +522,61 @@ async function fetchUnpairedDAs(
   return all;
 }
 
-async function persistBatchLink(
+async function persistAllBatchLinks(
   supabase: SupabaseClient,
-  link: BatchLink,
+  pairings: { prId: string; daId: string }[],
   uploadedBy: string | null,
   linkedPrIds: Set<string>,
   linkedDaIds: Set<string>,
 ): Promise<{ paired: number; conflicts: number }> {
   let paired = 0;
   let conflicts = 0;
-  for (const p of link.pairings) {
-    const { error } = await supabase.from("recon_links").insert({
-      pr_txn_id: p.prId,
-      da_txn_id: p.daId,
-      match_strategy: "auto_batch_link",
-      matched_by: uploadedBy,
-    });
+  if (pairings.length === 0) return { paired: 0, conflicts: 0 };
+
+  const rows = pairings.map((p) => ({
+    pr_txn_id: p.prId,
+    da_txn_id: p.daId,
+    match_strategy: "auto_batch_link",
+    matched_by: uploadedBy,
+  }));
+
+  for (let i = 0; i < rows.length; i += BATCH_INSERT_CHUNK) {
+    const chunk = rows.slice(i, i + BATCH_INSERT_CHUNK);
+    const { data, error } = await supabase
+      .from("recon_links")
+      .insert(chunk)
+      .select("pr_txn_id, da_txn_id");
+
     if (error) {
-      // 23505 = unique violation. The DB is the ultimate source of truth,
-      // so if we lost a race or the Set was stale, back out cleanly.
-      if (error.code === "23505") {
-        conflicts++;
+      const errObj = error as { code?: string };
+      if (errObj.code === "23505") {
+        for (const r of chunk) {
+          const { error: singleErr } = await supabase.from("recon_links").insert(r);
+          const singleErrObj = singleErr as { code?: string } | null;
+          if (singleErrObj?.code === "23505") {
+            conflicts++;
+          } else if (singleErr) {
+            checkError(singleErr);
+          } else {
+            linkedPrIds.add(r.pr_txn_id);
+            linkedDaIds.add(r.da_txn_id);
+            paired++;
+          }
+        }
         continue;
       }
-      throw error;
+      checkError(error);
     }
-    linkedPrIds.add(p.prId);
-    linkedDaIds.add(p.daId);
-    paired++;
+
+    if (data) {
+      for (const r of data) {
+        linkedPrIds.add(r.pr_txn_id as string);
+        linkedDaIds.add(r.da_txn_id as string);
+        paired++;
+      }
+    }
   }
+
   return { paired, conflicts };
 }
 
@@ -528,20 +586,24 @@ async function recomputePRStates(
   linkedPrIds: Set<string>,
   autoConfirmedPrIds: Set<string>,
 ): Promise<{ confirmed: number; rejected: number; pending: number }> {
-  const prRows: { id: string; posted_at: string }[] = [];
+  const prRows: { id: string; state: string; posted_at: string }[] = [];
   let cursor = 0;
   while (cursor < SUPABASE_PAGE_SAFETY_CAP) {
     const { data, error } = await supabase
       .from("recon_transactions")
-      .select("id, posted_at")
+      .select("id, state, posted_at")
       .eq("account_id", accountId)
       .eq("code", "PR")
       .order("id", { ascending: true })
       .range(cursor, cursor + SUPABASE_PAGE_LIMIT - 1);
-    if (error) throw error;
+    checkError(error);
     if (!data || data.length === 0) break;
     for (const pr of data) {
-      prRows.push({ id: pr.id as string, posted_at: pr.posted_at as string });
+      prRows.push({
+        id: pr.id as string,
+        state: pr.state as string,
+        posted_at: pr.posted_at as string,
+      });
     }
     if (data.length < SUPABASE_PAGE_LIMIT) break;
     cursor += SUPABASE_PAGE_LIMIT;
@@ -549,7 +611,6 @@ async function recomputePRStates(
 
   const prIds = prRows.map((r) => r.id);
 
-  // Obtener la fecha máxima de PRs presentes en la cuenta para saber si la ventana de devoluciones cerró
   let maxPrDate: string | null = null;
   for (const pr of prRows) {
     if (!maxPrDate || pr.posted_at > maxPrDate) {
@@ -557,51 +618,45 @@ async function recomputePRStates(
     }
   }
 
-  // Phase 2: load latest manual override per PR.
   const overrides = await fetchManualOverrides(supabase, prIds);
 
-  // Phase 3: bucket.
   const buckets = {
     confirmed: [] as string[],
     rejected: [] as string[],
     pending: [] as string[],
   };
+  const counts = { confirmed: 0, rejected: 0, pending: 0 };
+
   for (const pr of prRows) {
     const id = pr.id;
+    let targetState = "pending";
+
     if (linkedPrIds.has(id)) {
-      buckets.rejected.push(id);
-      continue;
+      targetState = "rejected";
+    } else {
+      const override = overrides.get(id);
+      if (override === "confirmed" || override === "rejected" || override === "pending") {
+        targetState = override;
+      } else if (autoConfirmedPrIds.has(id) && maxPrDate && pr.posted_at < maxPrDate) {
+        targetState = "confirmed";
+      }
     }
-    const override = overrides.get(id);
-    if (override === "confirmed" || override === "rejected" || override === "pending") {
-      buckets[override].push(id);
-      continue;
+
+    counts[targetState as keyof typeof counts]++;
+
+    // Only update DB if the state actually changed!
+    if (pr.state !== targetState) {
+      buckets[targetState as keyof typeof buckets].push(id);
     }
-    // Un PR solo se auto-confirma si pertenece a un lote consumido Y existe un día con PR posterior cargado
-    if (autoConfirmedPrIds.has(id) && maxPrDate && pr.posted_at < maxPrDate) {
-      buckets.confirmed.push(id);
-      continue;
-    }
-    buckets.pending.push(id);
   }
 
   await applyStateUpdates(supabase, "rejected", buckets.rejected);
   await applyStateUpdates(supabase, "confirmed", buckets.confirmed);
   await applyStateUpdates(supabase, "pending", buckets.pending);
-  return {
-    confirmed: buckets.confirmed.length,
-    rejected: buckets.rejected.length,
-    pending: buckets.pending.length,
-  };
+
+  return counts;
 }
 
-/**
- * Build a Map of `txn_id → latest new_state` from recon_manual_actions
- * for the given txn ids. "Latest" by acted_at; we walk results most-
- * recent-first and keep the first occurrence per txn_id.
- *
- * Chunked at 100 ids per .in() to dodge URL-length limits.
- */
 async function fetchManualOverrides(
   supabase: SupabaseClient,
   prIds: string[],
@@ -615,7 +670,7 @@ async function fetchManualOverrides(
       .select("txn_id, new_state, acted_at")
       .in("txn_id", chunk)
       .order("acted_at", { ascending: false });
-    if (error) throw error;
+    checkError(error);
     for (const a of data ?? []) {
       const txnId = a.txn_id as string;
       const newState = a.new_state as string | null;
@@ -632,28 +687,39 @@ async function recomputeDAStates(
   linkedDaIds: Set<string>,
 ): Promise<{ rejected: number; pendingPair: number }> {
   const buckets = { rejected: [] as string[], pending_pair: [] as string[] };
+  const counts = { rejected: 0, pendingPair: 0 };
+
   let cursor = 0;
   while (cursor < SUPABASE_PAGE_SAFETY_CAP) {
     const { data, error } = await supabase
       .from("recon_transactions")
-      .select("id")
+      .select("id, state")
       .eq("account_id", accountId)
       .eq("code", "DA")
       .order("id", { ascending: true })
       .range(cursor, cursor + SUPABASE_PAGE_LIMIT - 1);
-    if (error) throw error;
+    checkError(error);
     if (!data || data.length === 0) break;
     for (const da of data) {
       const id = da.id as string;
-      if (linkedDaIds.has(id)) buckets.rejected.push(id);
-      else buckets.pending_pair.push(id);
+      const currentState = da.state as string;
+      const targetState = linkedDaIds.has(id) ? "rejected" : "pending_pair";
+
+      if (targetState === "rejected") counts.rejected++;
+      else counts.pendingPair++;
+
+      if (currentState !== targetState) {
+        buckets[targetState as keyof typeof buckets].push(id);
+      }
     }
     if (data.length < SUPABASE_PAGE_LIMIT) break;
     cursor += SUPABASE_PAGE_LIMIT;
   }
+
   await applyStateUpdates(supabase, "rejected", buckets.rejected);
   await applyStateUpdates(supabase, "pending_pair", buckets.pending_pair);
-  return { rejected: buckets.rejected.length, pendingPair: buckets.pending_pair.length };
+
+  return counts;
 }
 
 async function applyStateUpdates(
@@ -661,12 +727,13 @@ async function applyStateUpdates(
   state: string,
   ids: string[],
 ): Promise<void> {
+  if (ids.length === 0) return;
   for (let i = 0; i < ids.length; i += ID_CHUNK) {
     const chunk = ids.slice(i, i + ID_CHUNK);
     const { error } = await supabase
       .from("recon_transactions")
       .update({ state })
       .in("id", chunk);
-    if (error) throw error;
+    checkError(error);
   }
 }
