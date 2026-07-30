@@ -1,5 +1,13 @@
 {
   "version": "5",
+  "specifiers": {
+    "jsr:@supabase/functions-js@2": "2.110.8"
+  },
+  "jsr": {
+    "@supabase/functions-js@2.110.8": {
+      "integrity": "79de9d9de83149576cce2ff4b4d1bf2e1f40df472c04de413c67dc1ce1549220"
+    }
+  },
   "remote": {
     "https://deno.land/std@0.224.0/assert/_constants.ts": "a271e8ef5a573f1df8e822a6eb9d09df064ad66a4390f21b3e31f820a38e0975",
     "https://deno.land/std@0.224.0/assert/assert.ts": "09d30564c09de846855b7b071e62b5974b001bb72a4b797958fe0660e7849834",

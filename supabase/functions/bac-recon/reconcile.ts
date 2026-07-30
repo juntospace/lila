@@ -1,5 +1,3 @@
-import type { BacParsedRow } from "./parser.ts";
-
 export const FEE_PER_NSF = 0.20;
 export const ITBMS = 0.07;
 export const MIN_PREFIX = 8;
@@ -378,12 +376,21 @@ export function feeBatchTable(stream: any[], res: any): any[] {
     }
   }
 
+  const rejectsByDay: Record<string, any[]> = {};
+  for (const rj of res.rejects) {
+    if (rj.dateStr) {
+      if (!rejectsByDay[rj.dateStr]) rejectsByDay[rj.dateStr] = [];
+      rejectsByDay[rj.dateStr].push(rj);
+    }
+  }
+
   const out: any[] = [];
   const sortedDays = Object.keys(feeByDay).sort();
   for (const d of sortedDays) {
     const perBatch: Record<string, number> = {};
-    for (const rj of res.rejects) {
-      if (rj.dateStr === d && rj.reason === "AM04" && rj.matched !== null) {
+    const dayRejects = rejectsByDay[d] || [];
+    for (const rj of dayRejects) {
+      if (rj.reason === "AM04" && rj.matched !== null) {
         const it = items[rj.matched];
         const key = `${it.ref} (${formatDayMonth(it.dateStr)})`;
         perBatch[key] = (perBatch[key] || 0) + 1;

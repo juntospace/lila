@@ -86,9 +86,23 @@ export async function recomputeAccountAction(
     revalidatePath(`/recon/accounts/${accountId}`);
     return { status: "ok", stats };
   } catch (err) {
+    let message = "Unknown error during recompute.";
+    if (err instanceof Error) {
+      message = err.message;
+    } else if (err && typeof err === "object") {
+      const anyErr = err as Record<string, unknown>;
+      message =
+        (anyErr.message as string) ||
+        (anyErr.details as string) ||
+        (anyErr.error_description as string) ||
+        JSON.stringify(err);
+    } else if (typeof err === "string") {
+      message = err;
+    }
+    console.error("recomputeAccountAction error:", err);
     return {
       status: "error",
-      message: err instanceof Error ? err.message : String(err),
+      message,
     };
   }
 }

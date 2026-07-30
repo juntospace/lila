@@ -59,8 +59,8 @@ export interface BACParseResult {
 }
 
 export class BACParseError extends Error {
-  constructor(message: string, public readonly cause?: unknown) {
-    super(message);
+  constructor(message: string, cause?: unknown) {
+    super(message, cause ? { cause } : undefined);
     this.name = 'BACParseError';
   }
 }

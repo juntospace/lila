@@ -176,24 +176,24 @@ export async function uploadStatement(
   const fileBytes = new Uint8Array(await file.arrayBuffer());
   const accountLabel = `${account.account_number} · ${account.holder_name}`;
 
-  let workbook: XLSX.WorkBook;
-  try {
-    workbook = XLSX.read(fileBytes, { type: "array", cellDates: true });
-  } catch (err) {
-    return {
-      status: "error",
-      message: `Could not read the Excel file: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    };
-  }
-  const firstSheetName = workbook.SheetNames[0];
-  if (!firstSheetName) {
-    return { status: "error", message: "The workbook has no sheets." };
-  }
-
   // ----- BG rail --------------------------------------------------------
   if (account.rail === "bg") {
+    let workbook: XLSX.WorkBook;
+    try {
+      workbook = XLSX.read(fileBytes, { type: "array", cellDates: true });
+    } catch (err) {
+      return {
+        status: "error",
+        message: `Could not read the Excel file: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      };
+    }
+    const firstSheetName = workbook.SheetNames[0];
+    if (!firstSheetName) {
+      return { status: "error", message: "The workbook has no sheets." };
+    }
+
     if (isBGAchDetailSheet(workbook)) {
       const name = workbook.SheetNames.find((n) =>
         /BGPACHRejectedDetailList/i.test(n),
