@@ -54,7 +54,6 @@ import {
   groupDABatches,
   groupPRBatches,
   linkAllBatches,
-  type BatchLink,
   type DARowForBatch,
   type PRRowForBatch,
 } from "./batches";
@@ -174,7 +173,10 @@ export async function recomputeAccount(
 
   let reversalsPaired = 0;
   let unpairedLinkConflict = 0;
-  let unmatchedDaCount = 0;
+  const unmatchedDaCount = linkResult.links.reduce(
+    (acc, link) => acc + link.unmatchedDaIds.length,
+    0,
+  );
   // The linker's confirmedPrIds is the source of truth for auto-confirm:
   // it lists every PR in a consumed PR batch that didn't pair (whether
   // the batch had any pairings or none). We use this directly — no
@@ -246,7 +248,6 @@ export async function recomputeAccount(
     supabase,
     accountId,
     linkedPrIds,
-    autoConfirmedPrIds,
   );
   const daStats = await recomputeDAStates(supabase, accountId, linkedDaIds);
 
@@ -620,7 +621,6 @@ async function recomputePRStates(
   supabase: SupabaseClient,
   accountId: string,
   linkedPrIds: Set<string>,
-  autoConfirmedPrIds: Set<string>,
 ): Promise<{ confirmed: number; rejected: number; pending: number }> {
   const prRows: { id: string; state: string; posted_at: string }[] = [];
   let cursor = 0;
