@@ -148,7 +148,7 @@ export async function manuallyPairDA(args: {
   // unlinked. Defends against stale UI state.
   const { data: rows, error: lookupErr } = await supabase
     .from("recon_transactions")
-    .select("id, account_id, code, description, payer_name_raw")
+    .select("id, account_id, code, state, description, payer_name_raw")
     .in("id", [args.daTxnId, args.prTxnId]);
   if (lookupErr) return { status: "error", message: lookupErr.message };
   if (!rows || rows.length !== 2) {
@@ -186,7 +186,7 @@ export async function manuallyPairDA(args: {
   const { error: auditErr } = await supabase.from("recon_manual_actions").insert({
     txn_id: args.prTxnId,
     action: "reclassify",
-    prior_state: "pending",
+    prior_state: (pr.state as "pending" | "confirmed" | "rejected" | "pending_pair" | "non_loan") ?? "pending",
     new_state: "rejected",
     justification: `Manual pair: DA ${args.daTxnId} → PR ${args.prTxnId}`,
     acted_by: session.userId,

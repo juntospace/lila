@@ -54,7 +54,6 @@ import {
   groupDABatches,
   groupPRBatches,
   linkAllBatches,
-  type BatchLink,
   type DARowForBatch,
   type PRRowForBatch,
 } from "./batches";
@@ -66,6 +65,7 @@ import {
   type AliasMap,
 } from "./classify";
 import { parseDvtoDescription } from "./parser";
+import { previousWorkingDay } from "../format";
 
 const SUPABASE_PAGE_LIMIT = 1000;
 const SUPABASE_PAGE_SAFETY_CAP = 200_000;
@@ -173,7 +173,10 @@ export async function recomputeAccount(
 
   let reversalsPaired = 0;
   let unpairedLinkConflict = 0;
-  let unmatchedDaCount = 0;
+  const unmatchedDaCount = linkResult.links.reduce(
+    (acc, link) => acc + link.unmatchedDaIds.length,
+    0,
+  );
   // The linker's confirmedPrIds is the source of truth for auto-confirm:
   // it lists every PR in a consumed PR batch that didn't pair (whether
   // the batch had any pairings or none). We use this directly — no
@@ -182,12 +185,47 @@ export async function recomputeAccount(
   // authoritative state.
   const autoConfirmedPrIds = new Set<string>();
   const allPairings: { prId: string; daId: string }[] = [];
+  const batchMatchedDaIds = new Set<string>();
 
   for (const link of linkResult.links) {
-    unmatchedDaCount += link.unmatchedDaIds.length;
     for (const id of link.confirmedPrIds) autoConfirmedPrIds.add(id);
     for (const p of link.pairings) {
       allPairings.push(p);
+      batchMatchedDaIds.add(p.daId);
+    }
+  }
+
+  // Second pass: FIFO matching for DAs left unmatched by batch assignment
+  // (e.g. cross-day DAs like July 3 DAs matching July 2 PRs).
+  const batchPairedPrIds = new Set(allPairings.map((p) => p.prId));
+  const remainingPRs = unpairedPRs.filter((p) => !batchPairedPrIds.has(p.id));
+  const remainingDAs = unpairedDAs.filter((d) => !batchMatchedDaIds.has(d.id));
+
+  // Sort remaining DAs and PRs by posted_at ASC
+  remainingDAs.sort((a, b) => (a.posted_at < b.posted_at ? -1 : 1));
+  remainingPRs.sort((a, b) => (a.posted_at < b.posted_at ? -1 : 1));
+
+  const usedFifoPrIds = new Set<string>();
+  for (const da of remainingDAs) {
+    if (!da.payerNameRaw) continue;
+    const daNameNorm = normalizeName(da.payerNameRaw);
+    for (const pr of remainingPRs) {
+      if (usedFifoPrIds.has(pr.id)) continue;
+      if (pr.posted_at > da.posted_at) continue;
+      if (pr.amountMinor !== da.amountMinor) continue;
+
+      const prPayer = extractPRPayerName(pr.description);
+      if (!prPayer) continue;
+      const prNameNorm = normalizeName(prPayer);
+
+      if (
+        namesMatch(prNameNorm, daNameNorm) ||
+        aliasMatch(prNameNorm, daNameNorm, aliases)
+      ) {
+        allPairings.push({ prId: pr.id, daId: da.id });
+        usedFifoPrIds.add(pr.id);
+        break;
+      }
     }
   }
 
@@ -210,7 +248,6 @@ export async function recomputeAccount(
     supabase,
     accountId,
     linkedPrIds,
-    autoConfirmedPrIds,
   );
   const daStats = await recomputeDAStates(supabase, accountId, linkedDaIds);
 
@@ -584,7 +621,6 @@ async function recomputePRStates(
   supabase: SupabaseClient,
   accountId: string,
   linkedPrIds: Set<string>,
-  autoConfirmedPrIds: Set<string>,
 ): Promise<{ confirmed: number; rejected: number; pending: number }> {
   const prRows: { id: string; state: string; posted_at: string }[] = [];
   let cursor = 0;
@@ -627,6 +663,8 @@ async function recomputePRStates(
   };
   const counts = { confirmed: 0, rejected: 0, pending: 0 };
 
+  const cutoffDate = maxPrDate ? previousWorkingDay(maxPrDate) : null;
+
   for (const pr of prRows) {
     const id = pr.id;
     let targetState = "pending";
@@ -637,7 +675,7 @@ async function recomputePRStates(
       const override = overrides.get(id);
       if (override === "confirmed" || override === "rejected" || override === "pending") {
         targetState = override;
-      } else if (autoConfirmedPrIds.has(id) && maxPrDate && pr.posted_at < maxPrDate) {
+      } else if (cutoffDate && pr.posted_at < cutoffDate) {
         targetState = "confirmed";
       }
     }
