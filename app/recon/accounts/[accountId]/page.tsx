@@ -629,16 +629,40 @@ export default async function AccountDetailPage({
     const uniqueAmounts = Array.from(
       new Set(unmatchedDAs.map((d) => Number(d.debit_minor))),
     );
-    const { data: candidatePool } = await supabase
-      .from("recon_transactions")
-      .select(
-        "id, posted_at, description, state, credit_minor, rail_native_ref",
-      )
-      .eq("account_id", accountId)
-      .eq("code", "PR")
-      .in("credit_minor", uniqueAmounts)
-      .order("posted_at", { ascending: true });
-    const pool = candidatePool ?? [];
+    const pool: {
+      id: string;
+      posted_at: string;
+      description: string;
+      state: string;
+      credit_minor: number | bigint;
+      rail_native_ref: string | null;
+    }[] = [];
+    let poolCursor = 0;
+    while (poolCursor < 200000) {
+      const { data: chunk } = await supabase
+        .from("recon_transactions")
+        .select(
+          "id, posted_at, description, state, credit_minor, rail_native_ref",
+        )
+        .eq("account_id", accountId)
+        .eq("code", "PR")
+        .in("credit_minor", uniqueAmounts)
+        .order("id", { ascending: true })
+        .range(poolCursor, poolCursor + 1000 - 1);
+      if (!chunk || chunk.length === 0) break;
+      for (const r of chunk) {
+        pool.push({
+          id: r.id as string,
+          posted_at: r.posted_at as string,
+          description: (r.description as string | null) ?? "",
+          state: r.state as string,
+          credit_minor: r.credit_minor as number | bigint,
+          rail_native_ref: (r.rail_native_ref as string | null) ?? null,
+        });
+      }
+      if (chunk.length < 1000) break;
+      poolCursor += 1000;
+    }
 
     // Pre-fetch the set of already-paired PR ids so we don't offer them
     // as manual-match candidates (they'd hit a 23505 from the link PK).
@@ -670,27 +694,38 @@ export default async function AccountDetailPage({
         continue;
       }
       const target = normalizeName(payerRaw);
-      const daAmount = String(da.debit_minor);
+      const daAmountNum = Number(da.debit_minor);
       const matches = pool.filter((c) => {
-        if (String(c.credit_minor) !== daAmount) return false;
+        if (Number(c.credit_minor) !== daAmountNum) return false;
         const prName = extractPRPayerName(c.description as string);
         if (!prName) return false;
         return namesMatch(normalizeName(prName), target);
       });
-      const first = matches[0];
-      const pickable: CandidatePR[] = matches
-        .filter((m) => !pairedPrIdSet.has(m.id as string))
-        .map((m) => ({
-          id: m.id as string,
-          posted_at: m.posted_at as string,
-          state: m.state as string,
-          description: m.description as string,
-          rail_native_ref: (m.rail_native_ref as string | null) ?? null,
-        }));
+      // For pickable candidates (manual match dropdown), prioritize PRs matching
+      // the payer name first, then include other unpaired PRs of the same amount.
+      const nameMatchedIds = new Set(matches.map((m) => m.id as string));
+      const otherSameAmount = pool.filter(
+        (c) =>
+          Number(c.credit_minor) === daAmountNum &&
+          !pairedPrIdSet.has(c.id as string) &&
+          !nameMatchedIds.has(c.id as string),
+      );
+      const orderedCandidates = [
+        ...matches.filter((m) => !pairedPrIdSet.has(m.id as string)),
+        ...otherSameAmount,
+      ];
+      const pickable: CandidatePR[] = orderedCandidates.map((m) => ({
+        id: m.id as string,
+        posted_at: m.posted_at as string,
+        state: m.state as string,
+        description: m.description as string,
+        rail_native_ref: (m.rail_native_ref as string | null) ?? null,
+      }));
       const pairedCount = matches.filter((m) =>
         pairedPrIdSet.has(m.id as string),
       ).length;
       const unpairedCount = matches.length - pairedCount;
+      const first = matches[0];
       let closest: ClosestMatch["closest"] = null;
       if (first) {
         const ref = (first.rail_native_ref as string | null) ?? null;
