@@ -186,7 +186,7 @@ export async function manuallyPairDA(args: {
   const { error: auditErr } = await supabase.from("recon_manual_actions").insert({
     txn_id: args.prTxnId,
     action: "reclassify",
-    prior_state: (pr.state as string) ?? "pending",
+    prior_state: (pr.state as "pending" | "confirmed" | "rejected" | "pending_pair" | "non_loan") ?? "pending",
     new_state: "rejected",
     justification: `Manual pair: DA ${args.daTxnId} → PR ${args.prTxnId}`,
     acted_by: session.userId,
