@@ -1,3 +1,4 @@
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import Link from "next/link";
 
 import { OperatorShell } from "@/components/patterns/OperatorShell";
@@ -36,11 +37,35 @@ type RecentUpload = {
   download_url?: string | null;
 };
 
-export default async function ReconUploadPage() {
+type SearchParams = {
+  page?: string;
+  perPage?: string;
+};
+
+function getPageUrl(p: number, perPage: number) {
+  const params = new URLSearchParams();
+  if (p > 1) params.set("page", String(p));
+  if (perPage !== 10) params.set("perPage", String(perPage));
+  const q = params.toString();
+  return q ? `/recon/upload?${q}` : "/recon/upload";
+}
+
+export default async function ReconUploadPage({
+  searchParams,
+}: {
+  searchParams: Promise<SearchParams>;
+}) {
+  const params = await searchParams;
+  const page = Math.max(1, Number.parseInt(params.page ?? "1", 10) || 1);
+  const perPage = Math.max(1, Math.min(100, Number.parseInt(params.perPage ?? "10", 10) || 10));
+
+  const from = (page - 1) * perPage;
+  const to = from + perPage - 1;
+
   const session = await requireReconWriter();
   const supabase = await createSupabaseServerClient();
 
-  const [{ data: accounts }, { data: recents }] = await Promise.all([
+  const [{ data: accounts }, { data: recents, count: totalCount }] = await Promise.all([
     supabase
       .from("bank_accounts")
       .select("id, rail, account_number, holder_name, currency")
@@ -50,10 +75,27 @@ export default async function ReconUploadPage() {
       .from("recon_uploads")
       .select(
         "id, uploaded_at, original_filename, storage_path, account_id, uploaded_by, status, rows_total, rows_new, rows_duplicate, date_range_start, date_range_end",
+        { count: "exact" },
       )
       .order("uploaded_at", { ascending: false })
-      .limit(10),
+      .range(from, to),
   ]);
+
+  const totalUploads = totalCount ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalUploads / perPage));
+
+  const pagesToDisplay: (number | "...")[] = [];
+  if (totalPages <= 7) {
+    for (let i = 1; i <= totalPages; i++) pagesToDisplay.push(i);
+  } else {
+    pagesToDisplay.push(1);
+    if (page > 3) pagesToDisplay.push("...");
+    const startP = Math.max(2, page - 1);
+    const endP = Math.min(totalPages - 1, page + 1);
+    for (let i = startP; i <= endP; i++) pagesToDisplay.push(i);
+    if (page < totalPages - 2) pagesToDisplay.push("...");
+    pagesToDisplay.push(totalPages);
+  }
 
   const activeAccounts: Account[] = accounts ?? [];
   const recentUploads: RecentUpload[] = await Promise.all(
@@ -182,7 +224,8 @@ export default async function ReconUploadPage() {
                 No uploads yet — your first ingest will appear here.
               </p>
             ) : (
-              <div className="overflow-x-auto">
+              <>
+                <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="text-left text-xs uppercase tracking-wide text-fg-subtle">
                     <tr>
@@ -257,7 +300,75 @@ export default async function ReconUploadPage() {
                   </tbody>
                 </table>
               </div>
-            )}
+
+              {totalPages > 1 || totalUploads > 10 ? (
+                <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-t border-border-subtle pt-4 text-xs text-fg-muted">
+                  <div>
+                    Showing <span className="font-medium text-fg">{totalUploads === 0 ? 0 : from + 1}</span> to{" "}
+                    <span className="font-medium text-fg">{Math.min(to + 1, totalUploads)}</span> of{" "}
+                    <span className="font-medium text-fg">{totalUploads}</span> uploads
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    {page > 1 ? (
+                      <Link
+                        href={getPageUrl(page - 1, perPage)}
+                        className="inline-flex items-center gap-1 rounded border border-border-subtle bg-bg-raised px-2.5 py-1 text-xs font-medium text-fg transition-colors hover:border-border-strong hover:bg-bg-surface"
+                      >
+                        <ChevronLeft className="h-3.5 w-3.5" />
+                        Previous
+                      </Link>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 rounded border border-border-subtle/40 bg-bg-base/40 px-2.5 py-1 text-xs font-medium text-fg-subtle opacity-50 cursor-not-allowed">
+                        <ChevronLeft className="h-3.5 w-3.5" />
+                        Previous
+                      </span>
+                    )}
+
+                    <div className="flex items-center gap-1 px-1">
+                      {pagesToDisplay.map((p, idx) =>
+                        p === "..." ? (
+                          <span key={`ell-${idx}`} className="px-1 text-fg-subtle">
+                            ...
+                          </span>
+                        ) : p === page ? (
+                          <span
+                            key={p}
+                            className="rounded bg-brand-500 px-2.5 py-1 text-xs font-medium text-white shadow-e1"
+                          >
+                            {p}
+                          </span>
+                        ) : (
+                          <Link
+                            key={p}
+                            href={getPageUrl(p, perPage)}
+                            className="rounded border border-border-subtle bg-bg-raised px-2.5 py-1 text-xs font-medium text-fg transition-colors hover:border-border-strong hover:bg-bg-surface"
+                          >
+                            {p}
+                          </Link>
+                        ),
+                      )}
+                    </div>
+
+                    {page < totalPages ? (
+                      <Link
+                        href={getPageUrl(page + 1, perPage)}
+                        className="inline-flex items-center gap-1 rounded border border-border-subtle bg-bg-raised px-2.5 py-1 text-xs font-medium text-fg transition-colors hover:border-border-strong hover:bg-bg-surface"
+                      >
+                        Next
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      </Link>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 rounded border border-border-subtle/40 bg-bg-base/40 px-2.5 py-1 text-xs font-medium text-fg-subtle opacity-50 cursor-not-allowed">
+                        Next
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+            </>
+          )}
           </CardBody>
         </Card>
       </section>
