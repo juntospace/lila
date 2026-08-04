@@ -384,13 +384,20 @@ export async function uploadStatement(
 
   if (!result.fileWasDuplicate && result.rowsNew > 0) {
     try {
-      const recomputeStats = await recomputeAccount(supabase, account.id, session.userId);
-      result.prsConfirmedThisRun = recomputeStats.prsConfirmed;
-      result.reversalsPaired = recomputeStats.reversalsPaired;
-      result.reversalsUnpaired = recomputeStats.reversalsUnpaired;
-      result.prBatchesPending = recomputeStats.prBatchesPending;
+      const { data: edgeRecompute, error: recomputeErr } =
+        await supabase.functions.invoke("bac-recon-recompute", {
+          body: { account_id: account.id },
+        });
+
+      if (!recomputeErr && edgeRecompute?.stats) {
+        const recomputeStats = edgeRecompute.stats;
+        result.prsConfirmedThisRun = recomputeStats.prsConfirmed;
+        result.reversalsPaired = recomputeStats.reversalsPaired;
+        result.reversalsUnpaired = recomputeStats.reversalsUnpaired;
+        result.prBatchesPending = recomputeStats.prBatchesPending;
+      }
     } catch (e) {
-      console.error("Recompute after Edge Function ingest failed:", e);
+      console.error("Edge Function bac-recon-recompute invoke failed:", e);
     }
   }
 

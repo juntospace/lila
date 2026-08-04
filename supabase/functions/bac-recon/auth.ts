@@ -17,8 +17,30 @@ export async function requireAuth(req: Request): Promise<UserSession> {
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
   const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
 
-  // If request uses SUPABASE_SERVICE_ROLE_KEY directly (e.g. from Server Actions)
-  if (serviceKey && token === serviceKey.trim()) {
+  // Check if request uses SUPABASE_SERVICE_ROLE_KEY directly or passes a service_role JWT
+  let isServiceRole = Boolean(serviceKey && token === serviceKey.trim());
+  if (!isServiceRole) {
+    try {
+      const parts = token.split(".");
+      if (parts.length === 3) {
+        const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+        const jsonPayload = decodeURIComponent(
+          atob(base64)
+            .split("")
+            .map((c) => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
+            .join("")
+        );
+        const payload = JSON.parse(jsonPayload);
+        if (payload.role === "service_role") {
+          isServiceRole = true;
+        }
+      }
+    } catch {
+      // Non-JWT or decode error fallback
+    }
+  }
+
+  if (isServiceRole) {
     const userIdHeader = req.headers.get("x-user-id");
     return {
       userId: userIdHeader || "system",
