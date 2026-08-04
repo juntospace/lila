@@ -62,6 +62,7 @@ export interface PRRowForBatch {
   reference: string;
   amountMinor: bigint;
   description: string;
+  normPayerName?: string | null;
 }
 
 export interface DARowForBatch {
@@ -70,6 +71,7 @@ export interface DARowForBatch {
   reference: string;
   amountMinor: bigint;
   payerNameRaw: string | null;
+  normPayerName?: string | null;
 }
 
 // =============================================================
@@ -256,9 +258,9 @@ export interface LinkOptions {
  * Cap on enumeration scenarios. Above this, fall back to greedy. Real
  * BAC data has at most ~10 PR batches per day with 2-3 DA batches per
  * day, well under the cap. Anything larger is a data anomaly worth
- * investigating manually.
+ * investigating manually. Lowered to 5,000 to keep CPU runtime under 15ms.
  */
-const ASSIGNMENT_ENUM_CAP = 200_000;
+const ASSIGNMENT_ENUM_CAP = 5_000;
 
 /**
  * Greedy DA→PR matching inside a fixed `(daBatch, prBatches)` group.
@@ -273,25 +275,36 @@ function matchWithinGroup(
 ): { pairings: BatchPairing[]; unmatchedDaIds: string[] } {
   const pairings: BatchPairing[] = [];
   const unmatchedDaIds: string[] = [];
+
   for (const da of daBatch.rows) {
-    if (!da.payerNameRaw) {
+    const daName =
+      da.normPayerName ??
+      (da.payerNameRaw ? options.normalize(da.payerNameRaw) : null);
+    if (!daName) {
       unmatchedDaIds.push(da.id);
       continue;
     }
-    const targetName = options.normalize(da.payerNameRaw);
+
     let found: PRRowForBatch | null = null;
     outer: for (const prBatch of prBatches) {
       for (const pr of prBatch.rows) {
         if (usedPrIds.has(pr.id)) continue;
         if (pr.amountMinor !== da.amountMinor) continue;
-        const prName = options.extractPRPayer(pr.description);
+
+        let prName = pr.normPayerName;
+        if (prName === undefined) {
+          const raw = options.extractPRPayer(pr.description);
+          prName = raw ? options.normalize(raw) : null;
+        }
         if (!prName) continue;
-        if (options.nameMatcher(options.normalize(prName), targetName)) {
+
+        if (options.nameMatcher(prName, daName)) {
           found = pr;
           break outer;
         }
       }
     }
+
     if (found) {
       pairings.push({ daId: da.id, prId: found.id });
       usedPrIds.add(found.id);

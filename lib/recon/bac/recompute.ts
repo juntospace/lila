@@ -205,24 +205,48 @@ export async function recomputeAccount(
   remainingDAs.sort((a, b) => (a.posted_at < b.posted_at ? -1 : 1));
   remainingPRs.sort((a, b) => (a.posted_at < b.posted_at ? -1 : 1));
 
+  // Pre-process remaining PRs for fast O(1) attribute lookup inside nested loop
+  const preparedPRs = remainingPRs.map((pr) => {
+    const prPayer = extractPRPayerName(pr.description);
+    return {
+      ...pr,
+      prNameNorm: prPayer ? normalizeName(prPayer) : null,
+    };
+  });
+
+  // Group remaining PRs by amountMinor for O(1) lookup
+  const prsByAmount = new Map<bigint, typeof preparedPRs>();
+  for (const pr of preparedPRs) {
+    const list = prsByAmount.get(pr.amountMinor) ?? [];
+    list.push(pr);
+    prsByAmount.set(pr.amountMinor, list);
+  }
+
   const usedFifoPrIds = new Set<string>();
+  const daMinDates = new Map<string, string>();
+
   for (const da of remainingDAs) {
     if (!da.payerNameRaw) continue;
+    const candidates = prsByAmount.get(da.amountMinor);
+    if (!candidates || candidates.length === 0) continue;
+
     const daNameNorm = normalizeName(da.payerNameRaw);
-    for (const pr of remainingPRs) {
+    let minPrDate = daMinDates.get(da.posted_at);
+    if (!minPrDate) {
+      minPrDate = previousWorkingDay(da.posted_at);
+      daMinDates.set(da.posted_at, minPrDate);
+    }
+
+    for (const pr of candidates) {
       if (usedFifoPrIds.has(pr.id)) continue;
       if (pr.posted_at > da.posted_at) continue;
       // Strict 1 working day window: DA must arrive on the same day or the next working day after PR
-      if (previousWorkingDay(da.posted_at) > pr.posted_at) continue;
-      if (pr.amountMinor !== da.amountMinor) continue;
-
-      const prPayer = extractPRPayerName(pr.description);
-      if (!prPayer) continue;
-      const prNameNorm = normalizeName(prPayer);
+      if (minPrDate > pr.posted_at) continue;
+      if (!pr.prNameNorm) continue;
 
       if (
-        namesMatch(prNameNorm, daNameNorm) ||
-        aliasMatch(prNameNorm, daNameNorm, aliases)
+        namesMatch(pr.prNameNorm, daNameNorm) ||
+        aliasMatch(pr.prNameNorm, daNameNorm, aliases)
       ) {
         allPairings.push({ prId: pr.id, daId: da.id });
         usedFifoPrIds.add(pr.id);
@@ -231,10 +255,15 @@ export async function recomputeAccount(
     }
   }
 
+  const isValidUuid =
+    uploadedBy &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      uploadedBy,
+    );
   const persisted = await persistAllBatchLinks(
     supabase,
     allPairings,
-    uploadedBy ?? null,
+    isValidUuid ? uploadedBy : null,
     linkedPrIds,
     linkedDaIds,
   );
@@ -405,48 +434,31 @@ async function fetchLinkedTxnIds(
   const linkedDaIds = new Set<string>();
   const linksByPrId = new Map<string, LinkRow>();
 
-  // 1. Collect all transaction IDs for this account (paginated).
-  const txnIds: string[] = [];
   let cursor = 0;
   while (cursor < SUPABASE_PAGE_SAFETY_CAP) {
     const { data, error } = await supabase
-      .from("recon_transactions")
-      .select("id")
-      .eq("account_id", accountId)
-      .order("id", { ascending: true })
+      .from("recon_links")
+      .select(
+        "pr_txn_id, da_txn_id, match_strategy, recon_transactions!pr_txn_id!inner(account_id)",
+      )
+      .eq("recon_transactions.account_id", accountId)
       .range(cursor, cursor + SUPABASE_PAGE_LIMIT - 1);
 
     checkError(error);
     if (!data || data.length === 0) break;
-    for (const r of data) txnIds.push(r.id as string);
+    for (const l of data) {
+      const prId = l.pr_txn_id as string;
+      const daId = l.da_txn_id as string;
+      linkedPrIds.add(prId);
+      linkedDaIds.add(daId);
+      linksByPrId.set(prId, {
+        pr_txn_id: prId,
+        da_txn_id: daId,
+        match_strategy: l.match_strategy as string,
+      });
+    }
     if (data.length < SUPABASE_PAGE_LIMIT) break;
     cursor += SUPABASE_PAGE_LIMIT;
-  }
-
-  // 2. Query recon_links referencing these transaction IDs in chunks of 100 (URL query limit).
-  if (txnIds.length > 0) {
-    for (const side of ["pr_txn_id", "da_txn_id"] as const) {
-      for (let i = 0; i < txnIds.length; i += ID_CHUNK) {
-        const chunk = txnIds.slice(i, i + ID_CHUNK);
-        const { data, error } = await supabase
-          .from("recon_links")
-          .select("pr_txn_id, da_txn_id, match_strategy")
-          .in(side, chunk);
-
-        checkError(error);
-        for (const l of data ?? []) {
-          const prId = l.pr_txn_id as string;
-          const daId = l.da_txn_id as string;
-          linkedPrIds.add(prId);
-          linkedDaIds.add(daId);
-          linksByPrId.set(prId, {
-            pr_txn_id: prId,
-            da_txn_id: daId,
-            match_strategy: l.match_strategy as string,
-          });
-        }
-      }
-    }
   }
 
   return { linkedPrIds, linkedDaIds, links: Array.from(linksByPrId.values()) };
@@ -510,12 +522,15 @@ async function fetchUnpairedPRs(
       if (linkedPrIds.has(id)) continue;
       const ref = (row.rail_native_ref as string | null) ?? "";
       if (!ref) continue;
+      const desc = (row.description as string | null) ?? "";
+      const rawPayer = extractPRPayerName(desc);
       all.push({
         id,
         posted_at: row.posted_at as string,
         reference: ref,
         amountMinor: BigInt(String(row.credit_minor)),
-        description: (row.description as string | null) ?? "",
+        description: desc,
+        normPayerName: rawPayer ? normalizeName(rawPayer) : null,
       });
     }
     if (data.length < SUPABASE_PAGE_LIMIT) break;
@@ -547,12 +562,14 @@ async function fetchUnpairedDAs(
       if (linkedDaIds.has(id)) continue;
       const ref = (row.rail_native_ref as string | null) ?? "";
       if (!ref) continue;
+      const rawPayer = row.payer_name_raw as string | null;
       all.push({
         id,
         posted_at: row.posted_at as string,
         reference: ref,
         amountMinor: BigInt(String(row.debit_minor)),
-        payerNameRaw: row.payer_name_raw as string | null,
+        payerNameRaw: rawPayer,
+        normPayerName: rawPayer ? normalizeName(rawPayer) : null,
       });
     }
     if (data.length < SUPABASE_PAGE_LIMIT) break;
@@ -656,7 +673,7 @@ async function recomputePRStates(
     }
   }
 
-  const overrides = await fetchManualOverrides(supabase, prIds);
+  const overrides = await fetchManualOverrides(supabase, accountId);
 
   const buckets = {
     confirmed: [] as string[],
@@ -699,24 +716,27 @@ async function recomputePRStates(
 
 async function fetchManualOverrides(
   supabase: SupabaseClient,
-  prIds: string[],
+  accountId: string,
 ): Promise<Map<string, string>> {
   const overrides = new Map<string, string>();
-  if (prIds.length === 0) return overrides;
-  for (let i = 0; i < prIds.length; i += ID_CHUNK) {
-    const chunk = prIds.slice(i, i + ID_CHUNK);
+  let cursor = 0;
+  while (cursor < SUPABASE_PAGE_SAFETY_CAP) {
     const { data, error } = await supabase
       .from("recon_manual_actions")
-      .select("txn_id, new_state, acted_at")
-      .in("txn_id", chunk)
-      .order("acted_at", { ascending: false });
+      .select("txn_id, new_state, acted_at, recon_transactions!inner(account_id)")
+      .eq("recon_transactions.account_id", accountId)
+      .order("acted_at", { ascending: false })
+      .range(cursor, cursor + SUPABASE_PAGE_LIMIT - 1);
     checkError(error);
-    for (const a of data ?? []) {
+    if (!data || data.length === 0) break;
+    for (const a of data) {
       const txnId = a.txn_id as string;
       const newState = a.new_state as string | null;
       if (!newState) continue;
       if (!overrides.has(txnId)) overrides.set(txnId, newState);
     }
+    if (data.length < SUPABASE_PAGE_LIMIT) break;
+    cursor += SUPABASE_PAGE_LIMIT;
   }
   return overrides;
 }
