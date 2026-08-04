@@ -82,7 +82,18 @@ export async function recomputeAccountAction(
   const supabase = await createSupabaseServerClient();
 
   try {
-    const stats = await recomputeAccount(supabase, accountId, session.userId);
+    const { data, error } = await supabase.functions.invoke("bac-recon-recompute", {
+      body: { account_id: accountId },
+    });
+
+    let stats: RecomputeStats;
+    if (error || data?.error) {
+      // Fallback to local recompute if Edge function is not running locally
+      stats = await recomputeAccount(supabase, accountId, session.userId);
+    } else {
+      stats = data.stats;
+    }
+
     revalidatePath(`/recon/accounts/${accountId}`);
     return { status: "ok", stats };
   } catch (err) {

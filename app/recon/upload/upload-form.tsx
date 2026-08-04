@@ -42,18 +42,18 @@ export function UploadForm({ accounts }: { accounts: Account[] }) {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="file">Statement (.xls or .xlsx)</Label>
+          <Label htmlFor="file">Statement files (.xls or .xlsx)</Label>
           <input
             id="file"
             type="file"
             name="file"
+            multiple
             required
             accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
             className="block w-full rounded border border-border bg-bg-inset px-3 py-2 text-sm text-fg file:mr-3 file:rounded file:border-0 file:bg-bg-raised file:px-3 file:py-1.5 file:text-sm file:text-fg hover:file:bg-bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
           />
           <p className="text-xs text-fg-subtle">
-            Up to 10 MB. The file&apos;s account number must match the chosen
-            account.
+            Up to 10 MB per file. Select 1 or more Excel exports to upload simultaneously.
           </p>
         </div>
 
