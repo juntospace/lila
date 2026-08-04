@@ -147,19 +147,28 @@ export async function uploadStatement(
     return { status: "error", message: "Pick an account before uploading." };
   }
 
-  const file = formData.get("file");
-  if (!(file instanceof File) || file.size === 0) {
-    return { status: "error", message: "Pick an Excel file (.xlsx) to upload." };
+  const rawFiles = formData.getAll("file").concat(formData.getAll("files"));
+  const files = rawFiles.filter(
+    (f): f is File => f instanceof File && f.size > 0
+  );
+
+  if (files.length === 0) {
+    return { status: "error", message: "Pick at least one Excel file (.xlsx / .xls) to upload." };
   }
-  if (file.size > 10 * 1024 * 1024) {
-    return { status: "error", message: "File is larger than 10 MB." };
+
+  for (const f of files) {
+    if (f.size > 10 * 1024 * 1024) {
+      return { status: "error", message: `File "${f.name}" is larger than 10 MB.` };
+    }
+    if (f.type && !ALLOWED_MIME.has(f.type)) {
+      return {
+        status: "error",
+        message: `Unsupported file type "${f.type}" in "${f.name}". Upload .xlsx exports.`,
+      };
+    }
   }
-  if (file.type && !ALLOWED_MIME.has(file.type)) {
-    return {
-      status: "error",
-      message: `Unsupported file type "${file.type}". Upload a .xlsx export.`,
-    };
-  }
+
+  const file = files[0];
 
   const supabase = await createSupabaseServerClient();
 
@@ -300,10 +309,13 @@ export async function uploadStatement(
   let edgeData: BacEdgeResponse | null = null;
   try {
     const edgeFormData = new FormData();
-    const edgeFile = new File([fileBytes], file.name, {
-      type: file.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    });
-    edgeFormData.append("file", edgeFile);
+    for (const f of files) {
+      const b = new Uint8Array(await f.arrayBuffer());
+      const edgeFile = new File([b], f.name, {
+        type: f.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+      edgeFormData.append("file", edgeFile);
+    }
     edgeFormData.append("account_id", account.id);
 
     const { publicEnv, serverEnv } = await import("@/lib/env");
@@ -489,7 +501,12 @@ export async function deleteUpload(uploadId: string): Promise<DeleteUploadResult
   //    whose batch was consumed by a now-deleted DA batch, settle back to
   //    the correct state given the remaining data.
   try {
-    await recomputeAccount(supabase, accountId);
+    const { data, error } = await supabase.functions.invoke("bac-recon-recompute", {
+      body: { account_id: accountId },
+    });
+    if (error || data?.error) {
+      await recomputeAccount(supabase, accountId);
+    }
   } catch (err) {
     return {
       status: "error",

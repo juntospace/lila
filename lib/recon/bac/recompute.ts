@@ -212,6 +212,8 @@ export async function recomputeAccount(
     for (const pr of remainingPRs) {
       if (usedFifoPrIds.has(pr.id)) continue;
       if (pr.posted_at > da.posted_at) continue;
+      // Strict 1 working day window: DA must arrive on the same day or the next working day after PR
+      if (previousWorkingDay(da.posted_at) > pr.posted_at) continue;
       if (pr.amountMinor !== da.amountMinor) continue;
 
       const prPayer = extractPRPayerName(pr.description);

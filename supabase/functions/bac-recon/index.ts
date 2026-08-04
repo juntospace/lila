@@ -78,41 +78,51 @@ export default {
         };
       });
 
-      const primaryParsed = parsedFiles[0].parsed;
-
-      // Prepare storage parameters if accountId is present
-      let fileSha256 = "";
-      let storagePath = "";
-      if (accountId) {
-        fileSha256 = await computeFileSha256(primaryFile.content);
-        const ext = primaryFile.filename.endsWith(".xls") ? "xls" : "xlsx";
-        storagePath = `${accountId}/${fileSha256}.${ext}`;
-        storagePathToRollback = storagePath;
-      }
-
-      // 3. Concurrently execute Storage upload, DB Ingestion, and Reconcile calculations
       const adminSupabase = getAdminClient();
 
-      const storagePromise = (async () => {
-        if (!storagePath) return;
-        await uploadToStorage(
-          storagePath,
-          primaryFile.content,
-          primaryFile.file.type || "application/octet-stream"
-        );
-      })();
-
       const ingestPromise = (async (): Promise<IngestResult | null> => {
-        if (!accountId) return null;
-        return await ingestBACFile({
-          supabase: adminSupabase,
-          accountId,
-          fileBytes: primaryFile.content,
-          originalFilename: primaryFile.filename,
-          uploadedBy: session.userId,
-          parseResult: primaryParsed,
-          storagePath,
-        });
+        if (!accountId || files.length === 0) return null;
+
+        let aggregatedResult: IngestResult | null = null;
+
+        for (let i = 0; i < files.length; i++) {
+          const f = files[i];
+          const parsed = parsedFiles[i].parsed;
+          const sha = await computeFileSha256(f.content);
+          const ext = f.filename.endsWith(".xls") ? "xls" : "xlsx";
+          const storagePath = `${accountId}/${sha}.${ext}`;
+
+          await uploadToStorage(
+            storagePath,
+            f.content,
+            f.file.type || "application/octet-stream"
+          ).catch(() => {});
+
+          const res = await ingestBACFile({
+            supabase: adminSupabase,
+            accountId,
+            fileBytes: f.content,
+            originalFilename: f.filename,
+            uploadedBy: session.userId,
+            parseResult: parsed,
+            storagePath,
+          });
+
+          if (!aggregatedResult) {
+            aggregatedResult = { ...res };
+          } else {
+            aggregatedResult.rowsTotal += res.rowsTotal;
+            aggregatedResult.rowsNew += res.rowsNew;
+            aggregatedResult.rowsDuplicate += res.rowsDuplicate;
+            if (res.fileWasDuplicate) aggregatedResult.fileWasDuplicate = true;
+            aggregatedResult.warnings.push(...res.warnings);
+            aggregatedResult.reversalsPaired += res.reversalsPaired;
+            aggregatedResult.reversalsUnpaired = res.reversalsUnpaired;
+            aggregatedResult.prBatchesPending = res.prBatchesPending;
+          }
+        }
+
+        return aggregatedResult;
       })();
 
       const reconcilePromise = (async () => {
@@ -126,9 +136,8 @@ export default {
         return { stream, res, issues, feeTbl };
       })();
 
-      // Run storage, ingest, and reconcile concurrently!
-      const [, ingestResult, reconData] = await Promise.all([
-        storagePromise,
+      // Run ingest and reconcile concurrently!
+      const [ingestResult, reconData] = await Promise.all([
         ingestPromise,
         reconcilePromise,
       ]);
