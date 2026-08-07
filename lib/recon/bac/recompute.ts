@@ -666,13 +666,17 @@ async function recomputePRStates(
 
   const prIds = prRows.map((r) => r.id);
 
-  let maxPrDate: string | null = null;
-  for (const pr of prRows) {
-    if (!maxPrDate || pr.posted_at > maxPrDate) {
-      maxPrDate = pr.posted_at;
-    }
-  }
+  // Calculate max date across ALL account transactions (PR, DA, 4C)
+  // so cutoffDate updates properly even if a newly uploaded file contains only DAs/4Cs.
+  const { data: maxTxnData } = await supabase
+    .from("recon_transactions")
+    .select("posted_at")
+    .eq("account_id", accountId)
+    .order("posted_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
+  const maxAccountDate: string | null = (maxTxnData?.posted_at as string | null) ?? null;
   const overrides = await fetchManualOverrides(supabase, accountId);
 
   const buckets = {
@@ -682,7 +686,7 @@ async function recomputePRStates(
   };
   const counts = { confirmed: 0, rejected: 0, pending: 0 };
 
-  const cutoffDate = maxPrDate ? previousWorkingDay(maxPrDate) : null;
+  const cutoffDate = maxAccountDate ? previousWorkingDay(maxAccountDate) : null;
 
   for (const pr of prRows) {
     const id = pr.id;
