@@ -213,6 +213,13 @@ export async function ingestBACFile(args: IngestArgs): Promise<IngestResult> {
   }
   const rowsDuplicate = rows.length - rowsNew;
 
+  // ----- Pair every unpaired DA + re-evaluate state (paginated) ------------
+  const recomputeStats = await recomputeAccount(supabase, accountId, uploadedBy ?? null);
+  const reversalsPaired = recomputeStats.reversalsPaired;
+  const reversalsUnpaired = recomputeStats.reversalsUnpaired;
+  const prsConfirmedThisRun = recomputeStats.prsConfirmed;
+  const prBatchesPending = recomputeStats.prBatchesPending;
+
   // ----- Finalize the upload row -------------------------------------------
   await supabase
     .from("recon_uploads")
@@ -231,10 +238,10 @@ export async function ingestBACFile(args: IngestArgs): Promise<IngestResult> {
     rowsDuplicate,
     dateRangeAdded: added,
     dateRangeOverlap: overlap,
-    prsConfirmedThisRun: 0,
-    reversalsPaired: 0,
-    reversalsUnpaired: 0,
-    prBatchesPending: 0,
+    prsConfirmedThisRun,
+    reversalsPaired,
+    reversalsUnpaired,
+    prBatchesPending,
     warnings,
   };
 }

@@ -82,16 +82,20 @@ export async function recomputeAccountAction(
   const supabase = await createSupabaseServerClient();
 
   try {
+    let stats: RecomputeStats;
     const { data, error } = await supabase.functions.invoke("bac-recon-recompute", {
       body: { account_id: accountId },
     });
 
     if (error || data?.error) {
-      const errMsg = error?.message || data?.error || "Edge Function recompute error";
-      return { status: "error", message: errMsg };
+      // Fallback to local JS execution if Edge Function limits/fails (e.g. Supabase CLI local Deno worker limits)
+      console.warn("Edge Function recompute failed, falling back to direct server recompute:", error || data?.error);
+      const { recomputeAccount } = await import("@/lib/recon/bac/recompute");
+      stats = await recomputeAccount(supabase, accountId, session.userId);
+    } else {
+      stats = data.stats;
     }
 
-    const stats: RecomputeStats = data.stats;
     revalidatePath(`/recon/accounts/${accountId}`);
     return { status: "ok", stats };
   } catch (err) {

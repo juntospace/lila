@@ -488,7 +488,12 @@ export function linkAllBatches(
       .filter(
         (p) => !claimedRefs.has(p.reference) && p.posted_at <= sameDate,
       )
-      .sort((a, b) => (a.reference < b.reference ? -1 : 1));
+      .sort((a, b) => {
+        if (a.posted_at !== b.posted_at) {
+          return b.posted_at.localeCompare(a.posted_at);
+        }
+        return a.reference < b.reference ? -1 : 1;
+      });
 
     const assignment = solveAssignment(candidates, dayDAs, usedPrIds, options);
 
