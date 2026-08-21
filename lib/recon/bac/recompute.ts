@@ -122,12 +122,6 @@ export async function recomputeAccount(
   accountId: string,
   uploadedBy?: string | null,
 ): Promise<RecomputeStats> {
-  // 0. Self-healing reparse: re-run parseDvtoDescription against any DA
-  //    with a null return_code. The parser regex has been broadened over
-  //    time (RCZO support, looser separator), so previously unparseable
-  //    descriptions might extract cleanly now.
-  const dasReparsed = await reparseUnparsedDAs(supabase, accountId);
-
   // 1. Pre-fetch every existing recon_links row for this account.
   //    Used for: (a) the diagnostic "preexistingLinks" count, (b) input
   //    to wipeAutoLinks below, (c) the post-wipe survivors which are the
@@ -237,7 +231,12 @@ export async function recomputeAccount(
       daMinDates.set(da.posted_at, minPrDate);
     }
 
-    for (const pr of candidates) {
+    // Prefer same-day PRs over previous-day PRs (sort candidates by posted_at DESC)
+    const sortedCandidates = [...candidates].sort((a, b) =>
+      b.posted_at.localeCompare(a.posted_at),
+    );
+
+    for (const pr of sortedCandidates) {
       if (usedFifoPrIds.has(pr.id)) continue;
       if (pr.posted_at > da.posted_at) continue;
       // Strict 1 working day window: DA must arrive on the same day or the next working day after PR
@@ -279,6 +278,7 @@ export async function recomputeAccount(
     supabase,
     accountId,
     linkedPrIds,
+    autoConfirmedPrIds,
   );
   const daStats = await recomputeDAStates(supabase, accountId, linkedDaIds);
 
@@ -295,7 +295,7 @@ export async function recomputeAccount(
     prsPending: prStats.pending,
     daRejected: daStats.rejected,
     daPendingPair: daStats.pendingPair,
-    dasReparsed,
+    dasReparsed: 0,
     txnCount: txnCount ?? 0,
     preexistingLinks,
     unpairedDaInput,
@@ -350,7 +350,7 @@ async function fetchAliasMap(
 // Internals
 // =============================================================
 
-const BATCH_INSERT_CHUNK = 500;
+const BATCH_INSERT_CHUNK = 100;
 
 function checkError(error: unknown): void {
   if (!error) return;
@@ -434,31 +434,47 @@ async function fetchLinkedTxnIds(
   const linkedDaIds = new Set<string>();
   const linksByPrId = new Map<string, LinkRow>();
 
+  // Collect transaction IDs for this account (paginated).
+  const txnIds: string[] = [];
   let cursor = 0;
   while (cursor < SUPABASE_PAGE_SAFETY_CAP) {
     const { data, error } = await supabase
-      .from("recon_links")
-      .select(
-        "pr_txn_id, da_txn_id, match_strategy, recon_transactions!pr_txn_id!inner(account_id)",
-      )
-      .eq("recon_transactions.account_id", accountId)
+      .from("recon_transactions")
+      .select("id")
+      .eq("account_id", accountId)
+      .order("id", { ascending: true })
       .range(cursor, cursor + SUPABASE_PAGE_LIMIT - 1);
 
     checkError(error);
     if (!data || data.length === 0) break;
-    for (const l of data) {
-      const prId = l.pr_txn_id as string;
-      const daId = l.da_txn_id as string;
-      linkedPrIds.add(prId);
-      linkedDaIds.add(daId);
-      linksByPrId.set(prId, {
-        pr_txn_id: prId,
-        da_txn_id: daId,
-        match_strategy: l.match_strategy as string,
-      });
-    }
+    for (const r of data) txnIds.push(r.id as string);
     if (data.length < SUPABASE_PAGE_LIMIT) break;
     cursor += SUPABASE_PAGE_LIMIT;
+  }
+
+  if (txnIds.length > 0) {
+    for (const side of ["pr_txn_id", "da_txn_id"] as const) {
+      for (let i = 0; i < txnIds.length; i += ID_CHUNK) {
+        const chunk = txnIds.slice(i, i + ID_CHUNK);
+        const { data, error } = await supabase
+          .from("recon_links")
+          .select("pr_txn_id, da_txn_id, match_strategy")
+          .in(side, chunk);
+
+        checkError(error);
+        for (const l of data ?? []) {
+          const prId = l.pr_txn_id as string;
+          const daId = l.da_txn_id as string;
+          linkedPrIds.add(prId);
+          linkedDaIds.add(daId);
+          linksByPrId.set(prId, {
+            pr_txn_id: prId,
+            da_txn_id: daId,
+            match_strategy: l.match_strategy as string,
+          });
+        }
+      }
+    }
   }
 
   return { linkedPrIds, linkedDaIds, links: Array.from(linksByPrId.values()) };
@@ -640,6 +656,7 @@ async function recomputePRStates(
   supabase: SupabaseClient,
   accountId: string,
   linkedPrIds: Set<string>,
+  autoConfirmedPrIds: Set<string>,
 ): Promise<{ confirmed: number; rejected: number; pending: number }> {
   const prRows: { id: string; state: string; posted_at: string }[] = [];
   let cursor = 0;
@@ -666,13 +683,17 @@ async function recomputePRStates(
 
   const prIds = prRows.map((r) => r.id);
 
-  let maxPrDate: string | null = null;
-  for (const pr of prRows) {
-    if (!maxPrDate || pr.posted_at > maxPrDate) {
-      maxPrDate = pr.posted_at;
-    }
-  }
+  // Calculate max date across ALL account transactions (PR, DA, 4C)
+  // so cutoffDate updates properly even if a newly uploaded file contains only DAs/4Cs.
+  const { data: maxTxnData } = await supabase
+    .from("recon_transactions")
+    .select("posted_at")
+    .eq("account_id", accountId)
+    .order("posted_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
+  const maxAccountDate: string | null = (maxTxnData?.posted_at as string | null) ?? null;
   const overrides = await fetchManualOverrides(supabase, accountId);
 
   const buckets = {
@@ -682,7 +703,7 @@ async function recomputePRStates(
   };
   const counts = { confirmed: 0, rejected: 0, pending: 0 };
 
-  const cutoffDate = maxPrDate ? previousWorkingDay(maxPrDate) : null;
+  const cutoffDate = maxAccountDate ? previousWorkingDay(maxAccountDate) : null;
 
   for (const pr of prRows) {
     const id = pr.id;
@@ -694,7 +715,10 @@ async function recomputePRStates(
       const override = overrides.get(id);
       if (override === "confirmed" || override === "rejected" || override === "pending") {
         targetState = override;
-      } else if (cutoffDate && pr.posted_at < cutoffDate) {
+      } else if (
+        (autoConfirmedPrIds.has(id) && maxAccountDate && pr.posted_at < maxAccountDate) ||
+        (cutoffDate && pr.posted_at <= cutoffDate)
+      ) {
         targetState = "confirmed";
       }
     }

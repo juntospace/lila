@@ -389,15 +389,22 @@ export async function uploadStatement(
           body: { account_id: account.id },
         });
 
-      if (!recomputeErr && edgeRecompute?.stats) {
-        const recomputeStats = edgeRecompute.stats;
+      let recomputeStats = edgeRecompute?.stats;
+
+      if (recomputeErr || !recomputeStats) {
+        console.warn("Edge Function bac-recon-recompute failed, running direct fallback:", recomputeErr);
+        const { recomputeAccount } = await import("@/lib/recon/bac/recompute");
+        recomputeStats = await recomputeAccount(supabase, account.id, session.userId);
+      }
+
+      if (recomputeStats) {
         result.prsConfirmedThisRun = recomputeStats.prsConfirmed;
         result.reversalsPaired = recomputeStats.reversalsPaired;
         result.reversalsUnpaired = recomputeStats.reversalsUnpaired;
         result.prBatchesPending = recomputeStats.prBatchesPending;
       }
     } catch (e) {
-      console.error("Edge Function bac-recon-recompute invoke failed:", e);
+      console.error("Recompute post-ingest error:", e);
     }
   }
 
