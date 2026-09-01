@@ -379,7 +379,7 @@ export async function uploadStatement(
   try {
     const { publicEnv, serverEnv } = await import("@/lib/env");
     const serviceKey = serverEnv().SUPABASE_SERVICE_ROLE_KEY;
-    const fnUrl = `${publicEnv.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/bac-recon?format=json&account_id=${account.id}`;
+    const fnUrl = `${publicEnv.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/bac-recon?format=json&account_id=${account.id}&skip_recompute=true`;
 
     for (const f of files) {
       const b = new Uint8Array(await f.arrayBuffer());

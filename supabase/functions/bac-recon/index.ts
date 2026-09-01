@@ -40,6 +40,7 @@ export default {
       const formatParam = url.searchParams.get("format") || "xlsx";
       const minPrefixParam = parseInt(url.searchParams.get("min_prefix") || String(MIN_PREFIX), 10);
       const accountIdParam = url.searchParams.get("account_id");
+      const skipRecomputeParam = url.searchParams.get("skip_recompute") === "true";
 
       const formData = await req.formData();
       const files: { filename: string; content: Uint8Array; file: File }[] = [];
@@ -93,6 +94,7 @@ export default {
             uploadedBy: session.userId,
             parseResult: parsed,
             storagePath,
+            skipRecompute: skipRecomputeParam,
           });
 
           if (!aggregatedResult) {

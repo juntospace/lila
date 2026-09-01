@@ -29,6 +29,7 @@ export interface IngestArgs {
   uploadedBy?: string;
   parseResult: BACParseResult;
   storagePath?: string;
+  skipRecompute?: boolean;
 }
 
 export interface IngestResult {
@@ -69,7 +70,7 @@ interface ReconTxnInsert {
 }
 
 export async function ingestBACFile(args: IngestArgs): Promise<IngestResult> {
-  const { supabase, accountId, fileBytes, originalFilename, uploadedBy, parseResult, storagePath } = args;
+  const { supabase, accountId, fileBytes, originalFilename, uploadedBy, parseResult, storagePath, skipRecompute } = args;
   const warnings = [...parseResult.warnings];
 
   const fileSha256 = await computeFileSha256(fileBytes);
@@ -214,11 +215,18 @@ export async function ingestBACFile(args: IngestArgs): Promise<IngestResult> {
   const rowsDuplicate = rows.length - rowsNew;
 
   // ----- Pair every unpaired DA + re-evaluate state (paginated) ------------
-  const recomputeStats = await recomputeAccount(supabase, accountId, uploadedBy ?? null);
-  const reversalsPaired = recomputeStats.reversalsPaired;
-  const reversalsUnpaired = recomputeStats.reversalsUnpaired;
-  const prsConfirmedThisRun = recomputeStats.prsConfirmed;
-  const prBatchesPending = recomputeStats.prBatchesPending;
+  let reversalsPaired = 0;
+  let reversalsUnpaired = 0;
+  let prsConfirmedThisRun = 0;
+  let prBatchesPending = 0;
+
+  if (!skipRecompute) {
+    const recomputeStats = await recomputeAccount(supabase, accountId, uploadedBy ?? null);
+    reversalsPaired = recomputeStats.reversalsPaired;
+    reversalsUnpaired = recomputeStats.reversalsUnpaired;
+    prsConfirmedThisRun = recomputeStats.prsConfirmed;
+    prBatchesPending = recomputeStats.prBatchesPending;
+  }
 
   // ----- Finalize the upload row -------------------------------------------
   await supabase
