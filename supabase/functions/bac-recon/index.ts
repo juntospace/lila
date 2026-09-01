@@ -2,7 +2,7 @@ import "@supabase/functions-js/edge-runtime.d.ts";
 import * as XLSX from "npm:xlsx@0.18.5";
 
 import { requireAuth, getAdminClient } from "../_shared/auth.ts";
-import { parseBACSheet, type BACParseResult } from "./parser.ts";
+import { parseBACSheet } from "./parser.ts";
 import {
   computeFileSha256,
   uploadToStorage,
@@ -63,30 +63,18 @@ export default {
         );
       }
 
-      const primaryFile = files[0];
-
-      // 2. Parse Excel
-      const parsedFiles = files.map((f) => {
-        const workbook = XLSX.read(f.content, { type: "array", cellDates: true });
-        const sheetName = workbook.SheetNames[0];
-        const sheet = workbook.Sheets[sheetName];
-        const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false }) as any[][];
-        return {
-          filename: f.filename,
-          parsed: parseBACSheet(matrix),
-        };
-      });
-
-      const adminSupabase = getAdminClient();
-
-      const ingestPromise = (async (): Promise<IngestResult | null> => {
-        if (!accountId || files.length === 0) return null;
-
+      // Optimized path for JSON ingestion requests
+      if (formatParam.toLowerCase() === "json") {
+        const adminSupabase = getAdminClient();
         let aggregatedResult: IngestResult | null = null;
 
-        for (let i = 0; i < files.length; i++) {
-          const f = files[i];
-          const parsed = parsedFiles[i].parsed;
+        for (const f of files) {
+          const workbook = XLSX.read(f.content, { type: "array", cellDates: true });
+          const sheetName = workbook.SheetNames[0];
+          const sheet = workbook.Sheets[sheetName];
+          const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false }) as any[][];
+          const parsed = parseBACSheet(matrix);
+
           const sha = await computeFileSha256(f.content);
           const ext = f.filename.endsWith(".xls") ? "xls" : "xlsx";
           const storagePath = `${accountId}/${sha}.${ext}`;
@@ -121,27 +109,31 @@ export default {
           }
         }
 
-        return aggregatedResult;
-      })();
+        return new Response(
+          JSON.stringify({ ingestResult: aggregatedResult }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
 
-      const reconcilePromise = (async () => {
-        const { stream, issues: streamIssues, chainOk } = buildStream(parsedFiles);
-        if (stream.length === 0) {
-          throw new Error("Los archivos provistos no contienen movimientos validos");
-        }
-        const res = reconcile(stream, minPrefixParam, chainOk);
-        const issues = [...streamIssues, ...feeChecks(stream)];
-        const feeTbl = feeBatchTable(stream, res);
-        return { stream, res, issues, feeTbl };
-      })();
+      // Legacy path for report downloads
+      const parsedFiles = files.map((f) => {
+        const workbook = XLSX.read(f.content, { type: "array", cellDates: true });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false }) as any[][];
+        return {
+          filename: f.filename,
+          parsed: parseBACSheet(matrix),
+        };
+      });
 
-      // Run ingest and reconcile concurrently!
-      const [ingestResult, reconData] = await Promise.all([
-        ingestPromise,
-        reconcilePromise,
-      ]);
-
-      const { stream, res, issues, feeTbl } = reconData;
+      const { stream, issues: streamIssues, chainOk } = buildStream(parsedFiles);
+      if (stream.length === 0) {
+        throw new Error("Los archivos provistos no contienen movimientos validos");
+      }
+      const res = reconcile(stream, minPrefixParam, chainOk);
+      const issues = [...streamIssues, ...feeChecks(stream)];
+      const feeTbl = feeBatchTable(stream, res);
 
       // 4. Build Alerts
       const alerts: [string, string][] = [];
@@ -181,57 +173,6 @@ export default {
           alerts.push([res.last_date, "INTEGRIDAD: " + msg]);
         }
       });
-
-      // 5. Response Formatting
-      if (formatParam.toLowerCase() === "json") {
-        const dmin =
-          res.items.length > 0
-            ? res.items.reduce((min: string, i: any) => (i.dateStr < min ? i.dateStr : min), res.items[0].dateStr)
-            : null;
-
-        const payload = {
-          ingestResult,
-          generated_from: files.map((f) => f.filename),
-          period: dmin && res.last_date ? [dmin, res.last_date] : [],
-          items: res.items.map((i: any) => ({
-            date: i.dateStr,
-            ref: i.ref,
-            name_raw: i.name_raw,
-            credit: i.credit,
-            status: i.status,
-            reject_ref: i.reject ? i.reject.ref : null,
-            reject_reason: i.reject ? i.reject.reason : null,
-            reject_date: i.reject ? i.reject.dateStr : null,
-            reject_lag_bd: i.reject_lag_bd ?? null,
-            file: i.file,
-          })),
-          rejects: res.rejects.map((r: any) => ({
-            date: r.dateStr,
-            ref: r.ref,
-            name_raw: r.name_raw,
-            debit: r.debit,
-            reason: r.reason,
-            src: r.src,
-            matched_ref: r.matched !== null && res.items[r.matched] ? res.items[r.matched].ref : null,
-            matched_date: r.matched !== null && res.items[r.matched] ? res.items[r.matched].dateStr : null,
-            ambiguous: r.ambiguous,
-          })),
-          incoming: res.incoming.map((r: any) => ({
-            date: r.dateStr,
-            ref: r.ref,
-            channel: r.channel || r.code,
-            name_raw: r.name_raw,
-            credit: r.credit,
-            status: r.status,
-          })),
-          issues,
-          alerts: alerts.sort((a, b) => (a[0] ?? "").localeCompare(b[0] ?? "")).map(([d, msg]) => [d, msg]),
-        };
-
-        return new Response(JSON.stringify(payload), {
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
 
       const reportBytes = writeReport(res, stream, issues, feeTbl);
       return new Response(reportBytes, {

@@ -374,40 +374,57 @@ export async function uploadStatement(
     issues?: string[];
     error?: string;
   }
-  let edgeData: BacEdgeResponse | null = null;
-  try {
-    const edgeFormData = new FormData();
-    for (const f of files) {
-      const b = new Uint8Array(await f.arrayBuffer());
-      const edgeFile = new File([b], f.name, {
-        type: f.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      });
-      edgeFormData.append("file", edgeFile);
-    }
-    edgeFormData.append("account_id", account.id);
+  let aggregatedResult: IngestResult | null = null;
 
+  try {
     const { publicEnv, serverEnv } = await import("@/lib/env");
     const serviceKey = serverEnv().SUPABASE_SERVICE_ROLE_KEY;
     const fnUrl = `${publicEnv.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/bac-recon?format=json&account_id=${account.id}`;
 
-    const response = await fetch(fnUrl, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${serviceKey}`,
-        apikey: publicEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-        "x-user-id": session.userId,
-      },
-      body: edgeFormData,
-    });
+    for (const f of files) {
+      const b = new Uint8Array(await f.arrayBuffer());
+      const edgeFormData = new FormData();
+      const edgeFile = new File([b], f.name, {
+        type: f.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+      edgeFormData.append("file", edgeFile);
+      edgeFormData.append("account_id", account.id);
 
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      throw new Error(`Edge Function bac-recon returned HTTP ${response.status}: ${text}`);
-    }
+      const response = await fetch(fnUrl, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${serviceKey}`,
+          apikey: publicEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+          "x-user-id": session.userId,
+        },
+        body: edgeFormData,
+      });
 
-    edgeData = (await response.json()) as BacEdgeResponse;
-    if (edgeData && typeof edgeData === "object" && "error" in edgeData && edgeData.error) {
-      throw new Error(`Edge Function bac-recon error: ${edgeData.error}`);
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        throw new Error(`Edge Function bac-recon returned HTTP ${response.status}: ${text}`);
+      }
+
+      const edgeData = (await response.json()) as BacEdgeResponse;
+      if (edgeData && typeof edgeData === "object" && "error" in edgeData && edgeData.error) {
+        throw new Error(`Edge Function bac-recon error: ${edgeData.error}`);
+      }
+
+      const res = edgeData?.ingestResult;
+      if (res) {
+        if (!aggregatedResult) {
+          aggregatedResult = { ...res };
+        } else {
+          aggregatedResult.rowsTotal += res.rowsTotal;
+          aggregatedResult.rowsNew += res.rowsNew;
+          aggregatedResult.rowsDuplicate += res.rowsDuplicate;
+          if (res.fileWasDuplicate) aggregatedResult.fileWasDuplicate = true;
+          aggregatedResult.warnings.push(...res.warnings);
+          aggregatedResult.reversalsPaired += res.reversalsPaired;
+          aggregatedResult.reversalsUnpaired = res.reversalsUnpaired;
+          aggregatedResult.prBatchesPending = res.prBatchesPending;
+        }
+      }
     }
   } catch (err: unknown) {
     let errorMessage = "An unknown error occurred.";
@@ -435,11 +452,11 @@ export async function uploadStatement(
     };
   }
 
-  const result: IngestResult = edgeData?.ingestResult || {
+  const result: IngestResult = aggregatedResult || {
     uploadId: null,
     fileWasDuplicate: false,
-    rowsTotal: edgeData?.items?.length || 0,
-    rowsNew: edgeData?.items?.length || 0,
+    rowsTotal: 0,
+    rowsNew: 0,
     rowsDuplicate: 0,
     dateRangeAdded: null,
     dateRangeOverlap: null,
@@ -447,7 +464,7 @@ export async function uploadStatement(
     reversalsPaired: 0,
     reversalsUnpaired: 0,
     prBatchesPending: 0,
-    warnings: edgeData?.issues || [],
+    warnings: [],
   };
 
   if (!result.fileWasDuplicate && result.rowsNew > 0) {
