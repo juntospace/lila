@@ -9,14 +9,21 @@ import { type IngestResult } from "@/lib/recon/bac";
 import { recomputeAccount } from "@/lib/recon/bac/recompute";
 import {
   BGParseError,
+  detectAndParseBgFile,
+  fetchManualAssignments,
   ingestBGAchDetailFile,
   ingestBGStatementFile,
   isBGAchDetailSheet,
   isBGStatementSheet,
   parseBGAchDetail,
   parseBGStatement,
+  reconcileBancoGeneral,
+  syncSnapshotToDatabase,
   type BGAchDetailIngestResult,
   type BGStatementIngestResult,
+  type BgParsedAchDetail,
+  type BgParsedStatement,
+  type BgParsedYappyReport,
 } from "@/lib/recon/bg";
 import {
   createSupabaseServerClient,
@@ -187,116 +194,135 @@ export async function uploadStatement(
 
   // ----- BG rail --------------------------------------------------------
   if (account.rail === "bg") {
-    let workbook: XLSX.WorkBook;
-    try {
-      workbook = XLSX.read(fileBytes, { type: "array", cellDates: true });
-    } catch (err) {
-      return {
-        status: "error",
-        message: `Could not read the Excel file: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      };
-    }
-    const firstSheetName = workbook.SheetNames[0];
-    if (!firstSheetName) {
-      return { status: "error", message: "The workbook has no sheets." };
+    const statements: BgParsedStatement[] = [];
+    const achDetails: BgParsedAchDetail[] = [];
+    const yappyReports: BgParsedYappyReport[] = [];
+    let lastStatementResult: BGStatementIngestResult | null = null;
+    let lastAchDetailResult: BGAchDetailIngestResult | null = null;
+
+    for (const f of files) {
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      const parsed = detectAndParseBgFile(bytes, f.name);
+
+      if (!parsed) {
+        // Fallback to legacy single sheet parsers if sniffer returned null
+        let workbook: XLSX.WorkBook;
+        try {
+          workbook = XLSX.read(bytes, { type: "array", cellDates: true });
+        } catch {
+          continue;
+        }
+        if (isBGAchDetailSheet(workbook)) {
+          const name = workbook.SheetNames.find((n) => /BGPACHRejectedDetailList/i.test(n))!;
+          const parseResult = parseBGAchDetail(workbook.Sheets[name]);
+          const result = await ingestBGAchDetailFile({
+            supabase,
+            accountId: account.id,
+            fileBytes: bytes,
+            originalFilename: f.name,
+            uploadedBy: session.userId,
+            parseResult,
+          });
+          lastAchDetailResult = result;
+        } else if (isBGStatementSheet(workbook)) {
+          const name = workbook.SheetNames.find((n) => /BGPCheckingMovementsExcel/i.test(n))!;
+          const parseResult = parseBGStatement(workbook.Sheets[name]);
+          const result = await ingestBGStatementFile({
+            supabase,
+            accountId: account.id,
+            fileBytes: bytes,
+            originalFilename: f.name,
+            uploadedBy: session.userId,
+            parseResult,
+          });
+          lastStatementResult = result;
+        }
+        continue;
+      }
+
+      if (parsed.fileType === "statement") {
+        statements.push(parsed);
+        // Also ingest to legacy table if it has BGPCheckingMovementsExcel structure
+        try {
+          const wb = XLSX.read(bytes, { type: "array", cellDates: true });
+          if (isBGStatementSheet(wb)) {
+            const name = wb.SheetNames.find((n) => /BGPCheckingMovementsExcel/i.test(n))!;
+            const parseResult = parseBGStatement(wb.Sheets[name]);
+            lastStatementResult = await ingestBGStatementFile({
+              supabase,
+              accountId: account.id,
+              fileBytes: bytes,
+              originalFilename: f.name,
+              uploadedBy: session.userId,
+              parseResult,
+            });
+          }
+        } catch {
+          // ignore legacy ingest errors
+        }
+      } else if (parsed.fileType === "ach_detail") {
+        achDetails.push(parsed);
+        try {
+          const wb = XLSX.read(bytes, { type: "array", cellDates: true });
+          if (isBGAchDetailSheet(wb)) {
+            const name = wb.SheetNames.find((n) => /BGPACHRejectedDetailList/i.test(n))!;
+            const parseResult = parseBGAchDetail(wb.Sheets[name]);
+            lastAchDetailResult = await ingestBGAchDetailFile({
+              supabase,
+              accountId: account.id,
+              fileBytes: bytes,
+              originalFilename: f.name,
+              uploadedBy: session.userId,
+              parseResult,
+            });
+          }
+        } catch {
+          // ignore legacy ingest errors
+        }
+      } else if (parsed.fileType === "yappy") {
+        yappyReports.push(parsed);
+      }
     }
 
-    if (isBGAchDetailSheet(workbook)) {
-      const name = workbook.SheetNames.find((n) =>
-        /BGPACHRejectedDetailList/i.test(n),
-      )!;
-      let parseResult;
-      try {
-        parseResult = parseBGAchDetail(workbook.Sheets[name]);
-      } catch (err) {
-        if (err instanceof BGParseError) {
-          return { status: "error", message: `BG ACH detail: ${err.message}` };
-        }
-        throw err;
-      }
-      let result: BGAchDetailIngestResult;
-      try {
-        result = await ingestBGAchDetailFile({
-          supabase,
-          accountId: account.id,
-          fileBytes,
-          originalFilename: file.name,
-          uploadedBy: session.userId,
-          parseResult,
-        });
-      } catch (err) {
-        return {
-          status: "error",
-          message: `Ingest failed: ${err instanceof Error ? err.message : String(err)}`,
-        };
-      }
+    if (statements.length > 0 || achDetails.length > 0 || yappyReports.length > 0) {
+      const manualAssignments = await fetchManualAssignments(supabase, account.id);
+      const snapshot = reconcileBancoGeneral(statements, achDetails, yappyReports, {
+        expectedAccount: account.account_number,
+        manualAssignments,
+      });
+
+      await syncSnapshotToDatabase(supabase, account.id, snapshot);
+
       revalidatePath("/recon/upload");
       revalidatePath(`/recon/accounts/${account.id}`);
-      return {
-        status: "success",
-        message: result.fileWasDuplicate
-          ? "Same ACH detail file was already ingested — no new rows."
-          : `Ingested ${result.rowsNew} ACH detail row${result.rowsNew === 1 ? "" : "s"}.`,
-        result: { ...result, rail: "bg", fileKind: "ach_detail", accountLabel },
-      };
-    }
-    if (isBGStatementSheet(workbook)) {
-      const name = workbook.SheetNames.find((n) =>
-        /BGPCheckingMovementsExcel/i.test(n),
-      )!;
-      let parseResult;
-      try {
-        parseResult = parseBGStatement(workbook.Sheets[name]);
-      } catch (err) {
-        if (err instanceof BGParseError) {
-          return { status: "error", message: `BG statement: ${err.message}` };
-        }
-        throw err;
-      }
-      // Sanity: file must match the selected account number. BG numbers
-      // carry dashes; compare digits-only.
-      if (
-        parseResult.header.accountNumber &&
-        parseResult.header.accountNumber.replace(/\D/g, "") !==
-          account.account_number.replace(/\D/g, "")
-      ) {
+
+      const summaryMsg = `Ingested ${files.length} BG file${files.length === 1 ? "" : "s"}: ${snapshot.controls.settledBatchesCount} of ${snapshot.controls.totalBatchesCount} ACH batches settled, ${snapshot.controls.settledYappyBatchesCount} Yappy deposits reconciled.`;
+
+      if (lastStatementResult) {
         return {
-          status: "error",
-          message: `File is for account ${parseResult.header.accountNumber}, but you picked ${account.account_number}.`,
+          status: "success",
+          message: summaryMsg,
+          result: { ...lastStatementResult, rail: "bg", fileKind: "statement", accountLabel },
         };
       }
-      let result: BGStatementIngestResult;
-      try {
-        result = await ingestBGStatementFile({
-          supabase,
-          accountId: account.id,
-          fileBytes,
-          originalFilename: file.name,
-          uploadedBy: session.userId,
-          parseResult,
-        });
-      } catch (err) {
+      if (lastAchDetailResult) {
         return {
-          status: "error",
-          message: `Ingest failed: ${err instanceof Error ? err.message : String(err)}`,
+          status: "success",
+          message: summaryMsg,
+          result: { ...lastAchDetailResult, rail: "bg", fileKind: "ach_detail", accountLabel },
         };
       }
-      revalidatePath("/recon/upload");
-      revalidatePath(`/recon/accounts/${account.id}`);
+
       return {
         status: "success",
-        message: result.fileWasDuplicate
-          ? "Same statement was already ingested — no new rows."
-          : `Ingested ${result.rowsNew} new statement row${result.rowsNew === 1 ? "" : "s"}.`,
-        result: { ...result, rail: "bg", fileKind: "statement", accountLabel },
+        message: summaryMsg,
       };
     }
+
     return {
       status: "error",
       message:
-        "Unrecognized BG file. Expected a Movimientos statement or a Detalle ACH detail file.",
+        "Unrecognized BG file(s). Expected Movimientos statements, Detalle ACH files, or Yappy reports.",
     };
   }
 

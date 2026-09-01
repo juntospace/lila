@@ -19,6 +19,10 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 import { BackfillButton } from "./backfill-button";
 import { BGAchBatchRow } from "./bg-ach-batch-row";
+import { BgBatchList } from "./bg-batch-list";
+import { BgPendingTasksPanel } from "./bg-pending-tasks-panel";
+import { BgUnassignedQueue } from "./bg-unassigned-queue";
+import { BgYappyPanel } from "./bg-yappy-panel";
 import { BulkActionBar } from "./bulk-action-bar";
 import { BulkConfirmBatchButton } from "./bulk-confirm-batch-button";
 import { BulkSelectionProvider } from "./bulk-selection-context";
@@ -564,6 +568,100 @@ export default async function AccountDetailPage({
     achBatches.push(...byBatch.values());
   }
 
+  const bgBatches: any[] = [];
+  const bgYappyBatches: any[] = [];
+  const bgPendingTasks: any[] = [];
+  const bgAlerts: any[] = [];
+  const bgCoverageDays: string[] = [];
+  const bgQuarantinedDays: string[] = [];
+  const bgProvisionalDays: string[] = [];
+
+  if (account.rail === "bg") {
+    const { data: bData } = await (supabase as any)
+      .from("recon_bg_batches")
+      .select("*")
+      .eq("account_id", accountId)
+      .eq("is_active", true)
+      .order("batch_date_str", { ascending: false });
+    if (bData) {
+      bgBatches.push(
+        ...bData.map((b: any) => ({
+          uid: b.batch_uid,
+          batchDateStr: b.batch_date_str,
+          batchName: b.batch_filename,
+          channel: b.channel,
+          fortnight: b.fortnight,
+          isDelinquent: b.is_delinquent,
+          retryCount: b.retry_count,
+          variant: b.variant,
+          effectiveDate: b.effective_date,
+          creditDate: b.credit_date,
+          totalTransactions: b.total_transactions,
+          succeededTransactions: b.succeeded_transactions,
+          declaredRejectedTransactions: b.declared_rejected_transactions,
+          rejectedRowsCount: b.rejected_rows_count,
+          succeededRowsCount: b.succeeded_rows_count,
+          totalAmountMinor: b.total_amount_minor != null ? BigInt(String(b.total_amount_minor)) : null,
+          rejectedAmountMinor: b.rejected_amount_minor != null ? BigInt(String(b.rejected_amount_minor)) : null,
+          succeededAmountMinor: b.succeeded_amount_minor != null ? BigInt(String(b.succeeded_amount_minor)) : null,
+          status: b.status,
+          pendingReason: b.pending_reason,
+          creditMovUid: b.credit_mov_uid,
+          reversalsMovUids: b.reversals_mov_uids || [],
+        }))
+      );
+    }
+
+    const { data: yData } = await (supabase as any)
+      .from("recon_bg_yappy_batches")
+      .select("*")
+      .eq("account_id", accountId)
+      .eq("is_active", true)
+      .order("credit_date", { ascending: false });
+    if (yData) {
+      bgYappyBatches.push(
+        ...yData.map((yb: any) => ({
+          uid: yb.batch_uid,
+          creditDate: yb.credit_date,
+          transactionDate: yb.transaction_date,
+          declaredCount: yb.declared_count,
+          reportCount: yb.report_count,
+          creditAmountMinor: BigInt(String(yb.credit_amount_minor)),
+          reportAmountMinor: yb.report_amount_minor != null ? BigInt(String(yb.report_amount_minor)) : null,
+          feeAmountMinor: yb.fee_amount_minor != null ? BigInt(String(yb.fee_amount_minor)) : null,
+          feeRate: yb.fee_rate,
+          status: yb.status,
+          pendingReason: yb.pending_reason,
+        }))
+      );
+    }
+
+    const { data: ptData } = await (supabase as any)
+      .from("recon_bg_pending_tasks")
+      .select("*")
+      .eq("account_id", accountId)
+      .eq("is_resolved", false);
+    if (ptData) bgPendingTasks.push(...ptData);
+
+    const { data: alData } = await (supabase as any)
+      .from("recon_bg_audit_alerts")
+      .select("*")
+      .eq("account_id", accountId);
+    if (alData) bgAlerts.push(...alData);
+
+    const { data: covData } = await (supabase as any)
+      .from("recon_bg_coverage")
+      .select("*")
+      .eq("account_id", accountId);
+    if (covData) {
+      for (const cov of covData as any[]) {
+        if (cov.is_quarantined) bgQuarantinedDays.push(cov.coverage_date);
+        else if (cov.is_provisional) bgProvisionalDays.push(cov.coverage_date);
+        else bgCoverageDays.push(cov.coverage_date);
+      }
+    }
+  }
+
   // Surface a one-time hint if any rejected DAs in the system still have a
   // null return_code — the operator can backfill them via the button.
   const { count: nullDaCount } = await supabase
@@ -1044,9 +1142,25 @@ export default async function AccountDetailPage({
         );
       })()}
 
-      {/* BG-rail only: ACH Debit batches view. Each row is one batch
-          (per .txt file uploaded). Summary stats + expandable per-debtor
-          breakdown. Statement-lump pairing arrives in a later chunk. */}
+      {/* BG-rail CCBG v2 Reconciliation Panels */}
+      {account.rail === "bg" && (
+        <div className="mt-6 space-y-6">
+          {(bgPendingTasks.length > 0 || bgAlerts.length > 0 || bgQuarantinedDays.length > 0) && (
+            <BgPendingTasksPanel
+              pendingTasks={bgPendingTasks}
+              alerts={bgAlerts}
+              quarantinedDays={bgQuarantinedDays}
+              provisionalDays={bgProvisionalDays}
+            />
+          )}
+
+          {bgBatches.length > 0 && <BgBatchList batches={bgBatches} />}
+
+          {bgYappyBatches.length > 0 && <BgYappyPanel batches={bgYappyBatches} />}
+        </div>
+      )}
+
+      {/* BG-rail only: ACH Debit batches breakdown view */}
       {account.rail === "bg" && achBatches.length > 0 && (
         <Card className="mt-6 border-info/40">
           <CardHeader>
