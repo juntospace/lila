@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseServerClient, createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
   DEFAULT_NOTIFICATION_PREFS,
   type NotificationPrefs,
@@ -40,21 +40,34 @@ export async function requireOperator(): Promise<OperatorSession> {
     redirect("/login");
   }
 
-  const { data: profile } = await supabase
+  const adminDb = createSupabaseServiceClient();
+
+  let { data: profile } = await adminDb
     .from("user_profiles")
     .select("*")
     .eq("id", user.id)
     .maybeSingle();
 
   if (!profile) {
-    // Try to provision from the allowlist. RLS only permits this when the
-    // signed-in email is present in operator_allowlist.
-    const { data: created, error } = await supabase
+    // Check if the user is present in operator_allowlist
+    const { data: allowEntry } = await adminDb
+      .from("operator_allowlist")
+      .select("role")
+      .ilike("email", user.email)
+      .maybeSingle();
+
+    if (!allowEntry) {
+      await supabase.auth.signOut();
+      redirect("/login?error=not_allowlisted");
+    }
+
+    const { data: created, error } = await adminDb
       .from("user_profiles")
       .insert({
         id: user.id,
         email: user.email,
         full_name: (user.user_metadata?.full_name as string | undefined) ?? null,
+        role: allowEntry.role,
         notification_prefs: DEFAULT_NOTIFICATION_PREFS,
       })
       .select("*")
@@ -65,11 +78,7 @@ export async function requireOperator(): Promise<OperatorSession> {
       redirect("/login?error=not_allowlisted");
     }
 
-    return {
-      userId: user.id,
-      email: user.email,
-      profile: { ...created, notification_prefs: narrowPrefs(created.notification_prefs) },
-    };
+    profile = created;
   }
 
   if (profile.status === "disabled") {

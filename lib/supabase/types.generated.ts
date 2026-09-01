@@ -7,6 +7,11 @@ export type Json =
   | Json[]
 
 export type Database = {
+  // Allows to automatically instantiate createClient with right options
+  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
+  __InternalSupabase: {
+    PostgrestVersion: "14.5"
+  }
   public: {
     Tables: {
       bank_accounts: {
@@ -176,6 +181,393 @@ export type Database = {
           },
         ]
       }
+      recon_bg_audit_alerts: {
+        Row: {
+          account_id: string
+          created_at: string
+          id: string
+          message: string
+          severity: string
+        }
+        Insert: {
+          account_id: string
+          created_at?: string
+          id?: string
+          message: string
+          severity?: string
+        }
+        Update: {
+          account_id?: string
+          created_at?: string
+          id?: string
+          message?: string
+          severity?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "recon_bg_audit_alerts_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "bank_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      recon_bg_batches: {
+        Row: {
+          account_id: string
+          batch_date_str: string
+          batch_filename: string | null
+          batch_uid: string
+          channel: string | null
+          created_at: string
+          credit_date: string | null
+          credit_mov_uid: string | null
+          declared_rejected_transactions: number | null
+          effective_date: string | null
+          fortnight: number | null
+          id: string
+          is_active: boolean
+          is_delinquent: boolean
+          itemized_succeeded_amount_minor: number | null
+          pending_reason: string | null
+          rejected_amount_minor: number | null
+          rejected_rows_count: number | null
+          retry_count: number
+          reversals_mov_uids: string[]
+          status: Database["public"]["Enums"]["recon_bg_batch_status_enum"]
+          succeeded_amount_minor: number | null
+          succeeded_rows_count: number | null
+          succeeded_transactions: number | null
+          total_amount_minor: number | null
+          total_transactions: number | null
+          updated_at: string
+          upload_id: string | null
+          variant: string | null
+        }
+        Insert: {
+          account_id: string
+          batch_date_str: string
+          batch_filename?: string | null
+          batch_uid: string
+          channel?: string | null
+          created_at?: string
+          credit_date?: string | null
+          credit_mov_uid?: string | null
+          declared_rejected_transactions?: number | null
+          effective_date?: string | null
+          fortnight?: number | null
+          id?: string
+          is_active?: boolean
+          is_delinquent?: boolean
+          itemized_succeeded_amount_minor?: number | null
+          pending_reason?: string | null
+          rejected_amount_minor?: number | null
+          rejected_rows_count?: number | null
+          retry_count?: number
+          reversals_mov_uids?: string[]
+          status?: Database["public"]["Enums"]["recon_bg_batch_status_enum"]
+          succeeded_amount_minor?: number | null
+          succeeded_rows_count?: number | null
+          succeeded_transactions?: number | null
+          total_amount_minor?: number | null
+          total_transactions?: number | null
+          updated_at?: string
+          upload_id?: string | null
+          variant?: string | null
+        }
+        Update: {
+          account_id?: string
+          batch_date_str?: string
+          batch_filename?: string | null
+          batch_uid?: string
+          channel?: string | null
+          created_at?: string
+          credit_date?: string | null
+          credit_mov_uid?: string | null
+          declared_rejected_transactions?: number | null
+          effective_date?: string | null
+          fortnight?: number | null
+          id?: string
+          is_active?: boolean
+          is_delinquent?: boolean
+          itemized_succeeded_amount_minor?: number | null
+          pending_reason?: string | null
+          rejected_amount_minor?: number | null
+          rejected_rows_count?: number | null
+          retry_count?: number
+          reversals_mov_uids?: string[]
+          status?: Database["public"]["Enums"]["recon_bg_batch_status_enum"]
+          succeeded_amount_minor?: number | null
+          succeeded_rows_count?: number | null
+          succeeded_transactions?: number | null
+          total_amount_minor?: number | null
+          total_transactions?: number | null
+          updated_at?: string
+          upload_id?: string | null
+          variant?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "recon_bg_batches_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "bank_accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "recon_bg_batches_upload_id_fkey"
+            columns: ["upload_id"]
+            isOneToOne: false
+            referencedRelation: "recon_uploads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      recon_bg_coverage: {
+        Row: {
+          account_id: string
+          coverage_date: string
+          created_at: string
+          id: string
+          is_provisional: boolean
+          is_quarantined: boolean
+          source_filenames: string[]
+          updated_at: string
+        }
+        Insert: {
+          account_id: string
+          coverage_date: string
+          created_at?: string
+          id?: string
+          is_provisional?: boolean
+          is_quarantined?: boolean
+          source_filenames?: string[]
+          updated_at?: string
+        }
+        Update: {
+          account_id?: string
+          coverage_date?: string
+          created_at?: string
+          id?: string
+          is_provisional?: boolean
+          is_quarantined?: boolean
+          source_filenames?: string[]
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "recon_bg_coverage_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "bank_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      recon_bg_pending_tasks: {
+        Row: {
+          account_id: string
+          affects_uid: string | null
+          amount_minor: number | null
+          created_at: string
+          details: string | null
+          id: string
+          is_resolved: boolean
+          missing_item: string
+          task_type: Database["public"]["Enums"]["recon_bg_task_type_enum"]
+          updated_at: string
+        }
+        Insert: {
+          account_id: string
+          affects_uid?: string | null
+          amount_minor?: number | null
+          created_at?: string
+          details?: string | null
+          id?: string
+          is_resolved?: boolean
+          missing_item: string
+          task_type: Database["public"]["Enums"]["recon_bg_task_type_enum"]
+          updated_at?: string
+        }
+        Update: {
+          account_id?: string
+          affects_uid?: string | null
+          amount_minor?: number | null
+          created_at?: string
+          details?: string | null
+          id?: string
+          is_resolved?: boolean
+          missing_item?: string
+          task_type?: Database["public"]["Enums"]["recon_bg_task_type_enum"]
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "recon_bg_pending_tasks_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "bank_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      recon_bg_yappy_batches: {
+        Row: {
+          account_id: string
+          batch_uid: string
+          created_at: string
+          credit_amount_minor: number
+          credit_date: string
+          credit_mov_uid: string | null
+          declared_count: number | null
+          fee_amount_minor: number | null
+          fee_rate: number | null
+          id: string
+          is_active: boolean
+          pending_reason: string | null
+          report_amount_minor: number | null
+          report_count: number | null
+          status: Database["public"]["Enums"]["recon_bg_batch_status_enum"]
+          transaction_date: string | null
+          updated_at: string
+          upload_id: string | null
+        }
+        Insert: {
+          account_id: string
+          batch_uid: string
+          created_at?: string
+          credit_amount_minor: number
+          credit_date: string
+          credit_mov_uid?: string | null
+          declared_count?: number | null
+          fee_amount_minor?: number | null
+          fee_rate?: number | null
+          id?: string
+          is_active?: boolean
+          pending_reason?: string | null
+          report_amount_minor?: number | null
+          report_count?: number | null
+          status?: Database["public"]["Enums"]["recon_bg_batch_status_enum"]
+          transaction_date?: string | null
+          updated_at?: string
+          upload_id?: string | null
+        }
+        Update: {
+          account_id?: string
+          batch_uid?: string
+          created_at?: string
+          credit_amount_minor?: number
+          credit_date?: string
+          credit_mov_uid?: string | null
+          declared_count?: number | null
+          fee_amount_minor?: number | null
+          fee_rate?: number | null
+          id?: string
+          is_active?: boolean
+          pending_reason?: string | null
+          report_amount_minor?: number | null
+          report_count?: number | null
+          status?: Database["public"]["Enums"]["recon_bg_batch_status_enum"]
+          transaction_date?: string | null
+          updated_at?: string
+          upload_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "recon_bg_yappy_batches_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "bank_accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "recon_bg_yappy_batches_upload_id_fkey"
+            columns: ["upload_id"]
+            isOneToOne: false
+            referencedRelation: "recon_uploads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      recon_bg_yappy_lines: {
+        Row: {
+          account_id: string
+          amount_minor: number
+          bank_status: string
+          client_name: string | null
+          comment: string | null
+          created_at: string
+          id: string
+          is_active: boolean
+          line_uid: string
+          phone_number: string | null
+          posted_date: string
+          posted_time: string | null
+          reference: string
+          settlement_batch_uid: string | null
+          settlement_date: string | null
+          status: Database["public"]["Enums"]["recon_bg_yappy_status_enum"]
+          updated_at: string
+          upload_id: string | null
+        }
+        Insert: {
+          account_id: string
+          amount_minor: number
+          bank_status: string
+          client_name?: string | null
+          comment?: string | null
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          line_uid: string
+          phone_number?: string | null
+          posted_date: string
+          posted_time?: string | null
+          reference: string
+          settlement_batch_uid?: string | null
+          settlement_date?: string | null
+          status?: Database["public"]["Enums"]["recon_bg_yappy_status_enum"]
+          updated_at?: string
+          upload_id?: string | null
+        }
+        Update: {
+          account_id?: string
+          amount_minor?: number
+          bank_status?: string
+          client_name?: string | null
+          comment?: string | null
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          line_uid?: string
+          phone_number?: string | null
+          posted_date?: string
+          posted_time?: string | null
+          reference?: string
+          settlement_batch_uid?: string | null
+          settlement_date?: string | null
+          status?: Database["public"]["Enums"]["recon_bg_yappy_status_enum"]
+          updated_at?: string
+          upload_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "recon_bg_yappy_lines_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "bank_accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "recon_bg_yappy_lines_upload_id_fkey"
+            columns: ["upload_id"]
+            isOneToOne: false
+            referencedRelation: "recon_uploads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       recon_links: {
         Row: {
           da_txn_id: string
@@ -282,6 +674,50 @@ export type Database = {
             columns: ["txn_id"]
             isOneToOne: false
             referencedRelation: "recon_transactions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      recon_manual_assignments: {
+        Row: {
+          account_id: string
+          assigned_at: string
+          assigned_by: string | null
+          category: Database["public"]["Enums"]["recon_assignment_category_enum"]
+          created_at: string
+          id: string
+          notes: string | null
+          target_uid: string
+          updated_at: string
+        }
+        Insert: {
+          account_id: string
+          assigned_at?: string
+          assigned_by?: string | null
+          category?: Database["public"]["Enums"]["recon_assignment_category_enum"]
+          created_at?: string
+          id?: string
+          notes?: string | null
+          target_uid: string
+          updated_at?: string
+        }
+        Update: {
+          account_id?: string
+          assigned_at?: string
+          assigned_by?: string | null
+          category?: Database["public"]["Enums"]["recon_assignment_category_enum"]
+          created_at?: string
+          id?: string
+          notes?: string | null
+          target_uid?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "recon_manual_assignments_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "bank_accounts"
             referencedColumns: ["id"]
           },
         ]
@@ -497,6 +933,23 @@ export type Database = {
       operator_language: "en" | "es"
       operator_role: "agent" | "loan_officer" | "risk_analyst" | "admin"
       operator_status: "active" | "disabled"
+      recon_assignment_category_enum: "loan" | "non_loan" | "other"
+      recon_bg_batch_status_enum:
+        | "settled"
+        | "settled_no_reversals"
+        | "pending"
+        | "anomaly"
+      recon_bg_item_status_enum: "rejected" | "confirmed" | "pending"
+      recon_bg_task_type_enum:
+        | "missing_statement"
+        | "missing_ach_detail"
+        | "missing_yappy_report"
+      recon_bg_yappy_status_enum:
+        | "received"
+        | "in_transit"
+        | "pending"
+        | "anomaly"
+        | "other"
       recon_links_strategy_enum:
         | "auto_fifo_name_amount"
         | "manual"
@@ -520,6 +973,7 @@ export type Database = {
         | "statement_excel"
         | "statement_bg_excel"
         | "ach_detail_bg_excel"
+        | "yappy_bg_excel"
       recon_uploads_status_enum: "parsed" | "committed" | "failed"
     }
     CompositeTypes: {
@@ -653,6 +1107,26 @@ export const Constants = {
       operator_language: ["en", "es"],
       operator_role: ["agent", "loan_officer", "risk_analyst", "admin"],
       operator_status: ["active", "disabled"],
+      recon_assignment_category_enum: ["loan", "non_loan", "other"],
+      recon_bg_batch_status_enum: [
+        "settled",
+        "settled_no_reversals",
+        "pending",
+        "anomaly",
+      ],
+      recon_bg_item_status_enum: ["rejected", "confirmed", "pending"],
+      recon_bg_task_type_enum: [
+        "missing_statement",
+        "missing_ach_detail",
+        "missing_yappy_report",
+      ],
+      recon_bg_yappy_status_enum: [
+        "received",
+        "in_transit",
+        "pending",
+        "anomaly",
+        "other",
+      ],
       recon_links_strategy_enum: [
         "auto_fifo_name_amount",
         "manual",
@@ -680,9 +1154,9 @@ export const Constants = {
         "statement_excel",
         "statement_bg_excel",
         "ach_detail_bg_excel",
+        "yappy_bg_excel",
       ],
       recon_uploads_status_enum: ["parsed", "committed", "failed"],
     },
   },
 } as const
-

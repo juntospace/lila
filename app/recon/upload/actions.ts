@@ -285,6 +285,52 @@ export async function uploadStatement(
     }
 
     if (statements.length > 0 || achDetails.length > 0 || yappyReports.length > 0) {
+      try {
+        const edgeFormData = new FormData();
+        for (const f of files) {
+          const b = new Uint8Array(await f.arrayBuffer());
+          const edgeFile = new File([b], f.name, {
+            type: f.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          });
+          edgeFormData.append("file", edgeFile);
+        }
+        edgeFormData.append("account_id", account.id);
+
+        const { publicEnv, serverEnv } = await import("@/lib/env");
+        const serviceKey = serverEnv().SUPABASE_SERVICE_ROLE_KEY;
+        const fnUrl = `${publicEnv.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/bg-recon?account_id=${account.id}`;
+
+        const edgeResponse = await fetch(fnUrl, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${serviceKey}`,
+            apikey: publicEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+            "x-user-id": session.userId,
+          },
+          body: edgeFormData,
+        });
+
+        if (edgeResponse.ok) {
+          const edgeData = await edgeResponse.json();
+          revalidatePath("/recon/upload");
+          revalidatePath(`/recon/accounts/${account.id}`);
+
+          const summaryMsg = `Ingested ${files.length} BG file${files.length === 1 ? "" : "s"} via Edge Function: ${edgeData.controls?.settledBatchesCount || 0} of ${edgeData.controls?.totalBatchesCount || 0} ACH batches settled, ${edgeData.controls?.settledYappyBatchesCount || 0} Yappy deposits reconciled.`;
+
+          return {
+            status: "success",
+            message: summaryMsg,
+            result: lastStatementResult
+              ? { ...lastStatementResult, rail: "bg", fileKind: "statement", accountLabel }
+              : lastAchDetailResult
+                ? { ...lastAchDetailResult, rail: "bg", fileKind: "ach_detail", accountLabel }
+                : undefined,
+          };
+        }
+      } catch (edgeErr) {
+        console.warn("bg-recon Edge Function invoke failed, running local sync fallback:", edgeErr);
+      }
+
       const manualAssignments = await fetchManualAssignments(supabase, account.id);
       const snapshot = reconcileBancoGeneral(statements, achDetails, yappyReports, {
         expectedAccount: account.account_number,

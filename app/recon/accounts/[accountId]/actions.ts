@@ -955,3 +955,33 @@ export async function bulkConfirmPRs(args: {
     skippedCount,
   };
 }
+
+export async function saveBgManualAssignment(args: {
+  accountId: string;
+  targetUid: string;
+  category: "loan" | "non_loan" | "other";
+  notes?: string;
+}): Promise<{ status: "ok" | "error"; message?: string }> {
+  const session = await requireReconWriter();
+  const supabase = await createSupabaseServerClient();
+
+  const { error } = await supabase
+    .from("recon_manual_assignments")
+    .upsert(
+      {
+        account_id: args.accountId,
+        target_uid: args.targetUid,
+        category: args.category,
+        notes: args.notes || null,
+        assigned_by: session.userId,
+      },
+      { onConflict: "account_id,target_uid" },
+    );
+
+  if (error) {
+    return { status: "error", message: error.message };
+  }
+
+  revalidatePath(`/recon/accounts/${args.accountId}`);
+  return { status: "ok" };
+}
