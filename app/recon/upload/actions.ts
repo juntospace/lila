@@ -5,7 +5,7 @@ import * as XLSX from "xlsx";
 import { z } from "zod";
 
 import { requireReconWriter } from "@/lib/auth/guard";
-import { type IngestResult } from "@/lib/recon/bac";
+import { ingestBACFile, parseBACSheet, type IngestResult } from "@/lib/recon/bac";
 import { recomputeAccount } from "@/lib/recon/bac/recompute";
 import {
   detectAndParseBgFile,
@@ -426,30 +426,46 @@ export async function uploadStatement(
         }
       }
     }
-  } catch (err: unknown) {
-    let errorMessage = "An unknown error occurred.";
-    if (err instanceof Error) {
-      errorMessage = err.message;
-    } else if (err && typeof err === "object") {
-      if ("message" in err && typeof err.message === "string") {
-        errorMessage = err.message;
-      } else if ("error_description" in err && typeof err.error_description === "string") {
-        errorMessage = err.error_description;
-      } else {
-        try {
-          errorMessage = JSON.stringify(err);
-        } catch {
-          errorMessage = String(err);
-        }
+  } catch (edgeErr) {
+    console.warn("bac-recon Edge Function failed or limited, running local ingest fallback:", edgeErr);
+    aggregatedResult = null;
+    for (const f of files) {
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      let workbook: XLSX.WorkBook;
+      try {
+        workbook = XLSX.read(bytes, { type: "array", cellDates: true });
+      } catch {
+        continue;
       }
-    } else if (typeof err === "string") {
-      errorMessage = err;
-    }
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      if (!sheet) continue;
+      const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false }) as unknown[][];
+      const parsed = parseBACSheet(matrix);
 
-    return {
-      status: "error",
-      message: `Ingest failed: ${errorMessage}`,
-    };
+      const res = await ingestBACFile({
+        supabase,
+        accountId: account.id,
+        fileBytes: bytes,
+        originalFilename: f.name,
+        uploadedBy: session.userId,
+        parseResult: parsed,
+        skipRecompute: true,
+      });
+
+      if (!aggregatedResult) {
+        aggregatedResult = { ...res };
+      } else {
+        aggregatedResult.rowsTotal += res.rowsTotal;
+        aggregatedResult.rowsNew += res.rowsNew;
+        aggregatedResult.rowsDuplicate += res.rowsDuplicate;
+        if (res.fileWasDuplicate) aggregatedResult.fileWasDuplicate = true;
+        aggregatedResult.warnings.push(...res.warnings);
+        aggregatedResult.reversalsPaired += res.reversalsPaired;
+        aggregatedResult.reversalsUnpaired = res.reversalsUnpaired;
+        aggregatedResult.prBatchesPending = res.prBatchesPending;
+      }
+    }
   }
 
   const result: IngestResult = aggregatedResult || {
