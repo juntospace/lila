@@ -372,6 +372,18 @@ export async function uploadStatement(
     };
   }
 
+  // If BAC account is selected, verify files do not belong to Banco General
+  for (const f of files) {
+    const bytes = new Uint8Array(await f.arrayBuffer());
+    const bgDetected = detectAndParseBgFile(bytes, f.name);
+    if (bgDetected) {
+      return {
+        status: "error",
+        message: `El archivo "${f.name}" es un reporte de Banco General, pero tienes seleccionada la cuenta de BAC "${account.holder_name}". Por favor selecciona la cuenta de Banco General (CREDICLARO, S.A.) en el menú desplegable.`,
+      };
+    }
+  }
+
   interface BacEdgeResponse {
     ingestResult?: IngestResult;
     items?: unknown[];
