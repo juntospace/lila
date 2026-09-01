@@ -2,7 +2,7 @@
 
 import * as XLSX from "xlsx";
 
-import type { BgParsedYappyReport, BgYappyReportRow } from "../types";
+import type { BgParsedYappyReport } from "../types";
 import {
   extractDownloadTimestamp,
   parseAmountFloat,

@@ -87,7 +87,7 @@ export function detectAndParseBgFile(
       raw: true,
       cellDates: false,
     });
-  } catch (err) {
+  } catch {
     return null;
   }
 

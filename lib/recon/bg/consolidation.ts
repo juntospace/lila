@@ -12,7 +12,7 @@ export const BG_DEFAULT_ACCOUNT_NUMBER = "03-43-01-106691-6";
 
 function dateRange(startStr: string, endStr: string): string[] {
   const dates: string[] = [];
-  let cur = new Date(`${startStr}T00:00:00Z`);
+  const cur = new Date(`${startStr}T00:00:00Z`);
   const end = new Date(`${endStr}T00:00:00Z`);
 
   while (cur <= end) {

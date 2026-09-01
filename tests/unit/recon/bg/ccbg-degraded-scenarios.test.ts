@@ -3,9 +3,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  parseBgAchDetail,
-  parseBgStatement,
-  parseBgYappyReport,
   reconcileBancoGeneral,
   type BgAssignmentCategory,
   type BgParsedAchDetail,

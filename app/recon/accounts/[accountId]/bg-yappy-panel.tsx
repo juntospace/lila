@@ -4,8 +4,7 @@ import { CheckCircle2, Clock, Smartphone, AlertTriangle } from "lucide-react";
 
 import { Card, CardBody, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
 import { formatMinorUSD } from "@/lib/recon/format";
-import type { BgYappyStatus } from "@/lib/recon/bg";
-import { toSpanishBatchStatus, toSpanishYappyStatus } from "@/lib/recon/bg/formatters";
+import { toSpanishBatchStatus } from "@/lib/recon/bg/formatters";
 
 export interface BgYappyBatchView {
   uid: string;

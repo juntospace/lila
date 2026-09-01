@@ -4,7 +4,7 @@ import { AlertTriangle, Clock, FileWarning, CheckCircle } from "lucide-react";
 
 import { Card, CardBody, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
 import { formatMinorUSD } from "@/lib/recon/format";
-import type { BgPendingTask, BgPendingTaskType } from "@/lib/recon/bg";
+import type { BgPendingTaskType } from "@/lib/recon/bg";
 import { toSpanishTaskType } from "@/lib/recon/bg/formatters";
 
 interface Props {
@@ -35,7 +35,7 @@ export function BgPendingTasksPanel({
   return (
     <div className="space-y-6">
       {/* Critical Alerts & Quarantine */}
-      {(errorAlerts.length > 0 || quarantinedDays.length > 0) && (
+      {(errorAlerts.length > 0 || quarantinedDays.length > 0 || provisionalDays.length > 0) && (
         <Card className="border-red-500/40 bg-red-500/5">
           <CardHeader>
             <div className="flex items-center gap-2 text-red-600 dark:text-red-400">
@@ -51,6 +51,12 @@ export function BgPendingTasksPanel({
               <div className="rounded-md bg-red-500/10 p-3 text-sm text-red-700 dark:text-red-300">
                 <strong>Días en cuarentena (no conciliados por conflicto de versión):</strong>{" "}
                 {quarantinedDays.join(", ")}
+              </div>
+            )}
+            {provisionalDays.length > 0 && (
+              <div className="rounded-md bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-300">
+                <strong>Días provisionales (requieren re-descarga tras cierre):</strong>{" "}
+                {provisionalDays.join(", ")}
               </div>
             )}
             {errorAlerts.map((alert, idx) => (

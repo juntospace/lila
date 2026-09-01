@@ -96,7 +96,7 @@ export function parseBgAchDetailPdfText(
       let errorDescription = "";
 
       if (!isApproved) {
-        let rest = statusRaw.replace(/^RECHAZADA\s*-?\s*/i, "").trim();
+        const rest = statusRaw.replace(/^RECHAZADA\s*-?\s*/i, "").trim();
         const mCode = RE_ERROR_CODE.exec(rest);
         errorCode = mCode ? mCode[1].toUpperCase() : "R??";
         errorDescription = rest;

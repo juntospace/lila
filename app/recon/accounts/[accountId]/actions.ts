@@ -8,7 +8,7 @@ import {
   normalizeName,
   parseDvtoDescription,
 } from "@/lib/recon/bac";
-import { recomputeAccount, type RecomputeStats } from "@/lib/recon/bac/recompute";
+import { type RecomputeStats } from "@/lib/recon/bac/recompute";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 export type BackfillResult = {

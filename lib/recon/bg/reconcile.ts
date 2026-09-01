@@ -4,7 +4,6 @@
 import type {
   BgAssignmentCategory,
   BgCanonicalMovement,
-  BgConsolidatedExtracts,
   BgIncomingStatus,
   BgItemStatus,
   BgOtherAccountResponse,
@@ -65,7 +64,7 @@ function addWorkingDays(dateStr: string, daysCount: number): string {
 
 function dateRange(startStr: string, endStr: string): string[] {
   const dates: string[] = [];
-  let cur = new Date(`${startStr}T00:00:00Z`);
+  const cur = new Date(`${startStr}T00:00:00Z`);
   const end = new Date(`${endStr}T00:00:00Z`);
   while (cur <= end) {
     dates.push(cur.toISOString().slice(0, 10));

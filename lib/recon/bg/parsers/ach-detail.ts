@@ -3,13 +3,12 @@
 
 import * as XLSX from "xlsx";
 
-import type { BgAchDetailRow, BgParsedAchDetail } from "../types";
+import type { BgParsedAchDetail } from "../types";
 import {
   extractDownloadTimestamp,
   parseAmountFloat,
   parseAmountMinor,
   parseIsoDate,
-  round2,
 } from "./utils";
 
 const RE_BATCH_FILENAME = /Nombre\s+de\s+archivo\s*:\s*(.+)$/i;

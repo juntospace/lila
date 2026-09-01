@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/Button";
 import { Card, CardBody, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
 import { formatMinorUSD } from "@/lib/recon/format";
 import type { BgAssignmentCategory } from "@/lib/recon/bg";
-import { toSpanishCategory, toSpanishSuggestion } from "@/lib/recon/bg/formatters";
+import { toSpanishSuggestion } from "@/lib/recon/bg/formatters";
 
 import { saveBgManualAssignment } from "./actions";
 
@@ -36,7 +36,7 @@ interface Props {
 export function BgUnassignedQueue({ accountId, items }: Props) {
   const [pendingItems, setPendingItems] = useState(items);
   const [selectedCategories, setSelectedCategories] = useState<Record<string, BgAssignmentCategory>>({});
-  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [notes] = useState<Record<string, string>>({});
   const [isPending, startTransition] = useTransition();
 
   const handleCategoryChange = (uid: string, cat: BgAssignmentCategory) => {

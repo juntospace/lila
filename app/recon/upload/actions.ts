@@ -8,7 +8,6 @@ import { requireReconWriter } from "@/lib/auth/guard";
 import { type IngestResult } from "@/lib/recon/bac";
 import { recomputeAccount } from "@/lib/recon/bac/recompute";
 import {
-  BGParseError,
   detectAndParseBgFile,
   fetchManualAssignments,
   ingestBGAchDetailFile,
@@ -175,8 +174,6 @@ export async function uploadStatement(
     }
   }
 
-  const file = files[0];
-
   const supabase = await createSupabaseServerClient();
 
   const { data: account, error: acctErr } = await supabase
@@ -189,7 +186,6 @@ export async function uploadStatement(
     return { status: "error", message: "Account not found or access denied." };
   }
 
-  const fileBytes = new Uint8Array(await file.arrayBuffer());
   const accountLabel = `${account.account_number} · ${account.holder_name}`;
 
   // ----- BG rail --------------------------------------------------------
