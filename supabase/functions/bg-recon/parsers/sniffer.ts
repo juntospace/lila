@@ -67,13 +67,23 @@ export function detectAndParseBgFile(
         .map(String)
         .join(" ");
 
-      if (blob.includes("CODIGO DE RUTA") || blob.includes("Archivo ACH")) {
+      if (
+        blob.includes("CODIGO DE RUTA") ||
+        blob.includes("Archivo ACH") ||
+        blob.includes("BGPACHRejectedDetailList")
+      ) {
         return parseBgAchDetail(fileBytesOrBuffer, filename);
       }
-      if (blob.includes("Punto de cobro") || blob.includes("Yappy")) {
+      if (blob.includes("Punto de cobro") || blob.includes("Yappy") || blob.includes("@financieracrediclaro")) {
         return parseBgYappyReport(fileBytesOrBuffer, filename);
       }
-      if (blob.includes("Movimientos desde") || blob.includes("Saldo")) {
+      if (
+        blob.includes("Movimientos desde") ||
+        blob.includes("Numero de Cuenta") ||
+        blob.includes("BGPExcelReport") ||
+        blob.includes("BGPCheckingMovementsExcel") ||
+        blob.includes("ReferencedReport")
+      ) {
         return parseBgStatement(fileBytesOrBuffer, filename);
       }
       return null;
@@ -84,7 +94,7 @@ export function detectAndParseBgFile(
       raw: true,
       cellDates: false,
     });
-  } catch (_err) {
+  } catch {
     return null;
   }
 
@@ -106,15 +116,23 @@ export function detectAndParseBgFile(
 
   const blob = preview.join(" ");
 
-  if (blob.includes("CODIGO DE RUTA") || blob.includes("Archivo ACH")) {
+  if (
+    blob.includes("CODIGO DE RUTA") ||
+    blob.includes("Archivo ACH") ||
+    sheetName.includes("BGPACHRejectedDetailList")
+  ) {
     return parseBgAchDetail(ws, filename);
   }
-  if (blob.includes("Punto de cobro") || sheetName.includes("Yappy")) {
+  if (
+    blob.includes("Punto de cobro") ||
+    blob.includes("@financieracrediclaro") ||
+    sheetName.includes("Yappy")
+  ) {
     return parseBgYappyReport(ws, filename);
   }
   if (
     blob.includes("Movimientos desde") ||
-    blob.includes("Saldo") ||
+    blob.includes("Numero de Cuenta") ||
     sheetName.includes("BGPExcelReport") ||
     sheetName.includes("BGPCheckingMovementsExcel") ||
     sheetName.includes("ReferencedReport")
