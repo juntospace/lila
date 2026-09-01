@@ -114,22 +114,22 @@ function classifyDebits(description: string): string {
     .replace(/[\u0300-\u036f]/g, "")
     .toUpperCase();
   if (d.includes("TRANSFERENCIA A")) {
-    return d.includes("DESEMB") ? "desembolso probable" : "transferencia enviada";
+    return d.includes("DESEMB") ? "probable_disbursement" : "outgoing_transfer";
   }
   if (d.startsWith("ACH - ")) {
-    return "pago ACH enviado";
+    return "outgoing_ach_payment";
   }
   if (
     ["COMISION", "CARGO", "IMPUESTO", "FECI", "ITBMS", "CSS", "ANIP", "MUNICIPIO"].some((k) =>
       d.includes(k),
     )
   ) {
-    return "gasto bancario / impuesto";
+    return "bank_fee_tax";
   }
   if (["ENSA", "IDAAN", "TIGO", "CABLE", "NATURGY"].some((k) => d.includes(k))) {
-    return "pago de servicios";
+    return "utility_payment";
   }
-  return "otro débito";
+  return "other_debit";
 }
 
 function getCounterpartKey(name: string): string {
@@ -214,7 +214,7 @@ export function reconcileBancoGeneral(
   const applicableDetails: BgParsedAchDetail[] = [];
   for (const dt of achDetails) {
     if (dt.isUnreadable) {
-      alerts.push(`[NO LEIDO] ${dt.filename}: no se pudo leer — no se concilia`);
+      alerts.push(`[UNREAD] ${dt.filename}: could not be read — not reconciled`);
       continue;
     }
     applicableDetails.push(dt);
@@ -227,7 +227,7 @@ export function reconcileBancoGeneral(
     if (dt.accountNumber && consolidated.accountNumber && dt.accountNumber !== consolidated.accountNumber) {
       otherAccountDetails.push(dt);
       alerts.push(
-        `[OTRA CUENTA] ${dt.filename}: respuesta de la cuenta ${dt.accountNumber} (${dt.holderName || "s/t"}) — no se concilia contra ${consolidated.accountNumber}; se lista aparte`,
+        `[DIFFERENT ACCOUNT] ${dt.filename}: response belongs to account ${dt.accountNumber} (${dt.holderName || "n/a"}) — not reconciled against ${consolidated.accountNumber}; listed separately`,
       );
     } else {
       sameAccountDetails.push(dt);
@@ -239,11 +239,11 @@ export function reconcileBancoGeneral(
       if (dt.effectiveDate) {
         dt.batchDateStr = dt.effectiveDate.replace(/-/g, "");
         alerts.push(
-          `[LOTE SIN FECHA] ${dt.filename}: el nombre del lote no trae fecha; se usa la fecha efectiva ${dt.effectiveDate}`,
+          `[UNDATED BATCH] ${dt.filename}: batch name has no date; using effective date ${dt.effectiveDate}`,
         );
       } else {
         alerts.push(
-          `[LOTE SIN FECHA] ${dt.filename}: sin fecha de lote ni fecha efectiva — no se puede conciliar; revisar el archivo`,
+          `[UNDATED BATCH] ${dt.filename}: no batch date nor effective date — cannot reconcile; inspect file`,
         );
       }
     }
@@ -277,14 +277,14 @@ export function reconcileBancoGeneral(
 
     if (isSame && existing.variant !== dt.variant) {
       alerts.push(
-        `[RESPUESTA REDUNDANTE] ${dt.filename} (${dt.variant}) repite el lote de ${existing.filename} (${existing.variant}): los rechazos cruzan al centavo; se usa la variante A`,
+        `[REDUNDANT RESPONSE] ${dt.filename} (${dt.variant}) repeats batch from ${existing.filename} (${existing.variant}): rejections match to the cent; using variant A`,
       );
     } else if (isSame) {
-      alerts.push(`[DUPLICADO] ${dt.filename} repite la respuesta ${existing.filename}: se ignora`);
+      alerts.push(`[DUPLICATE] ${dt.filename} repeats response from ${existing.filename}: ignored`);
     } else {
       existing.hasConflict = true;
       alerts.push(
-        `[CONFLICTO DE RESPUESTA] dos versiones distintas del lote ${existing.batchName || key}: ${existing.filename} vs ${dt.filename} — el lote queda en ANOMALIA`,
+        `[RESPONSE CONFLICT] two distinct versions of batch ${existing.batchName || key}: ${existing.filename} vs ${dt.filename} — batch set to ANOMALY`,
       );
     }
   }
@@ -314,10 +314,10 @@ export function reconcileBancoGeneral(
         .map((g) => `(${g.retryCount})`)
         .join(", ");
       const withSuccess = group.filter((g) => (g.succeededTransactions || g.succeededRowsCount || 0) > 0);
-      alerts.push(`[REINTENTO] el lote ${baseKey} se procesó ${group.length} veces ${retryList}`);
+      alerts.push(`[RETRY] batch ${baseKey} was processed ${group.length} times ${retryList}`);
       if (withSuccess.length > 1) {
         alerts.push(
-          `[POSIBLE DOBLE COBRO] el lote ${baseKey.split(" ")[0]} tuvo realizadas en ${withSuccess.length} reintentos: verificar débitos duplicados a clientes`,
+          `[POSSIBLE DOUBLE CHARGE] batch ${baseKey.split(" ")[0]} had successful items in ${withSuccess.length} retries: verify duplicate debits to clients`,
         );
       }
     }
@@ -447,40 +447,40 @@ export function reconcileBancoGeneral(
 
       if (dt.hasConflict) {
         batchObj.status = "anomaly";
-        batchObj.pendingReason = "conflicto entre dos versiones de la respuesta del lote";
+        batchObj.pendingReason = "conflict between two versions of the batch response";
       } else if (okCred && okRev) {
         batchObj.status = "settled";
         if (batchObj.succeededAmount != null && batchObj.succeededAmount < -TOLERANCE) {
           batchObj.status = "anomaly";
-          alerts.push(`[ANOMALIA] lote ${batchObj.uid}: reversas mayores que el crédito del lote`);
+          alerts.push(`[ANOMALY] batch ${batchObj.uid}: reversals exceed batch credit`);
         }
       } else if (!isCovered) {
         batchObj.status = "pending";
-        batchObj.pendingReason = `faltan movimientos de cuenta de: ${missingDays.join(", ")}`;
+        batchObj.pendingReason = `missing account movements for: ${missingDays.join(", ")}`;
         pendingTasks.push({
           taskType: "missing_statement",
           affectsUid: batchObj.uid,
-          missingItem: `Movimientos de Cuenta Corriente que cubran ${missingDays[0]}..${missingDays[missingDays.length - 1]}`,
-          details: `lote ${dt.batchName} (efectiva ${fe})`,
+          missingItem: `Checking Account Movements covering ${missingDays[0]}..${missingDays[missingDays.length - 1]}`,
+          details: `batch ${dt.batchName} (effective ${fe})`,
           amount: !okRev ? dt.rejectedSum : null,
         });
       } else if (!isCoveredWithoutProvisional) {
         batchObj.status = "pending";
-        batchObj.pendingReason = "la cobertura del extracto para la ventana del lote aún es provisional";
+        batchObj.pendingReason = "statement coverage for batch window is still provisional";
         pendingTasks.push({
           taskType: "missing_statement",
           affectsUid: batchObj.uid,
-          missingItem: "Re-descargar movimientos cerrado el día (cobertura provisional)",
-          details: `lote ${dt.batchName}`,
+          missingItem: "Re-download movements after day close (provisional coverage)",
+          details: `batch ${dt.batchName}`,
           amount: null,
         });
       } else {
         batchObj.status = "anomaly";
         const missingParts: string[] = [];
-        if (!okCred) missingParts.push("el crédito del total");
-        if (!okRev) missingParts.push(`la reversa por $${dt.rejectedSum.toLocaleString("en-US", { minimumFractionDigits: 2 })}`);
-        batchObj.pendingReason = `con extracto completo no aparece ${missingParts.join(" ni ")}`;
-        alerts.push(`[ANOMALIA] lote ${batchObj.uid} (${dt.batchName}): ${batchObj.pendingReason}`);
+        if (!okCred) missingParts.push("total credit");
+        if (!okRev) missingParts.push(`reversal for $${dt.rejectedSum.toLocaleString("en-US", { minimumFractionDigits: 2 })}`);
+        batchObj.pendingReason = `complete statement does not show ${missingParts.join(" nor ")}`;
+        alerts.push(`[ANOMALY] batch ${batchObj.uid} (${dt.batchName}): ${batchObj.pendingReason}`);
       }
 
       batches.push(batchObj);
@@ -504,7 +504,7 @@ export function reconcileBancoGeneral(
           itemStatus = "confirmed";
         } else {
           itemStatus = "pending";
-          reasonDescription = batchObj.pendingReason || "liquidación del lote sin verificar";
+          reasonDescription = batchObj.pendingReason || "unverified batch settlement";
         }
 
         items.push({
@@ -565,7 +565,7 @@ export function reconcileBancoGeneral(
         rejectedAmount: r.debit,
         succeededAmount: matchingCred ? round2(matchingCred.credit! - r.debit!) : null,
         status: "pending",
-        pendingReason: "falta el archivo Detalle Transacción ACH del lote",
+        pendingReason: "missing ACH Transaction Detail file for batch",
         creditMovUid: matchingCred ? matchingCred.uid : null,
         reversalsMovUids: [r.uid],
       };
@@ -573,8 +573,8 @@ export function reconcileBancoGeneral(
       pendingTasks.push({
         taskType: "missing_ach_detail",
         affectsUid: provUid,
-        missingItem: `Detalle Transacción ACH del lote ${fl}`,
-        details: `reversa por $${r.debit!.toLocaleString("en-US", { minimumFractionDigits: 2 })} el ${r.date}`,
+        missingItem: `ACH Transaction Detail for batch ${fl}`,
+        details: `reversal for $${r.debit!.toLocaleString("en-US", { minimumFractionDigits: 2 })} on ${r.date}`,
         amount: r.debit,
       });
 
@@ -624,18 +624,18 @@ export function reconcileBancoGeneral(
         pendingTasks.push({
           taskType: "missing_ach_detail",
           affectsUid: provUid,
-          missingItem: `Detalle Transacción ACH del lote ${fl} (para itemizar)`,
-          details: `crédito $${c.credit!.toLocaleString("en-US", { minimumFractionDigits: 2 })} sin reversas en ${WORKING_DAYS_WINDOW} días hábiles — se asume 0 rechazos`,
+          missingItem: `ACH Transaction Detail for batch ${fl} (to itemize)`,
+          details: `credit $${c.credit!.toLocaleString("en-US", { minimumFractionDigits: 2 })} without reversals in ${WORKING_DAYS_WINDOW} business days — 0 rejections assumed`,
           amount: null,
         });
       } else {
         provBatch.status = "pending";
-        provBatch.pendingReason = `esperando posibles reversas: cobertura de extracto incompleta hasta ${endOfWindow}`;
+        provBatch.pendingReason = `waiting for possible reversals: incomplete statement coverage through ${endOfWindow}`;
         pendingTasks.push({
           taskType: "missing_statement",
           affectsUid: provUid,
-          missingItem: `Movimientos hasta ${endOfWindow} para cerrar la ventana de reversas`,
-          details: `crédito de lote $${c.credit!.toLocaleString("en-US", { minimumFractionDigits: 2 })} el ${c.date}`,
+          missingItem: `Movements through ${endOfWindow} to close reversal window`,
+          details: `batch credit $${c.credit!.toLocaleString("en-US", { minimumFractionDigits: 2 })} on ${c.date}`,
           amount: null,
         });
       }
@@ -753,7 +753,7 @@ export function reconcileBancoGeneral(
 
       if (matchedLag !== YAPPY_LAG_DAYS) {
         alerts.push(
-          `[YAPPY] ${batchUid}: liquidó con desfase T+${matchedLag} (lo normal es T+${YAPPY_LAG_DAYS})`,
+          `[YAPPY] ${batchUid}: settled with lag T+${matchedLag} (normal is T+${YAPPY_LAG_DAYS})`,
         );
       }
     } else {
@@ -769,16 +769,16 @@ export function reconcileBancoGeneral(
         yappyBatchObj.transactionDate = diaT;
         yappyBatchObj.reportCount = group.length;
         yappyBatchObj.reportAmount = sumAmount;
-        yappyBatchObj.pendingReason = `el reporte del ${diaT} suma $${sumAmount.toLocaleString("en-US", { minimumFractionDigits: 2 })} y el depósito es $${depo.credit!.toLocaleString("en-US", { minimumFractionDigits: 2 })}`;
-        alerts.push(`[ANOMALIA YAPPY] ${batchUid}: ${yappyBatchObj.pendingReason}`);
+        yappyBatchObj.pendingReason = `report for ${diaT} totals $${sumAmount.toLocaleString("en-US", { minimumFractionDigits: 2 })} and deposit is $${depo.credit!.toLocaleString("en-US", { minimumFractionDigits: 2 })}`;
+        alerts.push(`[YAPPY ANOMALY] ${batchUid}: ${yappyBatchObj.pendingReason}`);
       } else {
         yappyBatchObj.status = "pending";
-        yappyBatchObj.pendingReason = `falta el reporte Yappy que cubra el ${diaT}`;
+        yappyBatchObj.pendingReason = `missing Yappy report covering ${diaT}`;
         pendingTasks.push({
           taskType: "missing_yappy_report",
           affectsUid: batchUid,
-          missingItem: `Transacciones Yappy del ${diaT}`,
-          details: `depósito $${depo.credit!.toLocaleString("en-US", { minimumFractionDigits: 2 })} (${depo.declaredCount} transacciones) acreditado el ${depo.date}`,
+          missingItem: `Yappy Transactions for ${diaT}`,
+          details: `deposit $${depo.credit!.toLocaleString("en-US", { minimumFractionDigits: 2 })} (${depo.declaredCount} transactions) credited on ${depo.date}`,
           amount: depo.credit,
         });
       }
@@ -797,15 +797,15 @@ export function reconcileBancoGeneral(
     if (coverageDays.has(depositDate) && !provisionalDays.has(depositDate)) {
       t.reconStatus = "anomaly";
       alerts.push(
-        `[ANOMALIA YAPPY] pago ${t.uid} ($${t.amount.toLocaleString("en-US", { minimumFractionDigits: 2 })} de ${t.clientName}) sin depósito el ${depositDate} pese a extracto completo`,
+        `[YAPPY ANOMALY] payment ${t.uid} ($${t.amount.toLocaleString("en-US", { minimumFractionDigits: 2 })} from ${t.clientName}) without deposit on ${depositDate} despite complete statement`,
       );
     } else {
       t.reconStatus = "pending";
       pendingTasks.push({
         taskType: "missing_statement",
         affectsUid: t.uid,
-        missingItem: `Movimientos que cubran ${depositDate}`,
-        details: `pago Yappy de ${t.clientName} $${t.amount.toLocaleString("en-US", { minimumFractionDigits: 2 })} del ${t.date}`,
+        missingItem: `Movements covering ${depositDate}`,
+        details: `Yappy payment from ${t.clientName} $${t.amount.toLocaleString("en-US", { minimumFractionDigits: 2 })} on ${t.date}`,
         amount: t.amount,
       });
     }
@@ -831,7 +831,7 @@ export function reconcileBancoGeneral(
       finalStatus = "in_transit";
     } else {
       finalStatus = "other";
-      alerts.push(`[YAPPY] estado desconocido '${t.bankStatus}' en ${t.uid}`);
+      alerts.push(`[YAPPY] unknown status '${t.bankStatus}' in ${t.uid}`);
     }
 
     const d = new Date(`${t.date}T00:00:00Z`);
@@ -851,26 +851,26 @@ export function reconcileBancoGeneral(
 
   for (const m of voluntaryInflows) {
     const desc = m.description;
-    let channel = "Otro crédito";
+    let channel = "Other credit";
     let counterpart = "";
 
     const mTransf = RE_TRANSF_IN.exec(desc);
     if (mTransf) {
       channel =
         mTransf[1] === "EN LINEA"
-          ? "Transferencia BG (banca en línea)"
-          : "Transferencia BG (banca móvil)";
+          ? "BG Transfer (online banking)"
+          : "BG Transfer (mobile banking)";
       counterpart = mTransf[2].trim();
     } else if (RE_ACH_XPRESS.test(desc)) {
       channel = "ACH Xpress";
       counterpart = RE_ACH_XPRESS.exec(desc)![1].trim();
     } else if (RE_ACH_IN.test(desc)) {
-      channel = "ACH interbancario";
+      channel = "Interbank ACH";
       counterpart = RE_ACH_IN.exec(desc)![1].trim();
     } else if (desc.toUpperCase().startsWith("DEPOSITO")) {
-      channel = "Depósito";
+      channel = "Deposit";
     } else if (desc.toUpperCase().includes("YAPPY")) {
-      channel = "Yappy (otro)";
+      channel = "Yappy (other)";
     }
 
     const fullText = `${m.ref2 || ""} ${desc}`;
@@ -895,7 +895,7 @@ export function reconcileBancoGeneral(
     const asg = assignments.get(uid) || assignments.get(m.uid);
 
     let incomingStatus: BgIncomingStatus =
-      ["Depósito", "Otro crédito", "Yappy (otro)"].includes(channel)
+      ["Deposit", "Other credit", "Yappy (other)"].includes(channel)
         ? "unassigned"
         : "received";
 
@@ -955,7 +955,7 @@ export function reconcileBancoGeneral(
   for (const asgUid of assignments.keys()) {
     if (!usedUids.has(asgUid)) {
       alerts.push(
-        `[ASIGNACION SIN DESTINO] el uid '${asgUid}' de asignaciones no corresponde a ningún ingreso de esta corrida (¿uid viejo o mal copiado?)`,
+        `[UNASSIGNED TARGET] assignment uid '${asgUid}' does not correspond to any inflow in this run (old or mistyped UID?)`,
       );
     }
   }
@@ -963,7 +963,7 @@ export function reconcileBancoGeneral(
   for (const c of yappyCommissions) {
     if (!c.isConsumed) {
       alerts.push(
-        `[YAPPY] comisión ${c.uid} ($${c.debit!.toLocaleString("en-US", { minimumFractionDigits: 2 })}) sin depósito el mismo día`,
+        `[YAPPY] fee ${c.uid} ($${c.debit!.toLocaleString("en-US", { minimumFractionDigits: 2 })}) without deposit on the same day`,
       );
     }
   }
@@ -995,7 +995,7 @@ export function reconcileBancoGeneral(
       clientName: r.clientName,
       clientAccountNumber: r.accountNumber,
       amount: r.amount,
-      status: r.errorCode ? "RECHAZADO" : "REALIZADA",
+      status: r.errorCode ? "REJECTED" : "CONFIRMED",
       reasonCode: r.errorCode || null,
       reasonDescription: r.errorDescription || null,
     })),

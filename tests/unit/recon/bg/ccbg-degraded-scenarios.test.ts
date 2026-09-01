@@ -88,7 +88,7 @@ describe("Banco General CCBG v2 · Degraded Scenarios (T1 to T16)", () => {
 
     expect(r3.controls.totalBatchesCount).toBe(8);
     expect(r3.controls.settledBatchesCount).toBe(2);
-    expect(r3.alerts.some((a) => a.includes("DUPLICADO"))).toBe(true);
+    expect(r3.alerts.some((a) => a.includes("DUPLICATE"))).toBe(true);
     expect(r3.items.filter((i) => i.status === "rejected").length).toBe(386);
   });
 
@@ -121,7 +121,7 @@ describe("Banco General CCBG v2 · Degraded Scenarios (T1 to T16)", () => {
     );
 
     expect(r4.controls.quarantinedDays.includes("2026-08-17")).toBe(true);
-    expect(r4.alerts.some((a) => a.includes("CONFLICTO DE SNAPSHOT"))).toBe(true);
+    expect(r4.alerts.some((a) => a.includes("SNAPSHOT CONFLICT"))).toBe(true);
     expect(
       r4.batches
         .filter((b) => b.batchDateStr === "20260814")
@@ -271,7 +271,7 @@ describe("Banco General CCBG v2 · Degraded Scenarios (T1 to T16)", () => {
     const y9 = r9.yappyBatches.find((yb) => yb.creditDate === "2026-08-06")!;
     expect(y9.status).toBe("anomaly");
     expect(
-      r9.alerts.some((a) => a.includes("ANOMALIA YAPPY") && a.includes("2026-08-05")),
+      r9.alerts.some((a) => a.includes("YAPPY ANOMALY") && a.includes("2026-08-05")),
     ).toBe(true);
   });
 
@@ -315,7 +315,7 @@ describe("Banco General CCBG v2 · Degraded Scenarios (T1 to T16)", () => {
     );
 
     expect(r10.controls.settledBatchesCount).toBe(2);
-    expect(r10.alerts.some((a) => a.includes("NO LEIDO"))).toBe(true);
+    expect(r10.alerts.some((a) => a.includes("UNREAD"))).toBe(true);
   });
 
   // -------------------------------------------------------------
@@ -552,8 +552,8 @@ describe("Banco General CCBG v2 · Degraded Scenarios (T1 to T16)", () => {
     expect(r12.batches[0].status).toBe("settled");
     expect(r12.items.some((i) => i.status === "confirmed" && i.amount === 400.0)).toBe(true);
     expect(r12.items.filter((i) => i.status === "rejected").length).toBe(2);
-    expect(r12.alerts.some((a) => a.includes("REDUNDANTE"))).toBe(true);
-    expect(r12.alerts.some((a) => a.includes("REINTENTO"))).toBe(false);
+    expect(r12.alerts.some((a) => a.includes("REDUNDANT"))).toBe(true);
+    expect(r12.alerts.some((a) => a.includes("RETRY"))).toBe(false);
   });
 
   // -------------------------------------------------------------
@@ -628,7 +628,7 @@ describe("Banco General CCBG v2 · Degraded Scenarios (T1 to T16)", () => {
       { manualAssignments },
     );
 
-    expect(r15.alerts.some((a) => a.includes("ASIGNACION SIN DESTINO"))).toBe(true);
+    expect(r15.alerts.some((a) => a.includes("UNASSIGNED TARGET"))).toBe(true);
   });
 
   // -------------------------------------------------------------

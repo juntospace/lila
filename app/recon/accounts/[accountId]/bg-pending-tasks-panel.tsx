@@ -29,7 +29,7 @@ export function BgPendingTasksPanel({
   quarantinedDays = [],
   provisionalDays = [],
 }: Props) {
-  const errorAlerts = alerts.filter((a) => a.severity === "error" || a.message.includes("ANOMALIA") || a.message.includes("CONFLICTO"));
+  const errorAlerts = alerts.filter((a) => a.severity === "error" || a.message.includes("ANOMALIA") || a.message.includes("ANOMALY") || a.message.includes("CONFLICTO") || a.message.includes("CONFLICT"));
   const warnAlerts = alerts.filter((a) => a.severity !== "error" && !errorAlerts.includes(a));
 
   return (
@@ -55,7 +55,7 @@ export function BgPendingTasksPanel({
             )}
             {provisionalDays.length > 0 && (
               <div className="rounded-md bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-300">
-                <strong>Días provisionales (requieren re-descarga tras cierre):</strong>{" "}
+                <strong>Días con cobertura provisional (requieren re-descargar tras cierre):</strong>{" "}
                 {provisionalDays.join(", ")}
               </div>
             )}
@@ -85,14 +85,14 @@ export function BgPendingTasksPanel({
             </span>
           </div>
           <CardDescription>
-            Archivos o extractos faltantes necesarios para cerrar lotes o pagos pendientes.
+            Archivos o extractos faltantes necesarios para liquidar lotes o pagos pendientes.
           </CardDescription>
         </CardHeader>
         <CardBody>
           {pendingTasks.length === 0 ? (
             <div className="flex items-center gap-2 py-4 text-sm text-emerald-600 dark:text-emerald-400">
               <CheckCircle className="h-4 w-4" />
-              <span>No hay tareas pendientes — todos los archivos conocidos están conciliados.</span>
+              <span>Sin tareas pendientes — todos los archivos conocidos están conciliados.</span>
             </div>
           ) : (
             <div className="divide-y divide-border">

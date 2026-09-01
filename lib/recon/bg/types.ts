@@ -296,7 +296,7 @@ export interface BgOtherAccountResponse {
     clientName: string;
     clientAccountNumber: string;
     amount: number;
-    status: "RECHAZADO" | "REALIZADA";
+    status: "REJECTED" | "CONFIRMED";
     reasonCode: string | null;
     reasonDescription: string | null;
   }>;

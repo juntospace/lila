@@ -93,6 +93,10 @@ export function toSpanishBatchStatus(status: BgBatchStatus): string {
   return BG_BATCH_STATUS_MAP[status]?.labelEs || status;
 }
 
+export function toEnglishBatchStatus(status: BgBatchStatus): string {
+  return BG_BATCH_STATUS_MAP[status]?.labelEn || status;
+}
+
 export function fromSpanishBatchStatus(esStatus: string): BgBatchStatus {
   const norm = esStatus.trim().toUpperCase();
   if (norm === "LIQUIDADA") return "settled";
@@ -105,6 +109,10 @@ export function toSpanishItemStatus(status: BgItemStatus): string {
   return BG_ITEM_STATUS_MAP[status]?.labelEs || status;
 }
 
+export function toEnglishItemStatus(status: BgItemStatus): string {
+  return BG_ITEM_STATUS_MAP[status]?.labelEn || status;
+}
+
 export function fromSpanishItemStatus(esStatus: string): BgItemStatus {
   const norm = esStatus.trim().toUpperCase();
   if (norm === "RECHAZADO" || norm === "RECHAZADA") return "rejected";
@@ -114,6 +122,10 @@ export function fromSpanishItemStatus(esStatus: string): BgItemStatus {
 
 export function toSpanishYappyStatus(status: BgYappyStatus): string {
   return BG_YAPPY_STATUS_MAP[status]?.labelEs || status;
+}
+
+export function toEnglishYappyStatus(status: BgYappyStatus): string {
+  return BG_YAPPY_STATUS_MAP[status]?.labelEn || status;
 }
 
 export function fromSpanishYappyStatus(esStatus: string): BgYappyStatus {
@@ -129,9 +141,18 @@ export function toSpanishIncomingStatus(status: BgIncomingStatus): string {
   return BG_INCOMING_STATUS_MAP[status]?.labelEs || status;
 }
 
+export function toEnglishIncomingStatus(status: BgIncomingStatus): string {
+  return BG_INCOMING_STATUS_MAP[status]?.labelEn || status;
+}
+
 export function toSpanishCategory(cat: BgAssignmentCategory | null): string | null {
   if (!cat) return null;
   return BG_CATEGORY_MAP[cat]?.labelEs || cat;
+}
+
+export function toEnglishCategory(cat: BgAssignmentCategory | null): string | null {
+  if (!cat) return null;
+  return BG_CATEGORY_MAP[cat]?.labelEn || cat;
 }
 
 export function fromSpanishCategory(esCat: string | null | undefined): BgAssignmentCategory | null {
@@ -148,8 +169,17 @@ export function toSpanishSuggestion(sug: BgSuggestion | null): string | null {
   return BG_SUGGESTION_MAP[sug]?.labelEs || sug;
 }
 
+export function toEnglishSuggestion(sug: BgSuggestion | null): string | null {
+  if (!sug) return null;
+  return BG_SUGGESTION_MAP[sug]?.labelEn || sug;
+}
+
 export function toSpanishTaskType(type: BgPendingTaskType): string {
   return BG_PENDING_TASK_TYPE_MAP[type]?.labelEs || type;
+}
+
+export function toEnglishTaskType(type: BgPendingTaskType): string {
+  return BG_PENDING_TASK_TYPE_MAP[type]?.labelEn || type;
 }
 
 // -------------------------------------------------------------

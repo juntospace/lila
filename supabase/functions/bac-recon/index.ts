@@ -144,7 +144,7 @@ export default {
           const amt = typeof it.credit === "number" ? it.credit : (it.creditMinor ? Number(it.creditMinor) / 100 : 0);
           alerts.push([
             it.reject?.dateStr ?? it.dateStr,
-            `RECHAZO TARDÍO (${it.reject_lag_bd} d.h.): ${it.name_raw ?? it.description} $${amt.toFixed(2)} enviado ${formatDayMonth(it.dateStr)} - verificar si se reportó como confirmado antes`,
+            `LATE REJECTION (${it.reject_lag_bd} b.d.): ${it.name_raw ?? it.description} $${amt.toFixed(2)} sent ${formatDayMonth(it.dateStr)} - verify if previously reported as confirmed`,
           ]);
         }
       });
@@ -153,12 +153,12 @@ export default {
         if (rj.src === "sin-origen") {
           alerts.push([
             rj.dateStr,
-            `DA ${rj.ref ?? rj.reference} ${rj.name_raw ?? rj.description} $${amt.toFixed(2)} (${rj.reason ?? rj.returnCode ?? "DA"}): SIN ORIGEN en el histórico cargado`,
+            `DA ${rj.ref ?? rj.reference} ${rj.name_raw ?? rj.description} $${amt.toFixed(2)} (${rj.reason ?? rj.returnCode ?? "DA"}): NO MATCHING PR in loaded history`,
           ]);
         } else if (rj.ambiguous) {
           alerts.push([
             rj.dateStr,
-            `DA ${rj.ref ?? rj.reference} ${rj.name_raw ?? rj.description} $${amt.toFixed(2)}: clientes distintos comparten prefijo+monto - atribución al más reciente; verificar`,
+            `DA ${rj.ref ?? rj.reference} ${rj.name_raw ?? rj.description} $${amt.toFixed(2)}: different clients share prefix+amount - attributed to most recent; verify`,
           ]);
         }
       });
@@ -166,13 +166,13 @@ export default {
         if (!tbl.total_ok) {
           alerts.push([
             tbl.dateStr,
-            `Comisiones AD del día no cuadran con AM04 asignados - posible día incompleto o rechazo sin capturar`,
+            `Daily AD fees do not match assigned AM04 - possible incomplete day or uncaptured rejection`,
           ]);
         }
       });
       issues.forEach((msg) => {
         if (res.last_date) {
-          alerts.push([res.last_date, "INTEGRIDAD: " + msg]);
+          alerts.push([res.last_date, "INTEGRITY: " + msg]);
         }
       });
 

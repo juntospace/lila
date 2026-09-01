@@ -608,7 +608,7 @@ export async function deleteUpload(uploadId: string): Promise<DeleteUploadResult
   if (storagePath) {
     const adminSupabase = createSupabaseServiceClient();
     await adminSupabase.storage.from("recon-statements").remove([storagePath]).catch(() => {
-      // Ignorar error si el archivo ya no existía en el bucket
+      // Ignore error if the file no longer existed in bucket
     });
   }
 

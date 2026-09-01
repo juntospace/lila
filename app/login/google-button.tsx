@@ -42,7 +42,7 @@ export function GoogleSignInButton({ next }: { next?: string }) {
         disabled={isPending}
       >
         <GoogleGlyph />
-        <span>{isPending ? "Redirecting…" : "Continue with Google"}</span>
+        <span>{isPending ? "Redirigiendo…" : "Continuar con Google"}</span>
       </Button>
       {error ? (
         <p role="alert" className="text-sm text-danger">

@@ -4,18 +4,18 @@ import { formatDayMonthYear, formatDayMonth, REASON_LABELS, round2, FEE_PER_NSF 
 export function writeReport(res: any, stream: any[], issues: string[], feeTbl: any[]): Uint8Array {
   const wb = XLSX.utils.book_new();
 
-  // 1. Resumen Sheet
+  // 1. Summary Sheet
   const items = res.items;
   const rejects = res.rejects;
   const dmin = items.length > 0 ? items.reduce((min: string, i: any) => i.dateStr < min ? i.dateStr : min, items[0].dateStr) : null;
   const lastDate = res.last_date;
 
   const resumenData: any[][] = [];
-  resumenData.push(["Conciliación ACH DCD · BAC Credomatic · Junto Soluciones, S.A."]);
+  resumenData.push(["ACH DCD Reconciliation · BAC Credomatic · Junto Soluciones, S.A."]);
   resumenData.push([
     dmin && lastDate
-      ? `Período con datos: ${formatDayMonthYear(dmin)} - ${formatDayMonthYear(lastDate)} · CONFIRMADO requiere evidencia del día hábil siguiente`
-      : "Sin datos"
+      ? `Period with data: ${formatDayMonthYear(dmin)} - ${formatDayMonthYear(lastDate)} · CONFIRMED requires evidence from next business day`
+      : "No data"
   ]);
   resumenData.push([]);
 
@@ -30,35 +30,35 @@ export function writeReport(res: any, stream: any[], issues: string[], feeTbl: a
   const txFeeSum = stream.filter(r => r.code === "TX").reduce((sum, r) => sum + r.debit, 0);
 
   const rows = [
-    ["Ítems enviados (PR)", items.length, items.reduce((sum: number, i: any) => sum + i.credit, 0)],
-    ["  CONFIRMADOS (cobrados)", cnt("CONFIRMADO"), amt("CONFIRMADO")],
-    ["  RECHAZADOS", cnt("RECHAZADO"), amt("RECHAZADO")],
-    ["  PENDIENTES (aún sin día siguiente)", cnt("PENDIENTE"), amt("PENDIENTE")],
-    ["Rechazos recibidos (DA)", rejects.length, rejects.reduce((sum: number, r: any) => sum + r.debit, 0)],
-    ["  emparejados mismo día", sameDayDA.length, sameDayDA.reduce((sum: number, r: any) => sum + r.debit, 0)],
-    ["  emparejados día hábil previo", prevDayDA.length, prevDayDA.reduce((sum: number, r: any) => sum + r.debit, 0)],
-    ["  SIN ORIGEN (revisar)", noOriginDA.length, noOriginDA.reduce((sum: number, r: any) => sum + r.debit, 0)],
-    ["Pagos ACH recibidos del cliente (4C/4E) - no rechazables", incoming.length, incoming.reduce((sum: number, r: any) => sum + r.credit, 0)],
-    ["Comisiones por devolución NSF (AD)", "", adFeeSum],
-    ["ITBMS sobre comisiones (TX)", "", txFeeSum]
+    ["Items sent (PR)", items.length, items.reduce((sum: number, i: any) => sum + i.credit, 0)],
+    ["  CONFIRMED (collected)", cnt("CONFIRMED"), amt("CONFIRMED")],
+    ["  REJECTED", cnt("REJECTED"), amt("REJECTED")],
+    ["  PENDING (awaiting next day)", cnt("PENDING"), amt("PENDING")],
+    ["Rejections received (DA)", rejects.length, rejects.reduce((sum: number, r: any) => sum + r.debit, 0)],
+    ["  matched same day", sameDayDA.length, sameDayDA.reduce((sum: number, r: any) => sum + r.debit, 0)],
+    ["  matched previous business day", prevDayDA.length, prevDayDA.reduce((sum: number, r: any) => sum + r.debit, 0)],
+    ["  NO MATCHING PR (review)", noOriginDA.length, noOriginDA.reduce((sum: number, r: any) => sum + r.debit, 0)],
+    ["ACH payments received from client (4C/4E) - non-rejectable", incoming.length, incoming.reduce((sum: number, r: any) => sum + r.credit, 0)],
+    ["NSF return fees (AD)", "", adFeeSum],
+    ["ITBMS tax on fees (TX)", "", txFeeSum]
   ];
 
   rows.forEach(r => resumenData.push(r));
   resumenData.push([]);
-  resumenData.push(["Controles de integridad"]);
+  resumenData.push(["Integrity controls"]);
   
   if (issues.length > 0) {
     issues.forEach(msg => resumenData.push(["! " + msg]));
   } else {
-    resumenData.push(["OK Balance corrido (intra e inter-día), Cuadro de Resumen, comisiones AD=0.20xAM04 y TX=trunc(7%) cuadran."]);
+    resumenData.push(["OK Running balance (intra and inter-day), Summary Table, AD fees=0.20xAM04 and TX=trunc(7%) square."]);
   }
   
   resumenData.push([]);
-  resumenData.push(["Nota metodológica: entre ítems idénticos (mismo cliente y monto, lotes gemelos) la etiqueta de lote del intento rechazado es convencional; cliente, monto y dinero son exactos."]);
+  resumenData.push(["Methodological note: between identical items (same client and amount, twin batches) the batch tag of the rejected attempt is conventional; client, amount, and money are exact."]);
 
   const wsResumen = XLSX.utils.aoa_to_sheet(resumenData);
   wsResumen["!cols"] = [{ wch: 60 }, { wch: 12 }, { wch: 15 }];
-  XLSX.utils.book_append_sheet(wb, wsResumen, "Resumen");
+  XLSX.utils.book_append_sheet(wb, wsResumen, "Summary");
 
   const formatSheet = (headers: string[], widths: number[], rowData: any[][]) => {
     const ws = XLSX.utils.aoa_to_sheet([headers, ...rowData]);
@@ -66,7 +66,7 @@ export function writeReport(res: any, stream: any[], issues: string[], feeTbl: a
     return ws;
   };
 
-  // 2. Envios (PR)
+  // 2. Submissions (PR)
   const enviosRows = items.map((it: any) => {
     const rj = it.reject;
     return [
@@ -83,20 +83,20 @@ export function writeReport(res: any, stream: any[], issues: string[], feeTbl: a
     ];
   });
   const wsEnvios = formatSheet(
-    ["Fecha", "Lote", "Cliente", "Monto", "Estado", "Motivo rechazo", "Ref DA", "Fecha rechazo", "Rezago d.h.", "Archivo"],
+    ["Date", "Batch", "Client", "Amount", "Status", "Rejection Reason", "DA Ref", "Rejection Date", "Lag b.d.", "File"],
     [12, 12, 35, 12, 14, 32, 12, 14, 12, 28],
     enviosRows
   );
-  XLSX.utils.book_append_sheet(wb, wsEnvios, "Envios (PR)");
+  XLSX.utils.book_append_sheet(wb, wsEnvios, "Submissions (PR)");
 
-  // 3. Rechazos (DA)
+  // 3. Rejections (DA)
   const rechazosRows = rejects.map((rj: any) => {
     const it = rj.matched !== null ? items[rj.matched] : null;
     const obs = rj.ambiguous
-      ? "COINCIDENCIA AMBIGUA - revisar"
+      ? "AMBIGUOUS MATCH - review"
       : it
       ? ""
-      : "SIN ORIGEN - revisar";
+      : "NO MATCHING PR - review";
     return [
       formatDayMonthYear(rj.dateStr),
       rj.ref,
@@ -111,20 +111,20 @@ export function writeReport(res: any, stream: any[], issues: string[], feeTbl: a
     ];
   });
   const wsRechazos = formatSheet(
-    ["Fecha", "Ref DA", "Cliente", "Monto", "Motivo", "Descripción motivo", "Origen", "Lote origen", "Fecha envío", "Observación"],
+    ["Date", "DA Ref", "Client", "Amount", "Reason Code", "Reason Description", "Source", "Origin Batch", "Submission Date", "Observation"],
     [12, 14, 35, 12, 10, 30, 12, 14, 14, 32],
     rechazosRows
   );
-  XLSX.utils.book_append_sheet(wb, wsRechazos, "Rechazos (DA)");
+  XLSX.utils.book_append_sheet(wb, wsRechazos, "Rejections (DA)");
 
-  // 4. Dias
+  // 4. Daily Summary
   const days = Array.from(new Set(stream.map(r => r.dateStr))).sort();
   const diasRows = days.map((d: string) => {
     const prs = items.filter((i: any) => i.dateStr === d);
     const das = rejects.filter((r: any) => r.dateStr === d);
     const ad = stream.filter(r => r.code === "AD" && r.dateStr === d).reduce((sum, r) => sum + r.debit, 0);
     const am04 = das.filter((r: any) => r.reason === "AM04").length;
-    const chk = Math.abs(ad - round2(FEE_PER_NSF * am04)) < 0.005 ? "OK" : "REVISAR";
+    const chk = Math.abs(ad - round2(FEE_PER_NSF * am04)) < 0.005 ? "OK" : "REVIEW";
     return [
       formatDayMonthYear(d),
       prs.length,
@@ -133,10 +133,10 @@ export function writeReport(res: any, stream: any[], issues: string[], feeTbl: a
       das.reduce((sum: number, r: any) => sum + r.debit, 0),
       das.filter((r: any) => r.src === "mismo-dia").length,
       das.filter((r: any) => r.src === "dia-previo").length,
-      prs.filter((i: any) => i.status === "CONFIRMADO").length,
-      prs.filter((i: any) => i.status === "CONFIRMADO").reduce((sum: number, i: any) => sum + i.credit, 0),
-      prs.filter((i: any) => i.status === "RECHAZADO").length,
-      prs.filter((i: any) => i.status === "PENDIENTE").length,
+      prs.filter((i: any) => i.status === "CONFIRMED").length,
+      prs.filter((i: any) => i.status === "CONFIRMED").reduce((sum: number, i: any) => sum + i.credit, 0),
+      prs.filter((i: any) => i.status === "REJECTED").length,
+      prs.filter((i: any) => i.status === "PENDING").length,
       ad,
       am04,
       chk,
@@ -145,13 +145,13 @@ export function writeReport(res: any, stream: any[], issues: string[], feeTbl: a
     ];
   });
   const wsDias = formatSheet(
-    ["Fecha", "PR n", "PR $", "DA n", "DA $", "DA mismo dia", "DA dia previo", "Confirmados n", "Confirmados $", "Rechazados n", "Pendientes n", "AD $", "AM04 n", "Chequeo AD=0.20xAM04", "ACH recib. n", "ACH recib. $"],
-    [12, 8, 12, 8, 12, 14, 14, 14, 15, 14, 14, 10, 10, 22, 12, 14],
+    ["Date", "PR count", "PR $", "DA count", "DA $", "DA same day", "DA prev day", "Confirmed count", "Confirmed $", "Rejected count", "Pending count", "AD $", "AM04 count", "Check AD=0.20xAM04", "Inbound ACH count", "Inbound ACH $"],
+    [12, 10, 12, 10, 12, 14, 14, 16, 15, 14, 14, 10, 12, 22, 18, 16],
     diasRows
   );
-  XLSX.utils.book_append_sheet(wb, wsDias, "Dias");
+  XLSX.utils.book_append_sheet(wb, wsDias, "Daily Summary");
 
-  // 5. Lotes
+  // 5. Batches
   const byBatch: Record<string, { d: string; ref: string; its: any[] }> = {};
   items.forEach((it: any) => {
     const key = `${it.dateStr}_${it.ref}`;
@@ -167,7 +167,7 @@ export function writeReport(res: any, stream: any[], issues: string[], feeTbl: a
     })
     .map(({ d, ref, its }) => {
       const tot = its.reduce((sum, i) => sum + i.credit, 0);
-      const rej = its.filter(i => i.status === "RECHAZADO");
+      const rej = its.filter(i => i.status === "REJECTED");
       const rejamt = rej.reduce((sum, i) => sum + i.credit, 0);
       return [
         formatDayMonthYear(d),
@@ -176,41 +176,41 @@ export function writeReport(res: any, stream: any[], issues: string[], feeTbl: a
         tot,
         rej.length,
         rejamt,
-        its.filter(i => i.status === "CONFIRMADO").length,
-        its.filter(i => i.status === "PENDIENTE").length,
+        its.filter(i => i.status === "CONFIRMED").length,
+        its.filter(i => i.status === "PENDING").length,
         tot ? rejamt / tot : 0
       ];
     });
   const wsLotes = formatSheet(
-    ["Fecha", "Lote", "Ítems", "Monto enviado", "Rechazados", "Monto rechazado", "Confirmados", "Pendientes", "% rechazo (monto)"],
-    [12, 12, 10, 15, 12, 16, 14, 12, 18],
+    ["Date", "Batch", "Items", "Amount Sent", "Rejections", "Amount Rejected", "Confirmed", "Pending", "% Rejected (Amount)"],
+    [12, 12, 10, 15, 12, 16, 14, 12, 20],
     lotesRows
   );
-  XLSX.utils.book_append_sheet(wb, wsLotes, "Lotes");
+  XLSX.utils.book_append_sheet(wb, wsLotes, "Batches");
 
-  // 6. Creditos (4C-4E)
+  // 6. Inbound Payments (4C-4E)
   const incomingRows = incoming.map((r: any) => [
     formatDayMonthYear(r.dateStr),
     r.ref,
     r.channel || r.code,
     r.name_raw || "",
     r.credit,
-    "RECIBIDO"
+    "RECEIVED"
   ]);
   const wsIncoming = formatSheet(
-    ["Fecha", "Referencia", "Canal", "Cliente (remitente)", "Monto", "Estado"],
+    ["Date", "Reference", "Channel", "Client (Sender)", "Amount", "Status"],
     [12, 15, 22, 35, 12, 12],
     incomingRows
   );
-  XLSX.utils.book_append_sheet(wb, wsIncoming, "Creditos (4C-4E)");
+  XLSX.utils.book_append_sheet(wb, wsIncoming, "Inbound Payments (4C-4E)");
 
-  // 7. Alertas
+  // 7. Alerts
   const alerts: [string, string][] = [];
   items.forEach((it: any) => {
     if (it.reject_lag_bd && it.reject_lag_bd > 1) {
       alerts.push([
         it.reject.dateStr,
-        `RECHAZO TARDÍO (${it.reject_lag_bd} d.h.): ${it.name_raw} $${it.credit.toFixed(2)} enviado ${formatDayMonth(it.dateStr)} - verificar si se reportó como confirmado antes`
+        `LATE REJECTION (${it.reject_lag_bd} b.d.): ${it.name_raw} $${it.credit.toFixed(2)} sent ${formatDayMonth(it.dateStr)} - verify if previously reported as confirmed`
       ]);
     }
   });
@@ -218,12 +218,12 @@ export function writeReport(res: any, stream: any[], issues: string[], feeTbl: a
     if (rj.src === "sin-origen") {
       alerts.push([
         rj.dateStr,
-        `DA ${rj.ref} ${rj.name_raw} $${rj.debit.toFixed(2)} (${rj.reason}): SIN ORIGEN en el histórico cargado`
+        `DA ${rj.ref} ${rj.name_raw} $${rj.debit.toFixed(2)} (${rj.reason}): NO MATCHING PR in loaded history`
       ]);
     } else if (rj.ambiguous) {
       alerts.push([
         rj.dateStr,
-        `DA ${rj.ref} ${rj.name_raw} $${rj.debit.toFixed(2)}: clientes distintos comparten prefijo+monto - atribución al más reciente; verificar`
+        `DA ${rj.ref} ${rj.name_raw} $${rj.debit.toFixed(2)}: different clients share prefix+amount - attributed to most recent; verify`
       ]);
     }
   });
@@ -231,23 +231,23 @@ export function writeReport(res: any, stream: any[], issues: string[], feeTbl: a
     if (!tbl.total_ok) {
       alerts.push([
         tbl.dateStr,
-        `Comisiones AD del día no cuadran con AM04 asignados - posible día incompleto o rechazo sin capturar`
+        `Daily AD fees do not match assigned AM04 - possible incomplete day or uncaptured rejection`
       ]);
     }
   });
   issues.forEach(msg => {
     if (lastDate) {
-      alerts.push([lastDate, "INTEGRIDAD: " + msg]);
+      alerts.push([lastDate, "INTEGRITY: " + msg]);
     }
   });
 
   const alertsRows = alerts.sort((a, b) => a[0].localeCompare(b[0])).map(([d, msg]) => [formatDayMonthYear(d), msg]);
   const wsAlertas = formatSheet(
-    ["Fecha", "Alerta"],
+    ["Date", "Alert"],
     [12, 120],
-    alertsRows.length > 0 ? alertsRows : [["-", "Sin alertas: todos los rechazos emparejados y controles en verde."]]
+    alertsRows.length > 0 ? alertsRows : [["-", "No alerts: all rejections paired and all controls green."]]
   );
-  XLSX.utils.book_append_sheet(wb, wsAlertas, "Alertas");
+  XLSX.utils.book_append_sheet(wb, wsAlertas, "Alerts");
 
   const fileData = XLSX.write(wb, { bookType: "xlsx", type: "buffer" });
   return fileData;

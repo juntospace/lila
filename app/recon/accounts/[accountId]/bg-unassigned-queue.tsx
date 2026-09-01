@@ -67,21 +67,21 @@ export function BgUnassignedQueue({ accountId, items }: Props) {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <HelpCircle className="h-5 w-5 text-amber-500" />
-            <CardTitle>Cola de Asignación Manual (Ingresos Voluntarios)</CardTitle>
+            <CardTitle>Cola de Asignación Manual (Depósitos y Transferencias Directas)</CardTitle>
           </div>
           <span className="rounded-full bg-amber-500/10 px-2.5 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400">
             {pendingItems.length} por clasificar
           </span>
         </div>
         <CardDescription>
-          Depósitos directos y transferencias entrantes que requieren confirmar si corresponden a un préstamo o no.
+          Depósitos directos y transferencias entrantes que requieren confirmación sobre si corresponden al pago de un préstamo.
         </CardDescription>
       </CardHeader>
       <CardBody>
         {pendingItems.length === 0 ? (
           <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
             <Check className="h-4 w-4 text-emerald-500" />
-            <span>No hay pagos voluntarios pendientes por asignar.</span>
+            <span>No hay abonos voluntarios pendientes de asignar.</span>
           </div>
         ) : (
           <div className="overflow-x-auto">

@@ -55,7 +55,7 @@ export function BgBatchList({ batches }: Props) {
       </CardHeader>
       <CardBody>
         {batches.length === 0 ? (
-          <p className="py-4 text-sm text-muted-foreground">No hay lotes ACH registrados para esta cuenta.</p>
+          <p className="py-4 text-sm text-muted-foreground">Sin lotes ACH registrados para esta cuenta.</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
@@ -64,11 +64,11 @@ export function BgBatchList({ batches }: Props) {
                   <th className="py-2.5 px-3 font-medium">Lote / UID</th>
                   <th className="py-2.5 px-3 font-medium">Fecha Efectiva</th>
                   <th className="py-2.5 px-3 font-medium text-center">Canal / Reintento</th>
-                  <th className="py-2.5 px-3 font-medium text-right">Total Débito</th>
+                  <th className="py-2.5 px-3 font-medium text-right">Débito Total</th>
                   <th className="py-2.5 px-3 font-medium text-right">Rechazos</th>
-                  <th className="py-2.5 px-3 font-medium text-right">Neto Realizado</th>
+                  <th className="py-2.5 px-3 font-medium text-right">Neto Liquidado</th>
                   <th className="py-2.5 px-3 font-medium text-center">Estado</th>
-                  <th className="py-2.5 px-3 font-medium">Referencias Movimiento</th>
+                  <th className="py-2.5 px-3 font-medium">Referencias de Movimientos</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">

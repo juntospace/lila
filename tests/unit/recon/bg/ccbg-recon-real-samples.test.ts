@@ -54,8 +54,8 @@ describe("Banco General CCBG v2 · T0 Real Samples Suite", () => {
     expect(batch3.reversalsMovUids).not.toEqual(batch2.reversalsMovUids);
   });
 
-  it("generates [REINTENTO] alert for batch 20260814", () => {
-    expect(res.alerts.some((a) => a.includes("REINTENTO") && a.includes("20260814"))).toBe(true);
+  it("generates [RETRY] alert for batch 20260814", () => {
+    expect(res.alerts.some((a) => a.includes("RETRY") && a.includes("20260814"))).toBe(true);
   });
 
   it("handles batch '20260229' with non-existent calendar date and effective date 2026-03-02 as pending", () => {
@@ -88,7 +88,7 @@ describe("Banco General CCBG v2 · T0 Real Samples Suite", () => {
   });
 
   it("verifies uninterrupted balance chain and inter-day continuity", () => {
-    expect(res.alerts.some((a) => a.includes("CORTE") || a.includes("CADENA"))).toBe(false);
+    expect(res.alerts.some((a) => a.includes("GAP") || a.includes("CHAIN"))).toBe(false);
   });
 
   it("reconciles Yappy batch on 2026-08-06: $491.00 across 3 transactions from 05-ago with 1.07% fee", () => {

@@ -33,7 +33,7 @@ export function consolidateStatements(
     if (st.accountNumber) {
       if (accountNumber && st.accountNumber !== accountNumber) {
         alerts.push(
-          `[CUENTA] ${st.filename} es de la cuenta ${st.accountNumber} ≠ ${accountNumber}: archivo ignorado`,
+          `[ACCOUNT] ${st.filename} belongs to account ${st.accountNumber} ≠ ${accountNumber}: file ignored`,
         );
         st.isIgnored = true;
       }
@@ -109,7 +109,7 @@ export function consolidateStatements(
       if (!isPrefix) {
         quarantinedDays.add(day);
         alerts.push(
-          `[CONFLICTO DE SNAPSHOT] ${day}: ${st.filename} no coincide con ${existing.sources.join(", ")} — el día queda en cuarentena`,
+          `[SNAPSHOT CONFLICT] ${day}: ${st.filename} does not match ${existing.sources.join(", ")} — day is quarantined`,
         );
         continue;
       }
@@ -209,7 +209,7 @@ export function consolidateStatements(
       if (Math.abs(expected - m.balance) > 0.005) {
         if (prevDay === m.date) {
           alerts.push(
-            `[CADENA DE SALDO] ${m.uid}: esperado ${expected.toLocaleString("en-US", { minimumFractionDigits: 2 })}, archivo ${m.balance.toLocaleString("en-US", { minimumFractionDigits: 2 })}`,
+            `[BALANCE CHAIN] ${m.uid}: expected ${expected.toLocaleString("en-US", { minimumFractionDigits: 2 })}, file ${m.balance.toLocaleString("en-US", { minimumFractionDigits: 2 })}`,
           );
         } else {
           const nextDate = new Date(`${prevDay}T00:00:00Z`);
@@ -219,7 +219,7 @@ export function consolidateStatements(
           const isFullyCovered = range.every((d) => coverageDays.has(d));
           if (nextDayStr === m.date || isFullyCovered) {
             alerts.push(
-              `[CORTE DE SALDO] entre ${prevDay} y ${m.date}: cierre ${prevBalance.toLocaleString("en-US", { minimumFractionDigits: 2 })} + ${delta.toLocaleString("en-US", { minimumFractionDigits: 2 })} ≠ ${m.balance.toLocaleString("en-US", { minimumFractionDigits: 2 })}`,
+              `[BALANCE GAP] between ${prevDay} and ${m.date}: close ${prevBalance.toLocaleString("en-US", { minimumFractionDigits: 2 })} + ${delta.toLocaleString("en-US", { minimumFractionDigits: 2 })} ≠ ${m.balance.toLocaleString("en-US", { minimumFractionDigits: 2 })}`,
             );
           }
         }
