@@ -367,7 +367,7 @@ function checkError(error: unknown): void {
   throw new Error(String(error));
 }
 
-async function reparseUnparsedDAs(
+export async function reparseUnparsedDAs(
   supabase: SupabaseClient,
   accountId: string,
 ): Promise<number> {
@@ -680,8 +680,6 @@ async function recomputePRStates(
     if (data.length < SUPABASE_PAGE_LIMIT) break;
     cursor += SUPABASE_PAGE_LIMIT;
   }
-
-  const prIds = prRows.map((r) => r.id);
 
   // Calculate max date across ALL account transactions (PR, DA, 4C)
   // so cutoffDate updates properly even if a newly uploaded file contains only DAs/4Cs.

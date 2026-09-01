@@ -1,41 +1,24 @@
+// Public API for Banco General (Crediclaro CCBG v2) Reconciliation Module.
+
+// Core CCBG v2 engine & types
+export * from "./types";
+export * from "./formatters";
+export * from "./consolidation";
+export * from "./reconcile";
+export * from "./snapshot-sync";
+export { parseBgStatement } from "./parsers/statement";
+export { parseBgAchDetail } from "./parsers/ach-detail";
+export { parseBgYappyReport } from "./parsers/yappy";
+export { parseBgAchDetailPdfText } from "./parsers/pdf-detail";
+export { detectAndParseBgFile } from "./parsers/sniffer";
 export {
-  BG_KNOWN_CODES,
-  BGParseError,
-  classifyBGCode,
-  computeBGAchDetailRowHash,
-  computeBGStatementRowHash,
-  isBGAchDetailSheet,
-  isBGStatementSheet,
-  parseAchError,
-  parseBGAchDetail,
-  parseBGDescription,
-  parseBGStatement,
-  parseBGWorkbook,
-  parseMinor as parseBGMinor,
-} from "./parser";
+  parseAmountFloat,
+  parseAmountMinor,
+  parseIsoDate,
+  extractDownloadTimestamp,
+  removeAccents,
+} from "./parsers/utils";
 
-export type {
-  BGAchBatchEnvelope,
-  BGAchDetailParseResult,
-  BGAchDetailRow,
-  BGAchDetailRowHashInput,
-  BGKnownCode,
-  BGParseResult,
-  BGRowKind,
-  BGStatementHeader,
-  BGStatementParseResult,
-  BGStatementRow,
-  BGStatementRowHashInput,
-} from "./parser";
-
-export {
-  ingestBGAchDetailFile,
-  ingestBGStatementFile,
-} from "./ingest";
-
-export type {
-  BGAchDetailIngestArgs,
-  BGAchDetailIngestResult,
-  BGStatementIngestArgs,
-  BGStatementIngestResult,
-} from "./ingest";
+// Legacy parser & ingest exports
+export * from "./parser";
+export * from "./ingest";

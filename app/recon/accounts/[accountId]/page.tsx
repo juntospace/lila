@@ -19,6 +19,9 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 import { BackfillButton } from "./backfill-button";
 import { BGAchBatchRow } from "./bg-ach-batch-row";
+import { BgBatchList, type BgBatchView } from "./bg-batch-list";
+import { BgPendingTasksPanel } from "./bg-pending-tasks-panel";
+import { BgYappyPanel, type BgYappyBatchView } from "./bg-yappy-panel";
 import { BulkActionBar } from "./bulk-action-bar";
 import { BulkConfirmBatchButton } from "./bulk-confirm-batch-button";
 import { BulkSelectionProvider } from "./bulk-selection-context";
@@ -564,6 +567,126 @@ export default async function AccountDetailPage({
     achBatches.push(...byBatch.values());
   }
 
+  const bgBatches: BgBatchView[] = [];
+  const bgYappyBatches: BgYappyBatchView[] = [];
+  const bgPendingTasks: Array<{
+    task_type: "missing_statement" | "missing_ach_detail" | "missing_yappy_report";
+    missing_item: string;
+    details: string | null;
+    affects_uid: string;
+    amount_minor: bigint | number | string | null;
+  }> = [];
+  const bgAlerts: Array<{
+    message: string;
+    severity: "info" | "warn" | "error";
+  }> = [];
+  const bgCoverageDays: string[] = [];
+  const bgQuarantinedDays: string[] = [];
+  const bgProvisionalDays: string[] = [];
+
+  if (account.rail === "bg") {
+    const { data: bData } = await supabase
+      .from("recon_bg_batches")
+      .select("*")
+      .eq("account_id", accountId)
+      .eq("is_active", true)
+      .order("batch_date_str", { ascending: false });
+    if (bData) {
+      bgBatches.push(
+        ...bData.map((b) => ({
+          uid: b.batch_uid,
+          batchDateStr: b.batch_date_str,
+          batchName: b.batch_filename,
+          channel: b.channel,
+          fortnight: b.fortnight,
+          isDelinquent: b.is_delinquent,
+          retryCount: b.retry_count,
+          variant: b.variant as "A" | "B" | "PDF" | null,
+          effectiveDate: b.effective_date,
+          creditDate: b.credit_date,
+          totalTransactions: b.total_transactions,
+          succeededTransactions: b.succeeded_transactions,
+          declaredRejectedTransactions: b.declared_rejected_transactions,
+          rejectedRowsCount: b.rejected_rows_count ?? 0,
+          succeededRowsCount: b.succeeded_rows_count ?? 0,
+          totalAmountMinor: b.total_amount_minor != null ? BigInt(String(b.total_amount_minor)) : null,
+          rejectedAmountMinor: b.rejected_amount_minor != null ? BigInt(String(b.rejected_amount_minor)) : null,
+          succeededAmountMinor: b.succeeded_amount_minor != null ? BigInt(String(b.succeeded_amount_minor)) : null,
+          status: b.status as "settled" | "settled_no_reversals" | "pending" | "anomaly",
+          pendingReason: b.pending_reason,
+          creditMovUid: b.credit_mov_uid,
+          reversalsMovUids: b.reversals_mov_uids || [],
+        }))
+      );
+    }
+
+    const { data: yData } = await supabase
+      .from("recon_bg_yappy_batches")
+      .select("*")
+      .eq("account_id", accountId)
+      .eq("is_active", true)
+      .order("credit_date", { ascending: false });
+    if (yData) {
+      bgYappyBatches.push(
+        ...yData.map((yb) => ({
+          uid: yb.batch_uid,
+          creditDate: yb.credit_date,
+          transactionDate: yb.transaction_date,
+          declaredCount: yb.declared_count ?? 0,
+          reportCount: yb.report_count,
+          creditAmountMinor: BigInt(String(yb.credit_amount_minor)),
+          reportAmountMinor: yb.report_amount_minor != null ? BigInt(String(yb.report_amount_minor)) : null,
+          feeAmountMinor: yb.fee_amount_minor != null ? BigInt(String(yb.fee_amount_minor)) : null,
+          feeRate: yb.fee_rate,
+          status: yb.status as "settled" | "pending" | "anomaly",
+          pendingReason: yb.pending_reason,
+        }))
+      );
+    }
+
+    const { data: ptData } = await supabase
+      .from("recon_bg_pending_tasks")
+      .select("*")
+      .eq("account_id", accountId)
+      .eq("is_resolved", false);
+    if (ptData) {
+      bgPendingTasks.push(
+        ...ptData.map((pt) => ({
+          task_type: pt.task_type as "missing_statement" | "missing_ach_detail" | "missing_yappy_report",
+          missing_item: pt.missing_item,
+          details: pt.details,
+          affects_uid: pt.affects_uid || "",
+          amount_minor: pt.amount_minor != null ? BigInt(String(pt.amount_minor)) : null,
+        }))
+      );
+    }
+
+    const { data: alData } = await supabase
+      .from("recon_bg_audit_alerts")
+      .select("*")
+      .eq("account_id", accountId);
+    if (alData) {
+      bgAlerts.push(
+        ...alData.map((al) => ({
+          message: al.message,
+          severity: (al.severity === "error" ? "error" : al.severity === "warning" ? "warn" : "info") as "info" | "warn" | "error",
+        }))
+      );
+    }
+
+    const { data: covData } = await supabase
+      .from("recon_bg_coverage")
+      .select("*")
+      .eq("account_id", accountId);
+    if (covData) {
+      for (const cov of covData) {
+        if (cov.is_quarantined) bgQuarantinedDays.push(cov.coverage_date);
+        else if (cov.is_provisional) bgProvisionalDays.push(cov.coverage_date);
+        else bgCoverageDays.push(cov.coverage_date);
+      }
+    }
+  }
+
   // Surface a one-time hint if any rejected DAs in the system still have a
   // null return_code — the operator can backfill them via the button.
   const { count: nullDaCount } = await supabase
@@ -1044,9 +1167,25 @@ export default async function AccountDetailPage({
         );
       })()}
 
-      {/* BG-rail only: ACH Debit batches view. Each row is one batch
-          (per .txt file uploaded). Summary stats + expandable per-debtor
-          breakdown. Statement-lump pairing arrives in a later chunk. */}
+      {/* BG-rail CCBG v2 Reconciliation Panels */}
+      {account.rail === "bg" && (
+        <div className="mt-6 space-y-6">
+          {(bgPendingTasks.length > 0 || bgAlerts.length > 0 || bgQuarantinedDays.length > 0) && (
+            <BgPendingTasksPanel
+              pendingTasks={bgPendingTasks}
+              alerts={bgAlerts}
+              quarantinedDays={bgQuarantinedDays}
+              provisionalDays={bgProvisionalDays}
+            />
+          )}
+
+          {bgBatches.length > 0 && <BgBatchList batches={bgBatches} />}
+
+          {bgYappyBatches.length > 0 && <BgYappyPanel batches={bgYappyBatches} />}
+        </div>
+      )}
+
+      {/* BG-rail only: ACH Debit batches breakdown view */}
       {account.rail === "bg" && achBatches.length > 0 && (
         <Card className="mt-6 border-info/40">
           <CardHeader>

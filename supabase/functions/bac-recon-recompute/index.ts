@@ -1,7 +1,6 @@
 import "@supabase/functions-js/edge-runtime.d.ts";
 
-import { requireAuth } from "../bac-recon/auth.ts";
-import { getAdminClient } from "../bac-recon/storage.ts";
+import { requireAuth, getAdminClient } from "../_shared/auth.ts";
 import { recomputeAccount } from "../bac-recon/recompute.ts";
 
 const corsHeaders = {

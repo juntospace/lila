@@ -1,8 +1,17 @@
-import { createClient } from "npm:@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 
 export interface UserSession {
   userId: string;
   email?: string;
+}
+
+export function getAdminClient(): SupabaseClient {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  if (!supabaseUrl || !serviceKey) {
+    throw new Error("SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY environment variable missing");
+  }
+  return createClient(supabaseUrl, serviceKey);
 }
 
 export async function requireAuth(req: Request): Promise<UserSession> {
@@ -12,7 +21,6 @@ export async function requireAuth(req: Request): Promise<UserSession> {
   }
 
   const token = authHeader.replace(/^Bearer\s+/i, "").trim();
-
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
   const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
@@ -28,7 +36,7 @@ export async function requireAuth(req: Request): Promise<UserSession> {
           atob(base64)
             .split("")
             .map((c) => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
-            .join("")
+            .join(""),
         );
         const payload = JSON.parse(jsonPayload);
         if (payload.role === "service_role") {
@@ -53,7 +61,10 @@ export async function requireAuth(req: Request): Promise<UserSession> {
     global: { headers: { Authorization: authHeader } },
   });
 
-  const { data: { user }, error } = await supabase.auth.getUser();
+  const {
+    data: { user },
+    error,
+  } = await supabase.auth.getUser();
 
   if (error || !user) {
     throw new Error(`Authentication failed: ${error?.message || "Invalid token"}`);
@@ -64,3 +75,4 @@ export async function requireAuth(req: Request): Promise<UserSession> {
     email: user.email,
   };
 }
+
