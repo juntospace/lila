@@ -123,10 +123,25 @@ export type BGAchDetailIngestSurface = BGAchDetailIngestResult & {
   accountLabel?: string;
 };
 
+export type BGYappyIngestSurface = {
+  uploadId: string | null;
+  fileWasDuplicate: boolean;
+  rowsTotal: number;
+  rowsNew: number;
+  rowsDuplicate: number;
+  warnings: string[];
+  rail: "bg";
+  fileKind: "yappy";
+  accountLabel?: string;
+  settledYappy?: number;
+  totalYappy?: number;
+};
+
 export type UploadResultSurface =
   | BACIngestSurface
   | BGStatementIngestSurface
-  | BGAchDetailIngestSurface;
+  | BGAchDetailIngestSurface
+  | BGYappyIngestSurface;
 
 export type UploadActionState = {
   status: "idle" | "success" | "error";
@@ -320,7 +335,21 @@ export async function uploadStatement(
               ? { ...lastStatementResult, rail: "bg", fileKind: "statement", accountLabel }
               : lastAchDetailResult
                 ? { ...lastAchDetailResult, rail: "bg", fileKind: "ach_detail", accountLabel }
-                : undefined,
+                : yappyReports.length > 0
+                  ? {
+                      uploadId: null,
+                      fileWasDuplicate: false,
+                      rowsTotal: yappyReports.reduce((s, r) => s + r.rows.length, 0),
+                      rowsNew: yappyReports.reduce((s, r) => s + r.rows.length, 0),
+                      rowsDuplicate: 0,
+                      warnings: [],
+                      rail: "bg" as const,
+                      fileKind: "yappy" as const,
+                      accountLabel,
+                      settledYappy: edgeData.controls?.settledYappyBatchesCount || 0,
+                      totalYappy: edgeData.controls?.totalYappyBatchesCount || 0,
+                    }
+                  : undefined,
           };
         }
       } catch (edgeErr) {
@@ -352,6 +381,26 @@ export async function uploadStatement(
           status: "success",
           message: summaryMsg,
           result: { ...lastAchDetailResult, rail: "bg", fileKind: "ach_detail", accountLabel },
+        };
+      }
+      if (yappyReports.length > 0) {
+        const totalRows = yappyReports.reduce((s, r) => s + r.rows.length, 0);
+        return {
+          status: "success",
+          message: summaryMsg,
+          result: {
+            uploadId: null,
+            fileWasDuplicate: false,
+            rowsTotal: totalRows,
+            rowsNew: totalRows,
+            rowsDuplicate: 0,
+            warnings: [],
+            rail: "bg" as const,
+            fileKind: "yappy" as const,
+            accountLabel,
+            settledYappy: snapshot.controls.settledYappyBatchesCount,
+            totalYappy: snapshot.controls.totalYappyBatchesCount,
+          },
         };
       }
 

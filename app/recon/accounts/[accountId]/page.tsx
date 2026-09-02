@@ -21,7 +21,7 @@ import { BackfillButton } from "./backfill-button";
 import { BGAchBatchRow } from "./bg-ach-batch-row";
 import { BgBatchList, type BgBatchView } from "./bg-batch-list";
 import { BgPendingTasksPanel } from "./bg-pending-tasks-panel";
-import { BgYappyPanel, type BgYappyBatchView } from "./bg-yappy-panel";
+import { BgYappyPanel, type BgYappyBatchView, type BgYappyLineView } from "./bg-yappy-panel";
 import { BulkActionBar } from "./bulk-action-bar";
 import { BulkConfirmBatchButton } from "./bulk-confirm-batch-button";
 import { BulkSelectionProvider } from "./bulk-selection-context";
@@ -569,6 +569,7 @@ export default async function AccountDetailPage({
 
   const bgBatches: BgBatchView[] = [];
   const bgYappyBatches: BgYappyBatchView[] = [];
+  const bgYappyLines: BgYappyLineView[] = [];
   const bgPendingTasks: Array<{
     task_type: "missing_statement" | "missing_ach_detail" | "missing_yappy_report";
     missing_item: string;
@@ -640,6 +641,31 @@ export default async function AccountDetailPage({
           feeRate: yb.fee_rate,
           status: yb.status as "settled" | "pending" | "anomaly",
           pendingReason: yb.pending_reason,
+        }))
+      );
+    }
+
+    const { data: yLinesData } = await supabase
+      .from("recon_bg_yappy_lines")
+      .select("*")
+      .eq("account_id", accountId)
+      .eq("is_active", true)
+      .order("posted_date", { ascending: false });
+    if (yLinesData) {
+      bgYappyLines.push(
+        ...yLinesData.map((yl) => ({
+          uid: yl.line_uid,
+          postedDate: yl.posted_date,
+          postedTime: yl.posted_time || "",
+          reference: yl.reference,
+          clientName: yl.client_name || "",
+          phoneNumber: yl.phone_number || "",
+          comment: yl.comment || "",
+          amountMinor: BigInt(String(yl.amount_minor)),
+          bankStatus: yl.bank_status,
+          status: yl.status as "received" | "pending" | "in_transit" | "anomaly" | "other",
+          settlementBatchUid: yl.settlement_batch_uid,
+          settlementDate: yl.settlement_date,
         }))
       );
     }
@@ -1179,9 +1205,9 @@ export default async function AccountDetailPage({
             />
           )}
 
-          {bgBatches.length > 0 && <BgBatchList batches={bgBatches} />}
+          <BgBatchList batches={bgBatches} />
 
-          {bgYappyBatches.length > 0 && <BgYappyPanel batches={bgYappyBatches} />}
+          <BgYappyPanel batches={bgYappyBatches} lines={bgYappyLines} />
         </div>
       )}
 

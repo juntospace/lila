@@ -4,7 +4,7 @@ import Link from "next/link";
 import { OperatorShell } from "@/components/patterns/OperatorShell";
 import { Card, CardBody, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
 import { requireReconWriter } from "@/lib/auth/guard";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseServerClient, createSupabaseServiceClient } from "@/lib/supabase/server";
 
 import { AddAccountForm } from "./add-account-form";
 import { BulkExportForm } from "./bulk-export-form";
@@ -74,7 +74,7 @@ export default async function ReconUploadPage({
     supabase
       .from("recon_uploads")
       .select(
-        "id, uploaded_at, original_filename, storage_path, account_id, uploaded_by, status, rows_total, rows_new, rows_duplicate, date_range_start, date_range_end",
+        "id, uploaded_at, original_filename, file_sha256, storage_path, account_id, uploaded_by, status, rows_total, rows_new, rows_duplicate, date_range_start, date_range_end",
         { count: "exact" },
       )
       .order("uploaded_at", { ascending: false })
@@ -98,18 +98,48 @@ export default async function ReconUploadPage({
   }
 
   const activeAccounts: Account[] = accounts ?? [];
+  const adminSupabase = createSupabaseServiceClient();
   const recentUploads: RecentUpload[] = await Promise.all(
     (recents ?? []).map(async (u) => {
-      if (!u.storage_path) return u;
-      const { data } = await supabase.storage
-        .from("recon-statements")
-        .createSignedUrl(u.storage_path, 3600, {
-          download: u.original_filename ?? true,
-        });
-      return {
-        ...u,
-        download_url: data?.signedUrl ?? null,
-      };
+      let storagePath = u.storage_path;
+
+      // If storage_path is not populated, infer it from account_id and file_sha256
+      if (!storagePath && u.account_id && u.file_sha256) {
+        const ext = u.original_filename?.endsWith(".xls")
+          ? "xls"
+          : u.original_filename?.endsWith(".pdf")
+            ? "pdf"
+            : "xlsx";
+        storagePath = `${u.account_id}/${u.file_sha256}.${ext}`;
+      }
+
+      if (!storagePath) return u;
+
+      try {
+        const { data } = await adminSupabase.storage
+          .from("recon-statements")
+          .createSignedUrl(storagePath, 3600, {
+            download: u.original_filename ?? true,
+          });
+
+        if (data?.signedUrl) {
+          if (!u.storage_path) {
+            await adminSupabase
+              .from("recon_uploads")
+              .update({ storage_path: storagePath })
+              .eq("id", u.id);
+          }
+          return {
+            ...u,
+            storage_path: storagePath,
+            download_url: data.signedUrl,
+          };
+        }
+      } catch {
+        // ignore signed url error
+      }
+
+      return u;
     }),
   );
   const accountById = new Map(activeAccounts.map((a) => [a.id, a]));
@@ -137,30 +167,28 @@ export default async function ReconUploadPage({
   return (
     <OperatorShell session={session}>
       <header className="mb-8">
-        <p className="text-sm text-fg-muted">Reconciliation</p>
+        <p className="text-sm text-fg-muted">Conciliación</p>
         <h1 className="mt-1 font-display text-3xl font-semibold tracking-tight">
-          BAC bank statement upload
+          Carga de estados de cuenta y reportes
         </h1>
         <p className="mt-2 max-w-2xl text-sm text-fg-muted">
-          Upload an Excel export from BAC. The system parses transactions,
-          dedupes against prior uploads, pairs DVTO reversals back to their
-          originating ACH pulls, and confirms aged-out pending payments.
+          Sube archivos de extractos de cuenta, detalles ACH y reportes Yappy de BAC y Banco General.
+          El sistema analiza las transacciones, previene duplicados y concilia liquidaciones automáticamente.
         </p>
       </header>
 
       <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
         <Card>
           <CardHeader>
-            <CardTitle>New upload</CardTitle>
+            <CardTitle>Nueva carga</CardTitle>
             <CardDescription>
-              Pick the destination account and an Excel file. Same-bytes
-              re-uploads are silently absorbed.
+              Selecciona la cuenta de destino y los archivos correspondientes. Las recargas con los mismos bytes se absorben sin duplicar.
             </CardDescription>
           </CardHeader>
           <CardBody>
             {activeAccounts.length === 0 ? (
               <div className="rounded border border-warning/40 bg-warning-subtle p-4 text-sm text-fg">
-                No bank accounts yet. Add one on the right to get started.
+                Aún no hay cuentas bancarias registradas. Agrega una a la derecha para comenzar.
               </div>
             ) : (
               <UploadForm accounts={activeAccounts} />
@@ -170,8 +198,8 @@ export default async function ReconUploadPage({
 
         <Card>
           <CardHeader>
-            <CardTitle>Bank accounts</CardTitle>
-            <CardDescription>Add a new BAC account on this rail.</CardDescription>
+            <CardTitle>Cuentas bancarias</CardTitle>
+            <CardDescription>Cuentas activas en la plataforma.</CardDescription>
           </CardHeader>
           <CardBody className="space-y-4">
             {activeAccounts.length > 0 && (
@@ -198,15 +226,13 @@ export default async function ReconUploadPage({
 
       <section className="mt-10">
         <h2 className="font-display text-xl font-semibold tracking-tight">
-          Bulk export
+          Exportación masiva
         </h2>
         <Card className="mt-4">
           <CardBody>
             <p className="mb-4 text-sm text-fg-muted">
-              Download loan credits across all (or selected) bank accounts.
-              Defaults to rejected PRs from the last 30 days — what collections
-              typically wants to chase up. Adjust the filters and click
-              Download to get an .xlsx.
+              Descarga créditos de préstamos de todas las cuentas o de una en específico.
+              Por defecto filtra préstamos rechazados de los últimos 30 días para seguimiento de cobranza.
             </p>
             <BulkExportForm accounts={activeAccounts} />
           </CardBody>
@@ -215,13 +241,13 @@ export default async function ReconUploadPage({
 
       <section className="mt-10">
         <h2 className="font-display text-xl font-semibold tracking-tight">
-          Recent uploads
+          Cargas recientes
         </h2>
         <Card className="mt-4">
           <CardBody>
             {recentUploads.length === 0 ? (
               <p className="text-sm text-fg-muted">
-                No uploads yet — your first ingest will appear here.
+                Aún no hay cargas registradas — tu primera importación aparecerá aquí.
               </p>
             ) : (
               <>
@@ -229,14 +255,14 @@ export default async function ReconUploadPage({
                 <table className="w-full text-sm">
                   <thead className="text-left text-xs uppercase tracking-wide text-fg-subtle">
                     <tr>
-                      <th className="pb-3 pr-4">Uploaded</th>
-                      <th className="pb-3 pr-4">By</th>
-                      <th className="pb-3 pr-4">Account</th>
-                      <th className="pb-3 pr-4">File</th>
-                      <th className="pb-3 pr-4">Range</th>
-                      <th className="pb-3 pr-4 text-right">Rows</th>
-                      <th className="pb-3 pr-4">Status</th>
-                      <th className="pb-3 sr-only">Actions</th>
+                      <th className="pb-3 pr-4">Fecha Carga</th>
+                      <th className="pb-3 pr-4">Usuario</th>
+                      <th className="pb-3 pr-4">Cuenta</th>
+                      <th className="pb-3 pr-4">Archivo</th>
+                      <th className="pb-3 pr-4">Período</th>
+                      <th className="pb-3 pr-4 text-right">Filas</th>
+                      <th className="pb-3 pr-4">Estado</th>
+                      <th className="pb-3 sr-only">Acciones</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border-subtle">
@@ -304,9 +330,9 @@ export default async function ReconUploadPage({
               {totalPages > 1 || totalUploads > 10 ? (
                 <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-t border-border-subtle pt-4 text-xs text-fg-muted">
                   <div>
-                    Showing <span className="font-medium text-fg">{totalUploads === 0 ? 0 : from + 1}</span> to{" "}
-                    <span className="font-medium text-fg">{Math.min(to + 1, totalUploads)}</span> of{" "}
-                    <span className="font-medium text-fg">{totalUploads}</span> uploads
+                    Mostrando <span className="font-medium text-fg">{totalUploads === 0 ? 0 : from + 1}</span> a{" "}
+                    <span className="font-medium text-fg">{Math.min(to + 1, totalUploads)}</span> de{" "}
+                    <span className="font-medium text-fg">{totalUploads}</span> cargas
                   </div>
 
                   <div className="flex items-center gap-1.5">
@@ -316,12 +342,12 @@ export default async function ReconUploadPage({
                         className="inline-flex items-center gap-1 rounded border border-border-subtle bg-bg-raised px-2.5 py-1 text-xs font-medium text-fg transition-colors hover:border-border-strong hover:bg-bg-surface"
                       >
                         <ChevronLeft className="h-3.5 w-3.5" />
-                        Previous
+                        Anterior
                       </Link>
                     ) : (
                       <span className="inline-flex items-center gap-1 rounded border border-border-subtle/40 bg-bg-base/40 px-2.5 py-1 text-xs font-medium text-fg-subtle opacity-50 cursor-not-allowed">
                         <ChevronLeft className="h-3.5 w-3.5" />
-                        Previous
+                        Anterior
                       </span>
                     )}
 
@@ -355,12 +381,12 @@ export default async function ReconUploadPage({
                         href={getPageUrl(page + 1, perPage)}
                         className="inline-flex items-center gap-1 rounded border border-border-subtle bg-bg-raised px-2.5 py-1 text-xs font-medium text-fg transition-colors hover:border-border-strong hover:bg-bg-surface"
                       >
-                        Next
+                        Siguiente
                         <ChevronRight className="h-3.5 w-3.5" />
                       </Link>
                     ) : (
                       <span className="inline-flex items-center gap-1 rounded border border-border-subtle/40 bg-bg-base/40 px-2.5 py-1 text-xs font-medium text-fg-subtle opacity-50 cursor-not-allowed">
-                        Next
+                        Siguiente
                         <ChevronRight className="h-3.5 w-3.5" />
                       </span>
                     )}
@@ -383,9 +409,19 @@ function StatusBadge({ status }: { status: string }) {
       : status === "failed"
         ? "bg-danger-subtle text-danger"
         : "bg-info-subtle text-info";
+
+  const label =
+    status === "committed"
+      ? "Procesado"
+      : status === "failed"
+        ? "Fallido"
+        : status === "parsed"
+          ? "Leído"
+          : status;
+
   return (
-    <span className={`rounded px-2 py-0.5 text-xs capitalize ${tone}`}>
-      {status}
+    <span className={`rounded px-2 py-0.5 text-xs font-medium capitalize ${tone}`}>
+      {label}
     </span>
   );
 }

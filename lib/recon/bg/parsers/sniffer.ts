@@ -77,7 +77,12 @@ export function detectAndParseBgFile(
       ) {
         return parseBgAchDetail(fileBytesOrBuffer, filename);
       }
-      if (blob.includes("Punto de cobro") || blob.includes("Yappy") || blob.includes("@financieracrediclaro")) {
+      if (
+        /punto de cobro/i.test(blob) ||
+        /yappy/i.test(blob) ||
+        /financieracrediclaro/i.test(blob) ||
+        /yappy/i.test(filename)
+      ) {
         return parseBgYappyReport(fileBytesOrBuffer, filename);
       }
       if (
@@ -128,9 +133,11 @@ export function detectAndParseBgFile(
     return parseBgAchDetail(ws, filename);
   }
   if (
-    blob.includes("Punto de cobro") ||
-    blob.includes("@financieracrediclaro") ||
-    sheetName.includes("Yappy")
+    /punto de cobro/i.test(blob) ||
+    /financieracrediclaro/i.test(blob) ||
+    /yappy/i.test(sheetName) ||
+    /yappy/i.test(blob) ||
+    /yappy/i.test(filename)
   ) {
     return parseBgYappyReport(ws, filename);
   }

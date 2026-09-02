@@ -31,6 +31,7 @@ export interface BGStatementIngestArgs {
   fileBytes: Uint8Array;
   originalFilename: string;
   uploadedBy?: string | null;
+  storagePath?: string | null;
   parseResult: BGStatementParseResult;
 }
 
@@ -52,6 +53,7 @@ export interface BGAchDetailIngestArgs {
   fileBytes: Uint8Array;
   originalFilename: string;
   uploadedBy?: string | null;
+  storagePath?: string | null;
   parseResult: BGAchDetailParseResult;
 }
 
@@ -87,6 +89,7 @@ export async function ingestBGStatementFile(
     account_id: accountId,
     method: "statement_bg_excel",
     file_sha256: fileSha256,
+    storage_path: args.storagePath ?? null,
     original_filename: originalFilename,
     uploaded_by: uploadedBy ?? null,
     date_range_start: header.dateRangeStart || null,
@@ -104,6 +107,13 @@ export async function ingestBGStatementFile(
     .single();
   if (insertErr) {
     if (insertErr.code === "23505") {
+      if (args.storagePath) {
+        await supabase
+          .from("recon_uploads")
+          .update({ storage_path: args.storagePath })
+          .eq("account_id", accountId)
+          .eq("file_sha256", fileSha256);
+      }
       return {
         uploadId: null,
         fileWasDuplicate: true,
@@ -239,6 +249,7 @@ export async function ingestBGAchDetailFile(
     account_id: accountId,
     method: "ach_detail_bg_excel",
     file_sha256: fileSha256,
+    storage_path: args.storagePath ?? null,
     original_filename: originalFilename,
     uploaded_by: uploadedBy ?? null,
     date_range_start: envelope.effectiveDate,
@@ -256,6 +267,13 @@ export async function ingestBGAchDetailFile(
     .single();
   if (insertErr) {
     if (insertErr.code === "23505") {
+      if (args.storagePath) {
+        await supabase
+          .from("recon_uploads")
+          .update({ storage_path: args.storagePath })
+          .eq("account_id", accountId)
+          .eq("file_sha256", fileSha256);
+      }
       return {
         uploadId: null,
         fileWasDuplicate: true,

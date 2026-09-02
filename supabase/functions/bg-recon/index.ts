@@ -56,10 +56,10 @@ export default {
 
             const parsed = detectAndParseBgFile(buf, value.name);
             if (parsed) {
-              let uploadMethod: "bank_portal_excel" | "ach_detail_excel" | "yappy_bg_excel" = "bank_portal_excel";
+              let uploadMethod: "statement_bg_excel" | "ach_detail_bg_excel" | "yappy_bg_excel" = "statement_bg_excel";
 
               if (parsed.fileType === "statement") {
-                uploadMethod = "bank_portal_excel";
+                uploadMethod = "statement_bg_excel";
                 statements.push(parsed);
                 parsedFilesSummary.push({
                   filename: value.name,
@@ -67,7 +67,7 @@ export default {
                   rowsCount: parsed.rows.length,
                 });
               } else if (parsed.fileType === "ach_detail") {
-                uploadMethod = "ach_detail_excel";
+                uploadMethod = "ach_detail_bg_excel";
                 achDetails.push(parsed);
                 parsedFilesSummary.push({
                   filename: value.name,
@@ -90,7 +90,6 @@ export default {
                   account_id: accountId,
                   original_filename: value.name,
                   file_sha256: sha,
-                  file_bytes: buf.length,
                   uploaded_by: session.userId,
                   storage_path: storagePath,
                   method: uploadMethod,

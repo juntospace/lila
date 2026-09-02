@@ -108,6 +108,9 @@ function ResultPanel({
       {result.rail === "bg" && result.fileKind === "ach_detail" && (
         <BGAchDetailStats result={result} />
       )}
+      {result.rail === "bg" && result.fileKind === "yappy" && (
+        <BGYappyStats result={result} />
+      )}
 
       {result.warnings.length > 0 && (
         <ul className="mt-3 list-disc space-y-1 pl-5 text-xs text-warning">
@@ -254,6 +257,31 @@ function BGAchDetailStats({
           value={result.rejectedRows}
           tone={result.rejectedRows > 0 ? "warning" : "muted"}
         />
+        {result.fileWasDuplicate && (
+          <Stat label="File" value="duplicate" tone="warning" />
+        )}
+      </dl>
+    </>
+  );
+}
+
+function BGYappyStats({
+  result,
+}: {
+  result: Extract<
+    NonNullable<UploadActionState["result"]>,
+    { rail: "bg"; fileKind: "yappy" }
+  >;
+}) {
+  return (
+    <>
+      <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4">
+        <Stat label="Transactions total" value={result.rowsTotal} />
+        <Stat label="New" value={result.rowsNew} tone="success" />
+        <Stat label="Duplicate" value={result.rowsDuplicate} tone="muted" />
+        {result.settledYappy != null && (
+          <Stat label="Settled deposits" value={result.settledYappy} tone="success" />
+        )}
         {result.fileWasDuplicate && (
           <Stat label="File" value="duplicate" tone="warning" />
         )}
