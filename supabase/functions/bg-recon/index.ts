@@ -58,9 +58,16 @@ export default {
             if (parsed) {
               let uploadMethod: "statement_bg_excel" | "ach_detail_bg_excel" | "yappy_bg_excel" = "statement_bg_excel";
 
+              let startDate: string | null = null;
+              let endDate: string | null = null;
+              let rowsCount = 0;
+
               if (parsed.fileType === "statement") {
                 uploadMethod = "statement_bg_excel";
                 statements.push(parsed);
+                startDate = parsed.startDate || null;
+                endDate = parsed.endDate || null;
+                rowsCount = parsed.rows.length;
                 parsedFilesSummary.push({
                   filename: value.name,
                   fileType: "statement",
@@ -69,6 +76,9 @@ export default {
               } else if (parsed.fileType === "ach_detail") {
                 uploadMethod = "ach_detail_bg_excel";
                 achDetails.push(parsed);
+                startDate = parsed.effectiveDate || parsed.batchDate || null;
+                endDate = startDate;
+                rowsCount = parsed.rows.length;
                 parsedFilesSummary.push({
                   filename: value.name,
                   fileType: "ach_detail",
@@ -77,6 +87,12 @@ export default {
               } else if (parsed.fileType === "yappy") {
                 uploadMethod = "yappy_bg_excel";
                 yappyReports.push(parsed);
+                if (parsed.rows.length > 0) {
+                  const sortedDates = parsed.rows.map((r) => r.date).filter(Boolean).sort();
+                  startDate = sortedDates[0] || null;
+                  endDate = sortedDates[sortedDates.length - 1] || null;
+                }
+                rowsCount = parsed.rows.length;
                 parsedFilesSummary.push({
                   filename: value.name,
                   fileType: "yappy",
@@ -93,6 +109,12 @@ export default {
                   uploaded_by: session.userId,
                   storage_path: storagePath,
                   method: uploadMethod,
+                  rows_total: rowsCount,
+                  rows_new: rowsCount,
+                  rows_duplicate: 0,
+                  date_range_start: startDate,
+                  date_range_end: endDate,
+                  status: "committed",
                 },
                 { onConflict: "account_id,file_sha256" },
               );

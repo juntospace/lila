@@ -1,5 +1,6 @@
 "use server";
 
+import { createHash } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import * as XLSX from "xlsx";
 import { z } from "zod";
@@ -251,8 +252,18 @@ export async function uploadStatement(
         continue;
       }
 
+      const sha = createHash("sha256").update(bytes).digest("hex");
+      let startDate: string | null = null;
+      let endDate: string | null = null;
+      let rowsCount = 0;
+      let uploadMethod: "statement_bg_excel" | "ach_detail_bg_excel" | "yappy_bg_excel" = "statement_bg_excel";
+
       if (parsed.fileType === "statement") {
+        uploadMethod = "statement_bg_excel";
         statements.push(parsed);
+        startDate = parsed.startDate || null;
+        endDate = parsed.endDate || null;
+        rowsCount = parsed.rows.length;
         // Also ingest to legacy table if it has BGPCheckingMovementsExcel structure
         try {
           const wb = XLSX.read(bytes, { type: "array", cellDates: true });
@@ -272,7 +283,11 @@ export async function uploadStatement(
           // ignore legacy ingest errors
         }
       } else if (parsed.fileType === "ach_detail") {
+        uploadMethod = "ach_detail_bg_excel";
         achDetails.push(parsed);
+        startDate = parsed.effectiveDate || parsed.batchDate || null;
+        endDate = startDate;
+        rowsCount = parsed.rows.length;
         try {
           const wb = XLSX.read(bytes, { type: "array", cellDates: true });
           if (isBGAchDetailSheet(wb)) {
@@ -291,8 +306,33 @@ export async function uploadStatement(
           // ignore legacy ingest errors
         }
       } else if (parsed.fileType === "yappy") {
+        uploadMethod = "yappy_bg_excel";
         yappyReports.push(parsed);
+        if (parsed.rows.length > 0) {
+          const sortedDates = parsed.rows.map((r) => r.date).filter(Boolean).sort();
+          startDate = sortedDates[0] || null;
+          endDate = sortedDates[sortedDates.length - 1] || null;
+        }
+        rowsCount = parsed.rows.length;
       }
+
+      // Ensure recon_uploads record has full metadata and committed status
+      await supabase.from("recon_uploads").upsert(
+        {
+          account_id: account.id,
+          original_filename: f.name,
+          file_sha256: sha,
+          uploaded_by: session.userId,
+          method: uploadMethod,
+          rows_total: rowsCount,
+          rows_new: rowsCount,
+          rows_duplicate: 0,
+          date_range_start: startDate,
+          date_range_end: endDate,
+          status: "committed",
+        },
+        { onConflict: "account_id,file_sha256" },
+      );
     }
 
     if (statements.length > 0 || achDetails.length > 0 || yappyReports.length > 0) {
