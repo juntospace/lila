@@ -1211,7 +1211,12 @@ export default async function AccountDetailPage({
 
           <BgBatchList batches={bgBatches} />
 
-          <BgYappyPanel accountId={accountId} batches={bgYappyBatches} lines={bgYappyLines} />
+          <BgYappyPanel
+            accountId={accountId}
+            batches={bgYappyBatches}
+            lines={bgYappyLines}
+            dateFilter={{ from, to }}
+          />
         </div>
       )}
 

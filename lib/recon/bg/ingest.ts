@@ -76,6 +76,37 @@ function computeFileSha256(bytes: Uint8Array): string {
 // Statement
 // =============================================================
 
+export function classifyBGStatementRow(row: {
+  code: string;
+  description: string;
+  creditMinor: bigint;
+}): { kind: string; state: string } {
+  const desc = (row.description || "").toUpperCase();
+  const isBatchOrYappy =
+    desc.startsWith("DEPOSITO YAPPY") || desc.startsWith("LOTE ACH BG");
+  const rawKind = classifyBGCode(row.code);
+  const kind = isBatchOrYappy ? "non_loan" : rawKind;
+
+  // In BG statements:
+  //   - non_loan (fees, operational debits, aggregate Yappy/ACH batch credits): "non_loan"
+  //   - direct transfer credits (2627 web, 2626 mobile, 48 ACH incoming client transfers): "confirmed"
+  //   - unassigned/bare deposits (e.g. counter deposit code 40) or unknown codes: "pending" (awaits operator matching)
+  const isConfirmedTransfer =
+    row.creditMinor > 0n &&
+    (row.code === "2627" ||
+      row.code === "2626" ||
+      (row.code === "48" && !desc.startsWith("DEPOSITO") && !desc.startsWith("LOTE")));
+
+  const state =
+    kind === "non_loan"
+      ? "non_loan"
+      : isConfirmedTransfer
+        ? "confirmed"
+        : "pending";
+
+  return { kind, state };
+}
+
 export async function ingestBGStatementFile(
   args: BGStatementIngestArgs,
 ): Promise<BGStatementIngestResult> {
@@ -153,16 +184,16 @@ export async function ingestBGStatementFile(
   let nonLoanRows = 0;
   let unknownCodeRows = 0;
   const txnsToInsert: BgTxnInsert[] = rows.map((r) => {
-    const kind = classifyBGCode(r.code);
+    const { kind, state } = classifyBGStatementRow({
+      code: r.code,
+      description: r.description,
+      creditMinor: r.creditMinor,
+    });
+
     if (kind === "loan_inflow") loanInflowRows++;
     else if (kind === "non_loan") nonLoanRows++;
     else unknownCodeRows++;
-    // BG statement rows are individually committed when they post:
-    //   - loan_inflow → "pending" (awaits operator matching to a loan;
-    //     chunk 3 will move them to a confirmed/rejected state)
-    //   - non_loan    → "non_loan" (never reconciled)
-    //   - unknown     → "pending" (so it surfaces in the UI for review)
-    const state = kind === "non_loan" ? "non_loan" : "pending";
+
     return {
       upload_id: uploadId,
       account_id: accountId,

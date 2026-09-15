@@ -4,6 +4,7 @@ import {
   BG_KNOWN_CODES,
   BGParseError,
   classifyBGCode,
+  classifyBGStatementRow,
   computeBGAchDetailRowHash,
   computeBGStatementRowHash,
   parseAchError,
@@ -36,6 +37,72 @@ describe("classifyBGCode", () => {
     expect([...BG_KNOWN_CODES].sort()).toEqual(
       ["2519", "2520", "2626", "2627", "40", "48", "50", "55"],
     );
+  });
+});
+
+describe("classifyBGStatementRow", () => {
+  it("marks confirmed direct transfers as loan_inflow + confirmed", () => {
+    expect(
+      classifyBGStatementRow({
+        code: "2627",
+        description: "BANCA EN LINEA TRANSFERENCIA DE JUAN",
+        creditMinor: 10000n,
+      }),
+    ).toEqual({ kind: "loan_inflow", state: "confirmed" });
+
+    expect(
+      classifyBGStatementRow({
+        code: "2626",
+        description: "BANCA MOVIL TRANSFERENCIA DE MARIA",
+        creditMinor: 5000n,
+      }),
+    ).toEqual({ kind: "loan_inflow", state: "confirmed" });
+
+    expect(
+      classifyBGStatementRow({
+        code: "48",
+        description: "ACH - PEDRO PEREZ",
+        creditMinor: 15000n,
+      }),
+    ).toEqual({ kind: "loan_inflow", state: "confirmed" });
+  });
+
+  it("marks aggregate batch deposits (Yappy / Lote ACH) as non_loan", () => {
+    expect(
+      classifyBGStatementRow({
+        code: "40",
+        description: "DEPOSITO YAPPY - financieracrediclaro (14 TRANSACCIONES)",
+        creditMinor: 50000n,
+      }),
+    ).toEqual({ kind: "non_loan", state: "non_loan" });
+
+    expect(
+      classifyBGStatementRow({
+        code: "48",
+        description: "LOTE ACH BG 30 CREDICLARO",
+        creditMinor: 80000n,
+      }),
+    ).toEqual({ kind: "non_loan", state: "non_loan" });
+  });
+
+  it("marks unassigned deposits as pending loan_inflow", () => {
+    expect(
+      classifyBGStatementRow({
+        code: "40",
+        description: "DEPOSITO",
+        creditMinor: 2000n,
+      }),
+    ).toEqual({ kind: "loan_inflow", state: "pending" });
+  });
+
+  it("marks outbound fees and debits as non_loan", () => {
+    expect(
+      classifyBGStatementRow({
+        code: "50",
+        description: "COMISION BANCARIA",
+        creditMinor: 0n,
+      }),
+    ).toEqual({ kind: "non_loan", state: "non_loan" });
   });
 });
 

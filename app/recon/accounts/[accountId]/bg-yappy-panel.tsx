@@ -52,18 +52,38 @@ interface Props {
   accountId?: string;
   batches: BgYappyBatchView[];
   lines?: BgYappyLineView[];
+  dateFilter?: { from?: string; to?: string };
 }
 
-export function BgYappyPanel({ accountId, batches, lines = [] }: Props) {
+export function BgYappyPanel({ accountId, batches, lines = [], dateFilter }: Props) {
   const [activeTab, setActiveTab] = useState<"batches" | "lines">("batches");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [selectedDate, setSelectedDate] = useState<string>("");
   const [searchQuery, setSearchQuery] = useState<string>("");
+  const [overrideDateFilter, setOverrideDateFilter] = useState<boolean>(false);
 
-  const settledBatchesCount = batches.filter((b) => b.status === "settled").length;
-  const receivedLinesCount = lines.filter((l) => l.status === "received").length;
-  const inTransitLinesCount = lines.filter((l) => l.status === "in_transit").length;
-  const pendingLinesCount = lines.filter((l) => l.status === "pending").length;
+  const effectiveFrom = !overrideDateFilter ? dateFilter?.from : undefined;
+  const effectiveTo = !overrideDateFilter ? dateFilter?.to : undefined;
+  const hasActiveDateFilter = Boolean(effectiveFrom || effectiveTo);
+
+  const visibleBatches = useMemo(() => {
+    if (!effectiveFrom && !effectiveTo) return batches;
+    return batches.filter((b) => {
+      if (effectiveFrom) {
+        const matchesCredit = b.creditDate >= effectiveFrom;
+        const matchesTx = b.transactionDate ? b.transactionDate >= effectiveFrom : false;
+        if (!matchesCredit && !matchesTx) return false;
+      }
+      if (effectiveTo) {
+        const matchesCredit = b.creditDate <= effectiveTo;
+        const matchesTx = b.transactionDate ? b.transactionDate <= effectiveTo : false;
+        if (!matchesCredit && !matchesTx) return false;
+      }
+      return true;
+    });
+  }, [batches, effectiveFrom, effectiveTo]);
+
+  const settledBatchesCount = visibleBatches.filter((b) => b.status === "settled").length;
 
   // List of distinct dates present in lines, sorted descending
   const availableDates = useMemo(() => {
@@ -82,7 +102,20 @@ export function BgYappyPanel({ accountId, batches, lines = [] }: Props) {
     const query = searchQuery.trim().toLowerCase();
     return lines.filter((l) => {
       if (statusFilter !== "all" && l.status !== statusFilter) return false;
-      if (selectedDate && l.postedDate !== selectedDate) return false;
+      if (selectedDate) {
+        if (l.postedDate !== selectedDate) return false;
+      } else if (effectiveFrom || effectiveTo) {
+        if (effectiveFrom) {
+          const matchPosted = l.postedDate >= effectiveFrom;
+          const matchSettled = l.settlementDate ? l.settlementDate >= effectiveFrom : false;
+          if (!matchPosted && !matchSettled) return false;
+        }
+        if (effectiveTo) {
+          const matchPosted = l.postedDate <= effectiveTo;
+          const matchSettled = l.settlementDate ? l.settlementDate <= effectiveTo : false;
+          if (!matchPosted && !matchSettled) return false;
+        }
+      }
       if (query) {
         const matchesClient = (l.clientName || "").toLowerCase().includes(query);
         const matchesPhone = (l.phoneNumber || "").toLowerCase().includes(query);
@@ -94,7 +127,11 @@ export function BgYappyPanel({ accountId, batches, lines = [] }: Props) {
       }
       return true;
     });
-  }, [lines, statusFilter, selectedDate, searchQuery]);
+  }, [lines, statusFilter, selectedDate, effectiveFrom, effectiveTo, searchQuery]);
+
+  const receivedLinesCount = filteredLines.filter((l) => l.status === "received").length;
+  const inTransitLinesCount = filteredLines.filter((l) => l.status === "in_transit").length;
+  const pendingLinesCount = filteredLines.filter((l) => l.status === "pending").length;
 
   const totalFilteredAmountMinor = useMemo(() => {
     return filteredLines.reduce((sum, l) => sum + l.amountMinor, 0n);
@@ -130,8 +167,34 @@ export function BgYappyPanel({ accountId, batches, lines = [] }: Props) {
               <Smartphone className="h-5 w-5 text-indigo-500" />
               <CardTitle>Liquidaciones Yappy T+1</CardTitle>
             </div>
-            <CardDescription className="mt-1">
-              Depósitos consolidados de Yappy conciliados contra el reporte diario de transacciones (T+1 incluyendo fines de semana).
+            <CardDescription className="mt-1 flex flex-wrap items-center gap-2">
+              <span>Depósitos consolidados de Yappy conciliados contra el reporte diario de transacciones (T+1).</span>
+              {hasActiveDateFilter && (
+                <span className="inline-flex items-center gap-1.5 rounded-md bg-brand-500/10 px-2 py-0.5 text-xs font-medium text-brand-500">
+                  <Calendar className="h-3 w-3" />
+                  <span>Filtrado por fecha consultada: <strong>{effectiveFrom}{effectiveTo && effectiveTo !== effectiveFrom ? ` → ${effectiveTo}` : ""}</strong></span>
+                  <button
+                    type="button"
+                    onClick={() => setOverrideDateFilter(true)}
+                    className="ml-1 text-xs underline hover:text-brand-600"
+                    title="Ver todo el historial de Yappy"
+                  >
+                    (Ver todo)
+                  </button>
+                </span>
+              )}
+              {overrideDateFilter && dateFilter && (
+                <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                  <span>(Mostrando todo el historial)</span>
+                  <button
+                    type="button"
+                    onClick={() => setOverrideDateFilter(false)}
+                    className="text-brand-500 underline hover:text-brand-600"
+                  >
+                    Restaurar filtro de fecha
+                  </button>
+                </span>
+              )}
             </CardDescription>
           </div>
 
@@ -147,7 +210,7 @@ export function BgYappyPanel({ accountId, batches, lines = [] }: Props) {
                 }`}
               >
                 <Layers className="h-3.5 w-3.5" />
-                <span>Lotes ({settledBatchesCount}/{batches.length})</span>
+                <span>Lotes ({settledBatchesCount}/{visibleBatches.length})</span>
               </button>
               <button
                 type="button"
@@ -159,7 +222,7 @@ export function BgYappyPanel({ accountId, batches, lines = [] }: Props) {
                 }`}
               >
                 <ListFilter className="h-3.5 w-3.5" />
-                <span>Transacciones ({lines.length})</span>
+                <span>Transacciones ({filteredLines.length})</span>
               </button>
             </div>
           </div>
@@ -167,7 +230,7 @@ export function BgYappyPanel({ accountId, batches, lines = [] }: Props) {
       </CardHeader>
       <CardBody>
         {activeTab === "batches" ? (
-          batches.length === 0 ? (
+          visibleBatches.length === 0 ? (
             <p className="py-4 text-sm text-muted-foreground">No hay depósitos Yappy registrados.</p>
           ) : (
             <div className="overflow-x-auto">
@@ -185,7 +248,7 @@ export function BgYappyPanel({ accountId, batches, lines = [] }: Props) {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {batches.map((batch) => {
+                  {visibleBatches.map((batch) => {
                     const isSettled = batch.status === "settled";
                     const isPending = batch.status === "pending";
                     const isAnomaly = batch.status === "anomaly";
