@@ -13,6 +13,8 @@ import {
   Download,
   Calendar,
   ArrowRight,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 
 import { Card, CardBody, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
@@ -55,32 +57,44 @@ interface Props {
   dateFilter?: { from?: string; to?: string };
 }
 
+function getExpectedSettlementDate(postedDate: string): string {
+  try {
+    const [y, m, d] = postedDate.split("-").map(Number);
+    const date = new Date(Date.UTC(y, m - 1, d));
+    date.setUTCDate(date.getUTCDate() + 1);
+    return date.toISOString().slice(0, 10);
+  } catch {
+    return postedDate;
+  }
+}
+
 export function BgYappyPanel({ accountId, batches, lines = [], dateFilter }: Props) {
   const [activeTab, setActiveTab] = useState<"batches" | "lines">("batches");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [selectedDate, setSelectedDate] = useState<string>("");
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [overrideDateFilter, setOverrideDateFilter] = useState<boolean>(false);
+  const [isPanelCollapsed, setIsPanelCollapsed] = useState<boolean>(false);
 
   const effectiveFrom = !overrideDateFilter ? dateFilter?.from : undefined;
   const effectiveTo = !overrideDateFilter ? dateFilter?.to : undefined;
   const hasActiveDateFilter = Boolean(effectiveFrom || effectiveTo);
 
   const visibleBatches = useMemo(() => {
-    if (!effectiveFrom && !effectiveTo) return batches;
-    return batches.filter((b) => {
-      if (effectiveFrom) {
-        const matchesCredit = b.creditDate >= effectiveFrom;
-        const matchesTx = b.transactionDate ? b.transactionDate >= effectiveFrom : false;
-        if (!matchesCredit && !matchesTx) return false;
-      }
-      if (effectiveTo) {
-        const matchesCredit = b.creditDate <= effectiveTo;
-        const matchesTx = b.transactionDate ? b.transactionDate <= effectiveTo : false;
-        if (!matchesCredit && !matchesTx) return false;
-      }
-      return true;
-    });
+    let list = batches;
+    if (effectiveFrom || effectiveTo) {
+      list = list.filter((b) => {
+        const matchesCredit =
+          (!effectiveFrom || b.creditDate >= effectiveFrom) &&
+          (!effectiveTo || b.creditDate <= effectiveTo);
+        const matchesTx =
+          b.transactionDate != null &&
+          (!effectiveFrom || b.transactionDate >= effectiveFrom) &&
+          (!effectiveTo || b.transactionDate <= effectiveTo);
+        return matchesCredit || matchesTx;
+      });
+    }
+    return [...list].sort((a, b) => b.creditDate.localeCompare(a.creditDate));
   }, [batches, effectiveFrom, effectiveTo]);
 
   const settledBatchesCount = visibleBatches.filter((b) => b.status === "settled").length;
@@ -100,21 +114,19 @@ export function BgYappyPanel({ accountId, batches, lines = [], dateFilter }: Pro
 
   const filteredLines = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
-    return lines.filter((l) => {
+    const filtered = lines.filter((l) => {
       if (statusFilter !== "all" && l.status !== statusFilter) return false;
       if (selectedDate) {
         if (l.postedDate !== selectedDate) return false;
       } else if (effectiveFrom || effectiveTo) {
-        if (effectiveFrom) {
-          const matchPosted = l.postedDate >= effectiveFrom;
-          const matchSettled = l.settlementDate ? l.settlementDate >= effectiveFrom : false;
-          if (!matchPosted && !matchSettled) return false;
-        }
-        if (effectiveTo) {
-          const matchPosted = l.postedDate <= effectiveTo;
-          const matchSettled = l.settlementDate ? l.settlementDate <= effectiveTo : false;
-          if (!matchPosted && !matchSettled) return false;
-        }
+        const targetSettlement = l.settlementDate || getExpectedSettlementDate(l.postedDate);
+        const postedInRange =
+          (!effectiveFrom || l.postedDate >= effectiveFrom) &&
+          (!effectiveTo || l.postedDate <= effectiveTo);
+        const settlementInRange =
+          (!effectiveFrom || targetSettlement >= effectiveFrom) &&
+          (!effectiveTo || targetSettlement <= effectiveTo);
+        if (!postedInRange && !settlementInRange) return false;
       }
       if (query) {
         const matchesClient = (l.clientName || "").toLowerCase().includes(query);
@@ -126,6 +138,12 @@ export function BgYappyPanel({ accountId, batches, lines = [], dateFilter }: Pro
         }
       }
       return true;
+    });
+
+    return [...filtered].sort((a, b) => {
+      const cmpDate = b.postedDate.localeCompare(a.postedDate);
+      if (cmpDate !== 0) return cmpDate;
+      return (b.postedTime || "").localeCompare(a.postedTime || "");
     });
   }, [lines, statusFilter, selectedDate, effectiveFrom, effectiveTo, searchQuery]);
 
@@ -225,10 +243,24 @@ export function BgYappyPanel({ accountId, batches, lines = [], dateFilter }: Pro
                 <span>Transacciones ({filteredLines.length})</span>
               </button>
             </div>
+            <button
+              type="button"
+              onClick={() => setIsPanelCollapsed(!isPanelCollapsed)}
+              className="inline-flex items-center gap-1 rounded p-1 text-xs text-muted-foreground hover:bg-muted/40 hover:text-foreground transition-colors"
+              title={isPanelCollapsed ? "Expandir panel de Yappy" : "Contraer panel de Yappy"}
+            >
+              <span className="text-xs font-medium">{isPanelCollapsed ? "Expandir" : "Contraer"}</span>
+              {isPanelCollapsed ? (
+                <ChevronDown className="h-4 w-4" />
+              ) : (
+                <ChevronUp className="h-4 w-4" />
+              )}
+            </button>
           </div>
         </div>
       </CardHeader>
-      <CardBody>
+      {!isPanelCollapsed && (
+        <CardBody>
         {activeTab === "batches" ? (
           visibleBatches.length === 0 ? (
             <p className="py-4 text-sm text-muted-foreground">No hay depósitos Yappy registrados.</p>
@@ -581,6 +613,7 @@ export function BgYappyPanel({ accountId, batches, lines = [], dateFilter }: Pro
           </div>
         )}
       </CardBody>
+      )}
     </Card>
   );
 }

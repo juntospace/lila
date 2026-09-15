@@ -1,6 +1,7 @@
 "use client";
 
-import { CheckCircle2, Clock, AlertTriangle, Layers } from "lucide-react";
+import { useState } from "react";
+import { CheckCircle2, Clock, AlertTriangle, Layers, ChevronDown, ChevronUp } from "lucide-react";
 
 import { Card, CardBody, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
 import { formatMinorUSD } from "@/lib/recon/format";
@@ -37,6 +38,8 @@ interface Props {
 }
 
 export function BgBatchList({ batches }: Props) {
+  const [isCollapsed, setIsCollapsed] = useState<boolean>(false);
+
   return (
     <Card>
       <CardHeader>
@@ -45,15 +48,27 @@ export function BgBatchList({ batches }: Props) {
             <Layers className="h-5 w-5 text-blue-500" />
             <CardTitle>Lotes de Cobro ACH (Banco General)</CardTitle>
           </div>
-          <span className="text-xs text-muted-foreground">
-            {batches.filter((b) => b.status === "settled" || b.status === "settled_no_reversals").length} de {batches.length} liquidados
-          </span>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-muted-foreground">
+              {batches.filter((b) => b.status === "settled" || b.status === "settled_no_reversals").length} de {batches.length} liquidados
+            </span>
+            <button
+              type="button"
+              onClick={() => setIsCollapsed(!isCollapsed)}
+              className="inline-flex items-center gap-1 rounded p-1 text-xs text-muted-foreground hover:bg-muted/40 hover:text-foreground transition-colors"
+              title={isCollapsed ? "Expandir lotes ACH" : "Contraer lotes ACH"}
+            >
+              <span className="text-xs font-medium">{isCollapsed ? "Expandir" : "Contraer"}</span>
+              {isCollapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+            </button>
+          </div>
         </div>
         <CardDescription>
           Conciliación integral de lotes ACH contra créditos totales y combinaciones de reversas de rechazos.
         </CardDescription>
       </CardHeader>
-      <CardBody>
+      {!isCollapsed && (
+        <CardBody>
         {batches.length === 0 ? (
           <p className="py-4 text-sm text-muted-foreground">Sin lotes ACH registrados para esta cuenta.</p>
         ) : (
@@ -159,6 +174,7 @@ export function BgBatchList({ batches }: Props) {
           </div>
         )}
       </CardBody>
+      )}
     </Card>
   );
 }

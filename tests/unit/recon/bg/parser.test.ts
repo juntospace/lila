@@ -67,15 +67,25 @@ describe("classifyBGStatementRow", () => {
     ).toEqual({ kind: "loan_inflow", state: "confirmed" });
   });
 
-  it("marks aggregate batch deposits (Yappy / Lote ACH) as non_loan", () => {
+  it("marks consolidated Yappy collection deposits as loan_inflow + confirmed", () => {
     expect(
       classifyBGStatementRow({
         code: "40",
         description: "DEPOSITO YAPPY - financieracrediclaro (14 TRANSACCIONES)",
         creditMinor: 50000n,
       }),
-    ).toEqual({ kind: "non_loan", state: "non_loan" });
+    ).toEqual({ kind: "loan_inflow", state: "confirmed" });
 
+    expect(
+      classifyBGStatementRow({
+        code: "48",
+        description: "DEPOSITO YAPPY - financieracrediclaro (1 TRANSACCIONES)",
+        creditMinor: 2500n,
+      }),
+    ).toEqual({ kind: "loan_inflow", state: "confirmed" });
+  });
+
+  it("marks aggregate LOTE ACH BG batch deposits as non_loan", () => {
     expect(
       classifyBGStatementRow({
         code: "48",

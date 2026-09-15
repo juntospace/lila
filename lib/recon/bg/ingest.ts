@@ -82,25 +82,27 @@ export function classifyBGStatementRow(row: {
   creditMinor: bigint;
 }): { kind: string; state: string } {
   const desc = (row.description || "").toUpperCase();
-  const isBatchOrYappy =
-    desc.startsWith("DEPOSITO YAPPY") || desc.startsWith("LOTE ACH BG");
+  const isLoteAch = desc.startsWith("LOTE ACH BG");
+  const isYappyDeposit = desc.startsWith("DEPOSITO YAPPY");
   const rawKind = classifyBGCode(row.code);
-  const kind = isBatchOrYappy ? "non_loan" : rawKind;
+  const kind = isLoteAch ? "non_loan" : isYappyDeposit ? "loan_inflow" : rawKind;
 
   // In BG statements:
-  //   - non_loan (fees, operational debits, aggregate Yappy/ACH batch credits): "non_loan"
-  //   - direct transfer credits (2627 web, 2626 mobile, 48 ACH incoming client transfers): "confirmed"
+  //   - non_loan (fees, operational debits, aggregate Lote ACH batch credits): "non_loan"
+  //   - confirmed credits: direct transfers (2627 web, 2626 mobile, 48 ACH client transfers)
+  //     and consolidated Yappy collection deposits (DEPOSITO YAPPY): "confirmed"
   //   - unassigned/bare deposits (e.g. counter deposit code 40) or unknown codes: "pending" (awaits operator matching)
-  const isConfirmedTransfer =
+  const isConfirmedCredit =
     row.creditMinor > 0n &&
-    (row.code === "2627" ||
+    (isYappyDeposit ||
+      row.code === "2627" ||
       row.code === "2626" ||
       (row.code === "48" && !desc.startsWith("DEPOSITO") && !desc.startsWith("LOTE")));
 
   const state =
     kind === "non_loan"
       ? "non_loan"
-      : isConfirmedTransfer
+      : isConfirmedCredit
         ? "confirmed"
         : "pending";
 

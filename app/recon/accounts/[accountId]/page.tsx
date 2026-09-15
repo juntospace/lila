@@ -678,7 +678,8 @@ export default async function AccountDetailPage({
       .from("recon_bg_pending_tasks")
       .select("*")
       .eq("account_id", accountId)
-      .eq("is_resolved", false);
+      .eq("is_resolved", false)
+      .order("created_at", { ascending: false });
     if (ptData) {
       bgPendingTasks.push(
         ...ptData.map((pt) => ({

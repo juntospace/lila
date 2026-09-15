@@ -47,7 +47,6 @@ export async function syncSnapshotToDatabase(
   }
 
   // 2. Sync ACH Batches
-  const activeBatchUids = new Set(snapshot.batches.map((b) => b.uid));
   const batchInserts = snapshot.batches.map((b) => ({
     account_id: accountId,
     batch_uid: b.uid,
@@ -86,29 +85,7 @@ export async function syncSnapshotToDatabase(
       .upsert(chunk, { onConflict: "account_id,batch_uid" });
   }
 
-  // Soft-delete inactive batches (e.g. provisional batches replaced by detail)
-  if (activeBatchUids.size > 0) {
-    const { data: existingBatches } = await supabase
-      .from("recon_bg_batches")
-      .select("batch_uid")
-      .eq("account_id", accountId)
-      .eq("is_active", true);
-
-    const uidsToDeactivate = (existingBatches || [])
-      .map((row) => row.batch_uid as string)
-      .filter((uid) => !activeBatchUids.has(uid));
-
-    if (uidsToDeactivate.length > 0) {
-      await supabase
-        .from("recon_bg_batches")
-        .update({ is_active: false })
-        .eq("account_id", accountId)
-        .in("batch_uid", uidsToDeactivate);
-    }
-  }
-
   // 3. Sync Yappy Batches
-  const activeYappyBatchUids = new Set(snapshot.yappyBatches.map((yb) => yb.uid));
   const yappyBatchInserts = snapshot.yappyBatches.map((yb) => ({
     account_id: accountId,
     batch_uid: yb.uid,
@@ -131,27 +108,6 @@ export async function syncSnapshotToDatabase(
     await supabase
       .from("recon_bg_yappy_batches")
       .upsert(chunk, { onConflict: "account_id,batch_uid" });
-  }
-
-  // Soft-delete inactive Yappy batches
-  if (activeYappyBatchUids.size > 0) {
-    const { data: existingYappyBatches } = await supabase
-      .from("recon_bg_yappy_batches")
-      .select("batch_uid")
-      .eq("account_id", accountId)
-      .eq("is_active", true);
-
-    const uidsToDeactivate = (existingYappyBatches || [])
-      .map((row) => row.batch_uid as string)
-      .filter((uid) => !activeYappyBatchUids.has(uid));
-
-    if (uidsToDeactivate.length > 0) {
-      await supabase
-        .from("recon_bg_yappy_batches")
-        .update({ is_active: false })
-        .eq("account_id", accountId)
-        .in("batch_uid", uidsToDeactivate);
-    }
   }
 
   // 4. Sync Yappy Lines
