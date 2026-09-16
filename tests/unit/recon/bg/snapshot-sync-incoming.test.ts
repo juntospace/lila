@@ -72,19 +72,33 @@ describe("syncSnapshotToDatabase · BG Incoming synchronization", () => {
     );
 
     expect(result.incomingUpserted).toBe(snapshot.incoming.length);
-    expect(upsertedRows.length).toBe(snapshot.incoming.length);
+    expect(result.yappyDepositsUpserted).toBe(snapshot.yappyBatches.length);
+    expect(upsertedRows.length).toBe(snapshot.incoming.length + snapshot.yappyBatches.length);
 
     // Verify properties of upserted recon_transactions
     const receivedRows = upsertedRows.filter((r) => r.state === "confirmed");
     expect(receivedRows.length).toBeGreaterThan(0);
 
-    for (const r of upsertedRows) {
+    const incomingRows = upsertedRows.filter((r) => !String(r.row_hash).includes("|bg_yappy_dep|"));
+    for (const r of incomingRows) {
       expect(r.account_id).toBe(accountId);
       expect(typeof r.posted_at).toBe("string");
       expect(["loan_inflow", "non_loan"]).toContain(r.kind);
       expect(["confirmed", "pending", "non_loan"]).toContain(r.state);
       expect(typeof r.row_hash).toBe("string");
       expect((r.row_hash as string).startsWith(`${accountId}|bg_incoming|`)).toBe(true);
+    }
+
+    const yappyRows = upsertedRows.filter((r) => String(r.row_hash).includes("|bg_yappy_dep|"));
+    expect(yappyRows.length).toBe(snapshot.yappyBatches.length);
+    for (const r of yappyRows) {
+      expect(r.account_id).toBe(accountId);
+      expect(typeof r.posted_at).toBe("string");
+      expect(r.kind).toBe("loan_inflow");
+      expect(r.state).toBe("confirmed");
+      expect(r.code).toBe("DEPOSITO_YAPPY");
+      expect(typeof r.row_hash).toBe("string");
+      expect((r.row_hash as string).startsWith(`${accountId}|bg_yappy_dep|`)).toBe(true);
     }
 
     // Verify specific August 20 transactions

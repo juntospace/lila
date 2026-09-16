@@ -10,21 +10,13 @@ import { ingestBACFile, parseBACSheet, type IngestResult } from "@/lib/recon/bac
 import { recomputeAccount } from "@/lib/recon/bac/recompute";
 import {
   detectAndParseBgFile,
-  fetchManualAssignments,
-  ingestBGAchDetailFile,
-  ingestBGStatementFile,
-  isBGAchDetailSheet,
-  isBGStatementSheet,
-  parseBGAchDetail,
-  parseBGStatement,
-  reconcileBancoGeneral,
-  syncSnapshotToDatabase,
   type BGAchDetailIngestResult,
   type BGStatementIngestResult,
   type BgParsedAchDetail,
   type BgParsedStatement,
   type BgParsedYappyReport,
 } from "@/lib/recon/bg";
+import { recomputeBgAccount } from "@/lib/recon/bg/recompute";
 import {
   createSupabaseServerClient,
   createSupabaseServiceClient,
@@ -206,254 +198,214 @@ export async function uploadStatement(
 
   // ----- BG rail --------------------------------------------------------
   if (account.rail === "bg") {
-    const statements: BgParsedStatement[] = [];
-    const achDetails: BgParsedAchDetail[] = [];
-    const yappyReports: BgParsedYappyReport[] = [];
-    let lastStatementResult: BGStatementIngestResult | null = null;
-    let lastAchDetailResult: BGAchDetailIngestResult | null = null;
+    let duplicateFilesCount = 0;
+    let newFilesCount = 0;
+    const newCachedFiles: Array<{
+      filename: string;
+      bytes: Uint8Array;
+      parsed: BgParsedStatement | BgParsedAchDetail | BgParsedYappyReport;
+    }> = [];
+    const warnings: string[] = [];
+
+    const adminSupabase = createSupabaseServiceClient();
 
     for (const f of files) {
       const bytes = new Uint8Array(await f.arrayBuffer());
-      const parsed = detectAndParseBgFile(bytes, f.name);
+      const sha = createHash("sha256").update(bytes).digest("hex");
 
-      if (!parsed) {
-        // Fallback to legacy single sheet parsers if sniffer returned null
-        let workbook: XLSX.WorkBook;
-        try {
-          workbook = XLSX.read(bytes, { type: "array", cellDates: true });
-        } catch {
-          continue;
-        }
-        if (isBGAchDetailSheet(workbook)) {
-          const name = workbook.SheetNames.find((n) => /BGPACHRejectedDetailList/i.test(n))!;
-          const parseResult = parseBGAchDetail(workbook.Sheets[name]);
-          const result = await ingestBGAchDetailFile({
-            supabase,
-            accountId: account.id,
-            fileBytes: bytes,
-            originalFilename: f.name,
-            uploadedBy: session.userId,
-            parseResult,
-          });
-          lastAchDetailResult = result;
-        } else if (isBGStatementSheet(workbook)) {
-          const name = workbook.SheetNames.find((n) => /BGPCheckingMovementsExcel/i.test(n))!;
-          const parseResult = parseBGStatement(workbook.Sheets[name]);
-          const result = await ingestBGStatementFile({
-            supabase,
-            accountId: account.id,
-            fileBytes: bytes,
-            originalFilename: f.name,
-            uploadedBy: session.userId,
-            parseResult,
-          });
-          lastStatementResult = result;
-        }
+      // 1. Check if file was already uploaded for this account
+      const { data: existingUpload } = await supabase
+        .from("recon_uploads")
+        .select("id, original_filename, rows_total")
+        .eq("account_id", account.id)
+        .eq("file_sha256", sha)
+        .maybeSingle();
+
+      if (existingUpload) {
+        duplicateFilesCount++;
         continue;
       }
 
-      const sha = createHash("sha256").update(bytes).digest("hex");
+      // 2. Parse file with CCBG v2 sniffer
+      const parsed = detectAndParseBgFile(bytes, f.name);
+      if (!parsed) {
+        warnings.push(`File "${f.name}" was not recognized as a Banco General statement, ACH detail, or Yappy report.`);
+        continue;
+      }
+
+      newFilesCount++;
+      newCachedFiles.push({ filename: f.name, bytes, parsed });
+
+      // 3. Determine metadata & method
+      let uploadMethod: "statement_bg_excel" | "ach_detail_bg_excel" | "yappy_bg_excel" = "statement_bg_excel";
       let startDate: string | null = null;
       let endDate: string | null = null;
-      let rowsCount = 0;
-      let uploadMethod: "statement_bg_excel" | "ach_detail_bg_excel" | "yappy_bg_excel" = "statement_bg_excel";
+      const rowsCount = parsed.rows.length;
 
       if (parsed.fileType === "statement") {
         uploadMethod = "statement_bg_excel";
-        statements.push(parsed);
         startDate = parsed.startDate || null;
         endDate = parsed.endDate || null;
-        rowsCount = parsed.rows.length;
-        // Also ingest to legacy table if it has BGPCheckingMovementsExcel structure
-        try {
-          const wb = XLSX.read(bytes, { type: "array", cellDates: true });
-          if (isBGStatementSheet(wb)) {
-            const name = wb.SheetNames.find((n) => /BGPCheckingMovementsExcel/i.test(n))!;
-            const parseResult = parseBGStatement(wb.Sheets[name]);
-            lastStatementResult = await ingestBGStatementFile({
-              supabase,
-              accountId: account.id,
-              fileBytes: bytes,
-              originalFilename: f.name,
-              uploadedBy: session.userId,
-              parseResult,
-            });
-          }
-        } catch {
-          // ignore legacy ingest errors
-        }
       } else if (parsed.fileType === "ach_detail") {
         uploadMethod = "ach_detail_bg_excel";
-        achDetails.push(parsed);
         startDate = parsed.effectiveDate || parsed.batchDate || null;
         endDate = startDate;
-        rowsCount = parsed.rows.length;
-        try {
-          const wb = XLSX.read(bytes, { type: "array", cellDates: true });
-          if (isBGAchDetailSheet(wb)) {
-            const name = wb.SheetNames.find((n) => /BGPACHRejectedDetailList/i.test(n))!;
-            const parseResult = parseBGAchDetail(wb.Sheets[name]);
-            lastAchDetailResult = await ingestBGAchDetailFile({
-              supabase,
-              accountId: account.id,
-              fileBytes: bytes,
-              originalFilename: f.name,
-              uploadedBy: session.userId,
-              parseResult,
-            });
-          }
-        } catch {
-          // ignore legacy ingest errors
-        }
       } else if (parsed.fileType === "yappy") {
         uploadMethod = "yappy_bg_excel";
-        yappyReports.push(parsed);
         if (parsed.rows.length > 0) {
           const sortedDates = parsed.rows.map((r) => r.date).filter(Boolean).sort();
           startDate = sortedDates[0] || null;
           endDate = sortedDates[sortedDates.length - 1] || null;
         }
-        rowsCount = parsed.rows.length;
       }
 
-      // Ensure recon_uploads record has full metadata and committed status
-      await supabase.from("recon_uploads").upsert(
-        {
-          account_id: account.id,
-          original_filename: f.name,
-          file_sha256: sha,
-          uploaded_by: session.userId,
-          method: uploadMethod,
-          rows_total: rowsCount,
-          rows_new: rowsCount,
-          rows_duplicate: 0,
-          date_range_start: startDate,
-          date_range_end: endDate,
-          status: "committed",
-        },
-        { onConflict: "account_id,file_sha256" },
-      );
-    }
-
-    if (statements.length > 0 || achDetails.length > 0 || yappyReports.length > 0) {
-      try {
-        const edgeFormData = new FormData();
-        for (const f of files) {
-          const b = new Uint8Array(await f.arrayBuffer());
-          const edgeFile = new File([b], f.name, {
-            type: f.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-          });
-          edgeFormData.append("file", edgeFile);
-        }
-        edgeFormData.append("account_id", account.id);
-
-        const { publicEnv, serverEnv } = await import("@/lib/env");
-        const serviceKey = serverEnv().SUPABASE_SERVICE_ROLE_KEY;
-        const fnUrl = `${publicEnv.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/bg-recon?account_id=${account.id}`;
-
-        const edgeResponse = await fetch(fnUrl, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${serviceKey}`,
-            apikey: publicEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-            "x-user-id": session.userId,
-          },
-          body: edgeFormData,
+      // 4. Upload raw file to Supabase Storage bucket recon-statements
+      const ext = f.name.endsWith(".xls") ? "xls" : f.name.endsWith(".pdf") ? "pdf" : "xlsx";
+      const storagePath = `${account.id}/${sha}.${ext}`;
+      await adminSupabase.storage
+        .from("recon-statements")
+        .upload(storagePath, bytes, {
+          contentType: f.type || "application/octet-stream",
+          upsert: true,
+        })
+        .catch((err) => {
+          console.warn(`Storage upload failed for "${f.name}":`, err);
         });
 
-        if (edgeResponse.ok) {
-          const edgeData = await edgeResponse.json();
-          revalidatePath("/recon/upload");
-          revalidatePath(`/recon/accounts/${account.id}`);
-
-          const summaryMsg = `Ingested ${files.length} BG file${files.length === 1 ? "" : "s"} via Edge Function: ${edgeData.controls?.settledBatchesCount || 0} of ${edgeData.controls?.totalBatchesCount || 0} ACH batches settled, ${edgeData.controls?.settledYappyBatchesCount || 0} Yappy deposits reconciled.`;
-
-          return {
-            status: "success",
-            message: summaryMsg,
-            result: lastStatementResult
-              ? { ...lastStatementResult, rail: "bg", fileKind: "statement", accountLabel }
-              : lastAchDetailResult
-                ? { ...lastAchDetailResult, rail: "bg", fileKind: "ach_detail", accountLabel }
-                : yappyReports.length > 0
-                  ? {
-                      uploadId: null,
-                      fileWasDuplicate: false,
-                      rowsTotal: yappyReports.reduce((s, r) => s + r.rows.length, 0),
-                      rowsNew: yappyReports.reduce((s, r) => s + r.rows.length, 0),
-                      rowsDuplicate: 0,
-                      warnings: [],
-                      rail: "bg" as const,
-                      fileKind: "yappy" as const,
-                      accountLabel,
-                      settledYappy: edgeData.controls?.settledYappyBatchesCount || 0,
-                      totalYappy: edgeData.controls?.totalYappyBatchesCount || 0,
-                    }
-                  : undefined,
-          };
-        }
-      } catch (edgeErr) {
-        console.warn("bg-recon Edge Function invoke failed, running local sync fallback:", edgeErr);
-      }
-
-      const manualAssignments = await fetchManualAssignments(supabase, account.id);
-      const snapshot = reconcileBancoGeneral(statements, achDetails, yappyReports, {
-        expectedAccount: account.account_number,
-        manualAssignments,
+      // 5. Register in recon_uploads table
+      await supabase.from("recon_uploads").insert({
+        account_id: account.id,
+        original_filename: f.name,
+        file_sha256: sha,
+        uploaded_by: session.userId,
+        storage_path: storagePath,
+        method: uploadMethod,
+        rows_total: rowsCount,
+        rows_new: rowsCount,
+        rows_duplicate: 0,
+        date_range_start: startDate,
+        date_range_end: endDate,
+        status: "committed",
       });
+    }
 
-      await syncSnapshotToDatabase(supabase, account.id, snapshot);
-
+    // If ALL files were duplicates, return immediately without corrupting metrics
+    if (newFilesCount === 0 && duplicateFilesCount > 0) {
       revalidatePath("/recon/upload");
       revalidatePath(`/recon/accounts/${account.id}`);
 
-      const summaryMsg = `Ingested ${files.length} BG file${files.length === 1 ? "" : "s"}: ${snapshot.controls.settledBatchesCount} of ${snapshot.controls.totalBatchesCount} ACH batches settled, ${snapshot.controls.settledYappyBatchesCount} Yappy deposits reconciled.`;
+      return {
+        status: "success",
+        message:
+          files.length === 1
+            ? `File "${files[0].name}" was already uploaded — no new rows.`
+            : `All ${files.length} files were already uploaded — no new rows.`,
+        result: {
+          uploadId: null,
+          fileWasDuplicate: true,
+          rowsTotal: 0,
+          rowsNew: 0,
+          rowsDuplicate: duplicateFilesCount,
+          loanInflowRows: 0,
+          nonLoanRows: 0,
+          unknownCodeRows: 0,
+          warnings,
+          rail: "bg",
+          fileKind: "statement",
+          accountLabel,
+        },
+      };
+    }
 
-      if (lastStatementResult) {
-        return {
-          status: "success",
-          message: summaryMsg,
-          result: { ...lastStatementResult, rail: "bg", fileKind: "statement", accountLabel },
-        };
-      }
-      if (lastAchDetailResult) {
-        return {
-          status: "success",
-          message: summaryMsg,
-          result: { ...lastAchDetailResult, rail: "bg", fileKind: "ach_detail", accountLabel },
-        };
-      }
-      if (yappyReports.length > 0) {
-        const totalRows = yappyReports.reduce((s, r) => s + r.rows.length, 0);
-        return {
-          status: "success",
-          message: summaryMsg,
-          result: {
-            uploadId: null,
-            fileWasDuplicate: false,
-            rowsTotal: totalRows,
-            rowsNew: totalRows,
-            rowsDuplicate: 0,
-            warnings: [],
-            rail: "bg" as const,
-            fileKind: "yappy" as const,
-            accountLabel,
-            settledYappy: snapshot.controls.settledYappyBatchesCount,
-            totalYappy: snapshot.controls.totalYappyBatchesCount,
-          },
-        };
-      }
+    if (newFilesCount === 0) {
+      return {
+        status: "error",
+        message:
+          warnings.length > 0
+            ? warnings.join("; ")
+            : "Unrecognized BG file(s). Expected Movimientos statements, Detalle ACH files, or Yappy reports.",
+      };
+    }
 
+    // 6. Execute account-wide recompute across all active files
+    const recomputeResult = await recomputeBgAccount(supabase, account.id, {
+      cachedFiles: newCachedFiles,
+    });
+
+    revalidatePath("/recon/upload");
+    revalidatePath(`/recon/accounts/${account.id}`);
+
+    const snapshot = recomputeResult.snapshot;
+    const summaryMsg = `Ingested ${newFilesCount} new BG file${newFilesCount === 1 ? "" : "s"}${
+      duplicateFilesCount > 0
+        ? ` (${duplicateFilesCount} duplicate file${duplicateFilesCount === 1 ? "" : "s"} skipped)`
+        : ""
+    }: ${snapshot?.controls?.settledBatchesCount ?? 0} of ${
+      snapshot?.controls?.totalBatchesCount ?? 0
+    } ACH batches settled, ${snapshot?.controls?.settledYappyBatchesCount ?? 0} Yappy deposits reconciled.`;
+
+    const totalNewRows = newCachedFiles.reduce((s, f) => s + f.parsed.rows.length, 0);
+    const hasStatement = newCachedFiles.some((f) => f.parsed.fileType === "statement");
+    const hasAch = newCachedFiles.some((f) => f.parsed.fileType === "ach_detail");
+    const hasYappy = newCachedFiles.some((f) => f.parsed.fileType === "yappy");
+
+    if (hasStatement || (!hasAch && !hasYappy)) {
       return {
         status: "success",
         message: summaryMsg,
+        result: {
+          uploadId: null,
+          fileWasDuplicate: false,
+          rowsTotal: totalNewRows,
+          rowsNew: totalNewRows,
+          rowsDuplicate: duplicateFilesCount,
+          loanInflowRows: snapshot?.incoming.filter((i) => i.category === "loan").length ?? 0,
+          nonLoanRows: snapshot?.incoming.filter((i) => i.category === "non_loan").length ?? 0,
+          unknownCodeRows: 0,
+          warnings,
+          rail: "bg",
+          fileKind: "statement",
+          accountLabel,
+        },
+      };
+    }
+
+    if (hasAch && !hasYappy) {
+      return {
+        status: "success",
+        message: summaryMsg,
+        result: {
+          uploadId: null,
+          fileWasDuplicate: false,
+          rowsTotal: totalNewRows,
+          rowsNew: totalNewRows,
+          rowsDuplicate: duplicateFilesCount,
+          approvedRows: snapshot?.batches.reduce((s, b) => s + (b.succeededTransactions ?? 0), 0) ?? 0,
+          rejectedRows: snapshot?.batches.reduce((s, b) => s + (b.declaredRejectedTransactions ?? 0), 0) ?? 0,
+          warnings,
+          rail: "bg",
+          fileKind: "ach_detail",
+          accountLabel,
+        },
       };
     }
 
     return {
-      status: "error",
-      message:
-        "Unrecognized BG file(s). Expected Movimientos statements, Detalle ACH files, or Yappy reports.",
+      status: "success",
+      message: summaryMsg,
+      result: {
+        uploadId: null,
+        fileWasDuplicate: false,
+        rowsTotal: totalNewRows,
+        rowsNew: totalNewRows,
+        rowsDuplicate: duplicateFilesCount,
+        warnings,
+        rail: "bg",
+        fileKind: "yappy",
+        accountLabel,
+        settledYappy: snapshot?.controls?.settledYappyBatchesCount ?? 0,
+        totalYappy: snapshot?.controls?.totalYappyBatchesCount ?? 0,
+      },
     };
   }
 
@@ -643,6 +595,42 @@ export async function deleteUpload(uploadId: string): Promise<DeleteUploadResult
 
   const accountId = upload.account_id as string;
   const storagePath = upload.storage_path as string | null;
+
+  const { data: account } = await supabase
+    .from("bank_accounts")
+    .select("id, rail")
+    .eq("id", accountId)
+    .single();
+
+  if (account?.rail === "bg") {
+    // 1. Delete upload row & storage file
+    const { error: upErr } = await supabase.from("recon_uploads").delete().eq("id", uploadId);
+    if (upErr) return { status: "error", message: upErr.message };
+
+    if (storagePath) {
+      const adminSupabase = createSupabaseServiceClient();
+      await adminSupabase.storage.from("recon-statements").remove([storagePath]).catch(() => {
+        // Ignore error if file was already removed
+      });
+    }
+
+    // 2. Full recompute for Banco General account from remaining active files
+    try {
+      await recomputeBgAccount(supabase, accountId);
+    } catch (err) {
+      return {
+        status: "error",
+        message: `Deletion completed but BG recompute failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      };
+    }
+
+    revalidatePath("/recon/upload");
+    revalidatePath(`/recon/accounts/${accountId}`);
+    return { status: "ok" };
+  }
+
   const ID_CHUNK = 200;
   const PAGE = 1000;
 
