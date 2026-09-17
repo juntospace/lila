@@ -175,7 +175,7 @@ export interface BgReconciledBatch {
   succeededTransactions: number | null;
   declaredRejectedTransactions: number | null;
   rejectedRowsCount: number;
-  succeededRowsCount: number;
+  succeededRowsCount?: number;
   totalAmount: number | null;
   rejectedAmount: number | null;
   succeededAmount: number | null;

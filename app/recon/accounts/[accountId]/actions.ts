@@ -82,6 +82,19 @@ export async function recomputeAccountAction(
   const supabase = await createSupabaseServerClient();
 
   try {
+    const { data: account } = await supabase
+      .from("bank_accounts")
+      .select("rail")
+      .eq("id", accountId)
+      .single();
+
+    if (account?.rail === "bg") {
+      const { recomputeBgAccount } = await import("@/lib/recon/bg/recompute");
+      await recomputeBgAccount(supabase, accountId);
+      revalidatePath(`/recon/accounts/${accountId}`);
+      return { status: "ok" };
+    }
+
     let stats: RecomputeStats;
     const { data, error } = await supabase.functions.invoke("bac-recon-recompute", {
       body: { account_id: accountId },

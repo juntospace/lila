@@ -12,6 +12,7 @@ export interface SyncSnapshotResult {
   pendingTasksUpserted: number;
   alertsUpserted: number;
   incomingUpserted: number;
+  yappyDepositsUpserted: number;
 }
 
 export async function syncSnapshotToDatabase(
@@ -244,6 +245,36 @@ export async function syncSnapshotToDatabase(
     }
   }
 
+  // 8. Sync Consolidated Yappy Deposits from Statements into recon_transactions
+  // Ensures DEPOSITO YAPPY sums into confirmed loan inflows with a canonical, deterministic row_hash.
+  const yappyTxnInserts = snapshot.yappyBatches.map((yb) => ({
+    ...(fallbackUploadId ? { upload_id: fallbackUploadId } : {}),
+    account_id: accountId,
+    posted_at: yb.creditDate,
+    code: "DEPOSITO_YAPPY",
+    description: `DEPOSITO YAPPY (${yb.declaredCount ?? yb.reportCount ?? 0} transacciones)`,
+    debit_minor: 0,
+    credit_minor: BigInt(Math.round(yb.creditAmount * 100)),
+    balance_minor: null,
+    currency: "USD",
+    payer_name_raw: "YAPPY",
+    rail_native_ref: yb.uid,
+    kind: "loan_inflow",
+    state: "confirmed",
+    row_hash: `${accountId}|bg_yappy_dep|${yb.uid}`,
+  }));
+
+  for (let i = 0; i < yappyTxnInserts.length; i += CHUNK_SIZE) {
+    const chunk = yappyTxnInserts.slice(i, i + CHUNK_SIZE);
+    const { error: ypError } = await supabase
+      .from("recon_transactions")
+      .upsert(chunk, { onConflict: "account_id,row_hash" });
+    if (ypError) {
+      console.error("Error upserting recon_transactions for BG yappy deposits in Edge Function:", ypError);
+      throw ypError;
+    }
+  }
+
   return {
     batchesUpserted: batchInserts.length,
     yappyBatchesUpserted: yappyBatchInserts.length,
@@ -252,6 +283,7 @@ export async function syncSnapshotToDatabase(
     pendingTasksUpserted: pendingTaskInserts.length,
     alertsUpserted: alertInserts.length,
     incomingUpserted: incomingTxnInserts.length,
+    yappyDepositsUpserted: yappyTxnInserts.length,
   };
 }
 

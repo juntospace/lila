@@ -100,9 +100,16 @@ export default {
                 });
               }
 
-              // Record in recon_uploads table
-              await adminSupabase.from("recon_uploads").upsert(
-                {
+              // Record in recon_uploads table if not already present
+              const { data: existingUpload } = await adminSupabase
+                .from("recon_uploads")
+                .select("id")
+                .eq("account_id", accountId)
+                .eq("file_sha256", sha)
+                .maybeSingle();
+
+              if (!existingUpload) {
+                await adminSupabase.from("recon_uploads").insert({
                   account_id: accountId,
                   original_filename: value.name,
                   file_sha256: sha,
@@ -115,9 +122,8 @@ export default {
                   date_range_start: startDate,
                   date_range_end: endDate,
                   status: "committed",
-                },
-                { onConflict: "account_id,file_sha256" },
-              );
+                });
+              }
             }
           }
         }
