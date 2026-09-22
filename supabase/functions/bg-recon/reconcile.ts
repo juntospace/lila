@@ -148,7 +148,6 @@ export function isPendingManualAssignment(item: BgReconciledIncoming): boolean {
 
 export interface ReconcileOptions {
   expectedAccount?: string | null;
-  manualAssignments?: Map<string, { category: BgAssignmentCategory; notes: string | null }>;
   manualAssignments?: Map<string, BgManualAssignment>;
 }
 
@@ -863,7 +862,7 @@ export function reconcileBancoGeneral(
 
     const fullText = `${m.ref2 || ""} ${desc}`;
     const mLoanRef = RE_LOAN_REF.exec(fullText);
-    const detectedLoanRef = mLoanRef ? mLoanRef[1].replace(/\s+/g, "").toUpperCase() : "";
+    let detectedLoanRef = mLoanRef ? mLoanRef[1].replace(/\s+/g, "").toUpperCase() : "";
 
     let suggestion: BgSuggestion | null = null;
     const lowerText = fullText

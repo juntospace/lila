@@ -2,7 +2,6 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import type { BgAssignmentCategory, BgReconciliationSnapshot } from "./types.ts";
 import type { BgAssignmentCategory, BgManualAssignment, BgReconciliationSnapshot } from "./types.ts";
 
 export interface SyncSnapshotResult {
@@ -65,10 +64,14 @@ export async function syncSnapshotToDatabase(
     succeeded_transactions: b.succeededTransactions,
     declared_rejected_transactions: b.declaredRejectedTransactions,
     rejected_rows_count: b.rejectedRowsCount,
-    succeeded_rows_count: b.succeededRowsCount,
+    succeeded_rows_count: b.succeededRowsCount ?? 0,
     total_amount_minor: b.totalAmount != null ? BigInt(Math.round(b.totalAmount * 100)) : null,
     rejected_amount_minor: b.rejectedAmount != null ? BigInt(Math.round(b.rejectedAmount * 100)) : null,
     succeeded_amount_minor: b.succeededAmount != null ? BigInt(Math.round(b.succeededAmount * 100)) : null,
+    itemized_succeeded_amount_minor:
+      b.itemizedSucceededAmount != null
+        ? BigInt(Math.round(b.itemizedSucceededAmount * 100))
+        : null,
     status: b.status,
     pending_reason: b.pendingReason,
     credit_mov_uid: b.creditMovUid,
@@ -207,7 +210,6 @@ export async function syncSnapshotToDatabase(
     const kind = isNonLoan ? "non_loan" : "loan_inflow";
     const state = isNonLoan
       ? "non_loan"
-      : inc.status === "received"
       : inc.status === "received" || inc.channel === "Deposit"
         ? "confirmed"
         : "pending";
@@ -216,7 +218,6 @@ export async function syncSnapshotToDatabase(
       ? inc.transferReference
         ? `${inc.detectedLoanRef} · ${inc.transferReference}`
         : inc.detectedLoanRef
-      : inc.paymentReference || inc.transferReference || null;
       : inc.paymentReference || inc.transferReference || inc.loanRef || null;
 
     return {
@@ -229,7 +230,6 @@ export async function syncSnapshotToDatabase(
       credit_minor: inc.amountMinor,
       balance_minor: null,
       currency: "USD",
-      payer_name_raw: inc.counterpart || null,
       payer_name_raw: inc.counterpart || inc.payerName || null,
       rail_native_ref: ref,
       kind,
@@ -244,7 +244,7 @@ export async function syncSnapshotToDatabase(
       .from("recon_transactions")
       .upsert(chunk, { onConflict: "account_id,row_hash" });
     if (incError) {
-      console.error("Error upserting recon_transactions for BG incoming:", incError);
+      console.error("Error upserting recon_transactions for BG incoming in Edge Function:", incError);
       throw incError;
     }
   }
@@ -311,23 +311,12 @@ export function mapChannelToCode(channel: string): string {
 export async function fetchManualAssignments(
   supabase: SupabaseClient,
   accountId: string,
-): Promise<Map<string, { category: BgAssignmentCategory; notes: string | null }>> {
-  const { data } = await supabase
 ): Promise<Map<string, BgManualAssignment>> {
   const { data, error } = await supabase
     .from("recon_manual_assignments")
-    .select("target_uid, category, notes")
     .select("target_uid, category, notes, payer_name, loan_ref")
     .eq("account_id", accountId);
 
-  const map = new Map<string, { category: BgAssignmentCategory; notes: string | null }>();
-  if (data) {
-    for (const row of data) {
-      map.set(row.target_uid, {
-        category: row.category as BgAssignmentCategory,
-        notes: row.notes,
-      });
-    }
   const map = new Map<string, BgManualAssignment>();
   if (error || !data) return map;
 
@@ -341,4 +330,3 @@ export async function fetchManualAssignments(
   }
   return map;
 }
-
