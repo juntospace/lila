@@ -686,7 +686,9 @@ export type Database = {
           category: Database["public"]["Enums"]["recon_assignment_category_enum"]
           created_at: string
           id: string
+          loan_ref: string | null
           notes: string | null
+          payer_name: string | null
           target_uid: string
           updated_at: string
         }
@@ -697,7 +699,9 @@ export type Database = {
           category?: Database["public"]["Enums"]["recon_assignment_category_enum"]
           created_at?: string
           id?: string
+          loan_ref?: string | null
           notes?: string | null
+          payer_name?: string | null
           target_uid: string
           updated_at?: string
         }
@@ -708,7 +712,9 @@ export type Database = {
           category?: Database["public"]["Enums"]["recon_assignment_category_enum"]
           created_at?: string
           id?: string
+          loan_ref?: string | null
           notes?: string | null
+          payer_name?: string | null
           target_uid?: string
           updated_at?: string
         }

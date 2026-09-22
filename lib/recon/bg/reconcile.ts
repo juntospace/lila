@@ -2,10 +2,10 @@
 // Implements 100% of reference rules, penny precision, stable UIDs, and audit controls.
 
 import type {
-  BgAssignmentCategory,
   BgCanonicalMovement,
   BgIncomingStatus,
   BgItemStatus,
+  BgManualAssignment,
   BgOtherAccountResponse,
   BgOtherDebit,
   BgParsedAchDetail,
@@ -147,7 +147,7 @@ export function isPendingManualAssignment(item: BgReconciledIncoming): boolean {
 
 export interface ReconcileOptions {
   expectedAccount?: string | null;
-  manualAssignments?: Map<string, { category: BgAssignmentCategory; notes: string | null }>;
+  manualAssignments?: Map<string, BgManualAssignment>;
 }
 
 export function reconcileBancoGeneral(
@@ -875,7 +875,7 @@ export function reconcileBancoGeneral(
 
     const fullText = `${m.ref2 || ""} ${desc}`;
     const mLoanRef = RE_LOAN_REF.exec(fullText);
-    const detectedLoanRef = mLoanRef ? mLoanRef[1].replace(/\s+/g, "").toUpperCase() : "";
+    let detectedLoanRef = mLoanRef ? mLoanRef[1].replace(/\s+/g, "").toUpperCase() : "";
 
     let suggestion: BgSuggestion | null = null;
     const lowerText = fullText
@@ -899,8 +899,19 @@ export function reconcileBancoGeneral(
         ? "unassigned"
         : "received";
 
+    let assignedPayerName: string | null = null;
+    let assignedLoanRef: string | null = null;
+
     if (asg) {
       incomingStatus = asg.category !== "non_loan" ? "received" : "non_loan";
+      if (asg.payerName) {
+        counterpart = asg.payerName;
+        assignedPayerName = asg.payerName;
+      }
+      if (asg.loanRef) {
+        detectedLoanRef = asg.loanRef;
+        assignedLoanRef = asg.loanRef;
+      }
     }
 
     incoming.push({
@@ -920,6 +931,8 @@ export function reconcileBancoGeneral(
       category: asg ? asg.category : null,
       suggestion,
       assignmentNotes: asg ? asg.notes : null,
+      payerName: assignedPayerName,
+      loanRef: assignedLoanRef,
     });
   }
 

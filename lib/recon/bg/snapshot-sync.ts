@@ -3,7 +3,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import type { BgAssignmentCategory, BgReconciliationSnapshot } from "./types";
+import type { BgAssignmentCategory, BgManualAssignment, BgReconciliationSnapshot } from "./types";
 
 export interface SyncSnapshotResult {
   batchesUpserted: number;
@@ -197,7 +197,7 @@ export async function syncSnapshotToDatabase(
     const kind = isNonLoan ? "non_loan" : "loan_inflow";
     const state = isNonLoan
       ? "non_loan"
-      : inc.status === "received"
+      : inc.status === "received" || inc.channel === "Deposit"
         ? "confirmed"
         : "pending";
 
@@ -205,7 +205,7 @@ export async function syncSnapshotToDatabase(
       ? inc.transferReference
         ? `${inc.detectedLoanRef} · ${inc.transferReference}`
         : inc.detectedLoanRef
-      : inc.paymentReference || inc.transferReference || null;
+      : inc.paymentReference || inc.transferReference || inc.loanRef || null;
 
     return {
       ...(fallbackUploadId ? { upload_id: fallbackUploadId } : {}),
@@ -217,7 +217,7 @@ export async function syncSnapshotToDatabase(
       credit_minor: inc.amountMinor,
       balance_minor: null,
       currency: "USD",
-      payer_name_raw: inc.counterpart || null,
+      payer_name_raw: inc.counterpart || inc.payerName || null,
       rail_native_ref: ref,
       kind,
       state,
@@ -299,19 +299,21 @@ export function mapChannelToCode(channel: string): string {
 export async function fetchManualAssignments(
   supabase: SupabaseClient,
   accountId: string,
-): Promise<Map<string, { category: BgAssignmentCategory; notes: string | null }>> {
+): Promise<Map<string, BgManualAssignment>> {
   const { data, error } = await supabase
     .from("recon_manual_assignments")
-    .select("target_uid, category, notes")
+    .select("target_uid, category, notes, payer_name, loan_ref")
     .eq("account_id", accountId);
 
-  const map = new Map<string, { category: BgAssignmentCategory; notes: string | null }>();
+  const map = new Map<string, BgManualAssignment>();
   if (error || !data) return map;
 
   for (const row of data) {
     map.set(row.target_uid, {
       category: row.category as BgAssignmentCategory,
       notes: row.notes || null,
+      payerName: (row as { payer_name?: string | null }).payer_name || null,
+      loanRef: (row as { loan_ref?: string | null }).loan_ref || null,
     });
   }
   return map;

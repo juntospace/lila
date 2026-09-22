@@ -1530,10 +1530,18 @@ export default async function AccountDetailPage({
                     } else if (row.state === "pending") {
                       reasonText = account.rail === "bg" ? "Por asignar" : "Awaiting batch link";
                     } else if (account.rail === "bg" && row.state === "confirmed") {
-                      reasonText = "Recibido / Confirmado";
+                      if (row.code === "DEPOSITO" && !row.payer_name_raw) {
+                        reasonText = "Depósito confirmado · Ordenante pendiente";
+                      } else {
+                        reasonText = "Recibido / Confirmado";
+                      }
                     } else {
                       reasonText = "—";
                     }
+                    const isUnassignedDeposit =
+                      account.rail === "bg" &&
+                      row.code === "DEPOSITO" &&
+                      !row.payer_name_raw;
                     const payer =
                       (row.payer_name_raw as string | null) ??
                       extractPRPayerName(row.description as string) ??
@@ -1546,15 +1554,29 @@ export default async function AccountDetailPage({
                         <td className="py-3 pr-4 font-mono text-xs text-fg">
                           {row.code}
                         </td>
-                        <td className="py-3 pr-4 text-fg">{payer}</td>
+                        <td className="py-3 pr-4 text-fg">
+                          {isUnassignedDeposit ? (
+                            <span className="inline-flex items-center gap-1 rounded bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400">
+                              Por asignar
+                            </span>
+                          ) : (
+                            payer
+                          )}
+                        </td>
                         <td className="py-3 pr-4 text-right font-medium tabular-nums text-fg">
                           {formatMinorUSD(String(row.credit_minor))}
                         </td>
                         <td className="py-3 pr-4">
                           <StateBadge state={row.state as string} />
                         </td>
-                        <td className="py-3 pr-4 text-xs text-fg-muted">
-                          {reasonText}
+                        <td className="py-3 pr-4 text-xs">
+                          {isUnassignedDeposit ? (
+                            <span className="text-amber-600 dark:text-amber-400 font-medium">
+                              {reasonText}
+                            </span>
+                          ) : (
+                            <span className="text-fg-muted">{reasonText}</span>
+                          )}
                         </td>
                         <td className="py-3 font-mono text-xs text-fg-muted">
                           {(row.rail_native_ref as string) || "—"}

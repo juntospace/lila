@@ -22,6 +22,13 @@ export type BgAssignmentCategory = "loan" | "non_loan" | "other";
 
 export type BgSuggestion = "loan" | "loan_probable";
 
+export interface BgManualAssignment {
+  category: BgAssignmentCategory;
+  notes: string | null;
+  payerName?: string | null;
+  loanRef?: string | null;
+}
+
 export type BgPendingTaskType =
   | "missing_statement"
   | "missing_ach_detail"
@@ -248,6 +255,10 @@ export interface BgReconciledIncoming {
   category: BgAssignmentCategory | null;
   suggestion: BgSuggestion | null;
   assignmentNotes: string | null;
+  assignedBy?: string | null;
+  assignedAt?: string | null;
+  payerName?: string | null;
+  loanRef?: string | null;
 }
 
 export interface BgOtherDebit {

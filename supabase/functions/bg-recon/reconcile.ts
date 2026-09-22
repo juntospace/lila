@@ -6,6 +6,7 @@ import type {
   BgConsolidatedExtracts,
   BgIncomingStatus,
   BgItemStatus,
+  BgManualAssignment,
   BgOtherAccountResponse,
   BgOtherDebit,
   BgParsedAchDetail,
@@ -148,6 +149,7 @@ export function isPendingManualAssignment(item: BgReconciledIncoming): boolean {
 export interface ReconcileOptions {
   expectedAccount?: string | null;
   manualAssignments?: Map<string, { category: BgAssignmentCategory; notes: string | null }>;
+  manualAssignments?: Map<string, BgManualAssignment>;
 }
 
 export function reconcileBancoGeneral(
@@ -885,8 +887,19 @@ export function reconcileBancoGeneral(
         ? "unassigned"
         : "received";
 
+    let assignedPayerName: string | null = null;
+    let assignedLoanRef: string | null = null;
+
     if (asg) {
       incomingStatus = asg.category !== "non_loan" ? "received" : "non_loan";
+      if (asg.payerName) {
+        counterpart = asg.payerName;
+        assignedPayerName = asg.payerName;
+      }
+      if (asg.loanRef) {
+        detectedLoanRef = asg.loanRef;
+        assignedLoanRef = asg.loanRef;
+      }
     }
 
     incoming.push({
@@ -906,6 +919,8 @@ export function reconcileBancoGeneral(
       category: asg ? asg.category : null,
       suggestion,
       assignmentNotes: asg ? asg.notes : null,
+      payerName: assignedPayerName,
+      loanRef: assignedLoanRef,
     });
   }
 

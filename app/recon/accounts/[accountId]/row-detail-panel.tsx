@@ -6,6 +6,7 @@
 import { formatDate, formatMinorUSD } from "@/lib/recon/format";
 import { reasonForDvtoCode } from "@/lib/recon/bac";
 
+import { BgAssignPayerForm } from "./bg-assign-payer-form";
 import { ConfirmPendingButton } from "./confirm-pending-button";
 import { RejectPendingButton, type CandidateDA } from "./reject-pending-button";
 import { RevertConfirmedButton } from "./revert-confirmed-button";
@@ -222,18 +223,42 @@ export function RowDetailPanel({
       {/* Banco General regular transaction details */}
       {!isPR && !isInboundACH && (
         <Section
-          title={row.state === "confirmed" ? "Transacción conciliada (Banco General)" : "Transacción pendiente"}
-          tone={row.state === "confirmed" ? "success" : "info"}
+          title={
+            row.code === "DEPOSITO" && !row.payer_name_raw
+              ? "Depósito confirmado (Ordenante por asignar)"
+              : row.state === "confirmed"
+                ? "Transacción conciliada (Banco General)"
+                : "Transacción pendiente"
+          }
+          tone={
+            row.code === "DEPOSITO" && !row.payer_name_raw
+              ? "info"
+              : row.state === "confirmed"
+                ? "success"
+                : "info"
+          }
         >
           <p className="text-sm text-fg-muted">
-            {row.state === "confirmed"
-              ? "Crédito voluntario identificado y recibido en el estado de cuenta de Banco General."
-              : "Crédito registrado en estado de cuenta pendiente de asignación manual de préstamo."}
+            {row.code === "DEPOSITO" && !row.payer_name_raw
+              ? "Fondos confirmados en la cuenta bancaria. Pendiente de designar el cliente que realizó el depósito."
+              : row.state === "confirmed"
+                ? "Crédito voluntario identificado y recibido en el estado de cuenta de Banco General."
+                : "Crédito registrado en estado de cuenta pendiente de asignación manual de préstamo."}
           </p>
           {row.payer_name_raw && (
             <p className="mt-1 text-xs text-fg-muted">
-              Pagador identificado: <strong className="text-fg">{row.payer_name_raw}</strong>
+              Pagador / Ordenante: <strong className="text-fg">{row.payer_name_raw}</strong>
             </p>
+          )}
+          {row.code === "DEPOSITO" && (
+            <div className="mt-3">
+              <BgAssignPayerForm
+                accountId={accountId}
+                txnId={row.id}
+                currentPayer={row.payer_name_raw}
+                currentLoanRef={row.rail_native_ref}
+              />
+            </div>
           )}
         </Section>
       )}

@@ -974,6 +974,8 @@ export async function saveBgManualAssignment(args: {
   targetUid: string;
   category: "loan" | "non_loan" | "other";
   notes?: string;
+  payerName?: string;
+  loanRef?: string;
 }): Promise<{ status: "ok" | "error"; message?: string }> {
   const session = await requireReconWriter();
   const supabase = await createSupabaseServerClient();
@@ -986,6 +988,8 @@ export async function saveBgManualAssignment(args: {
         target_uid: args.targetUid,
         category: args.category,
         notes: args.notes || null,
+        payer_name: args.payerName?.trim() || null,
+        loan_ref: args.loanRef?.trim() || null,
         assigned_by: session.userId,
       },
       { onConflict: "account_id,target_uid" },
@@ -994,6 +998,103 @@ export async function saveBgManualAssignment(args: {
   if (error) {
     return { status: "error", message: error.message };
   }
+
+  revalidatePath(`/recon/accounts/${args.accountId}`);
+  return { status: "ok" };
+}
+
+export async function assignBgDepositPayerAction(args: {
+  accountId: string;
+  txnId: string;
+  targetUid?: string;
+  payerName: string;
+  loanRef?: string;
+  notes?: string;
+}): Promise<{ status: "ok" | "error"; message?: string }> {
+  const session = await requireReconWriter();
+  const supabase = await createSupabaseServerClient();
+
+  const trimmedPayer = args.payerName.trim();
+  if (!trimmedPayer) {
+    return { status: "error", message: "El nombre del ordenante es requerido." };
+  }
+
+  const trimmedLoanRef = args.loanRef?.trim() || null;
+  const trimmedNotes = args.notes?.trim() || null;
+
+  // Resolve targetUid if not provided
+  let targetUid = args.targetUid;
+  if (!targetUid) {
+    const { data: txn } = await supabase
+      .from("recon_transactions")
+      .select("row_hash")
+      .eq("id", args.txnId)
+      .maybeSingle();
+
+    if (txn?.row_hash && txn.row_hash.includes("|bg_incoming|")) {
+      targetUid = txn.row_hash.split("|bg_incoming|")[1];
+    } else {
+      targetUid = args.txnId;
+    }
+  }
+
+  // 1. Persist to recon_manual_assignments so recompute preserves the assignment
+  const { error: asgError } = await supabase
+    .from("recon_manual_assignments")
+    .upsert(
+      {
+        account_id: args.accountId,
+        target_uid: targetUid,
+        category: "loan",
+        payer_name: trimmedPayer,
+        loan_ref: trimmedLoanRef,
+        notes: trimmedNotes,
+        assigned_by: session.userId,
+        assigned_at: new Date().toISOString(),
+      },
+      { onConflict: "account_id,target_uid" },
+    );
+
+  if (asgError) {
+    console.error("Error saving manual assignment:", asgError);
+    return { status: "error", message: asgError.message };
+  }
+
+  // 2. Update recon_transactions directly for immediate visual feedback
+  const updatePayload: {
+    payer_name_raw: string;
+    state: "confirmed";
+    rail_native_ref?: string;
+  } = {
+    payer_name_raw: trimmedPayer,
+    state: "confirmed",
+  };
+  if (trimmedLoanRef) {
+    updatePayload.rail_native_ref = trimmedLoanRef;
+  }
+
+  const { error: txnError } = await supabase
+    .from("recon_transactions")
+    .update(updatePayload)
+    .eq("id", args.txnId)
+    .eq("account_id", args.accountId);
+
+  if (txnError) {
+    console.error("Error updating recon_transactions:", txnError);
+    return { status: "error", message: txnError.message };
+  }
+
+  // 3. Log into recon_manual_actions for audit trail
+  const justification = `Asignación manual de ordenante: ${trimmedPayer}${trimmedLoanRef ? ` · Préstamo: ${trimmedLoanRef}` : ""}${trimmedNotes ? ` (${trimmedNotes})` : ""}`;
+  await supabase.from("recon_manual_actions").insert({
+    txn_id: args.txnId,
+    action: "reclassify",
+    prior_state: "confirmed",
+    new_state: "confirmed",
+    justification,
+    acted_by: session.userId,
+    acted_at: new Date().toISOString(),
+  });
 
   revalidatePath(`/recon/accounts/${args.accountId}`);
   return { status: "ok" };

@@ -609,9 +609,12 @@ export async function deleteUpload(uploadId: string): Promise<DeleteUploadResult
 
     if (storagePath) {
       const adminSupabase = createSupabaseServiceClient();
-      await adminSupabase.storage.from("recon-statements").remove([storagePath]).catch(() => {
-        // Ignore error if file was already removed
-      });
+      const { error: stErr } = await adminSupabase.storage
+        .from("recon-statements")
+        .remove([storagePath]);
+      if (stErr) {
+        console.warn(`Failed to remove "${storagePath}" from storage:`, stErr);
+      }
     }
 
     // 2. Full recompute for Banco General account from remaining active files
@@ -684,9 +687,12 @@ export async function deleteUpload(uploadId: string): Promise<DeleteUploadResult
 
   if (storagePath) {
     const adminSupabase = createSupabaseServiceClient();
-    await adminSupabase.storage.from("recon-statements").remove([storagePath]).catch(() => {
-      // Ignore error if the file no longer existed in bucket
-    });
+    const { error: stErr } = await adminSupabase.storage
+      .from("recon-statements")
+      .remove([storagePath]);
+    if (stErr) {
+      console.warn(`Failed to remove "${storagePath}" from storage:`, stErr);
+    }
   }
 
   // 5. Recompute the account so PRs whose linked DA just disappeared, or
