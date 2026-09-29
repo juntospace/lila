@@ -114,4 +114,78 @@ describe("syncSnapshotToDatabase · BG Incoming synchronization", () => {
     expect(aug20Jonathan?.kind).toBe("loan_inflow");
     expect(aug20Jonathan?.code).toBe("TRANSF_ONLINE");
   });
+
+  it("confirms direct deposits and preserves manual payer/loan assignment", async () => {
+    const sampleDeposit = snapshot.incoming.find((i) => i.channel === "Deposit");
+    expect(sampleDeposit).toBeDefined();
+
+    const manualAssignments = new Map();
+    // Assign using the deposit's canonical UID
+    manualAssignments.set(sampleDeposit!.uid, {
+      category: "loan",
+      notes: "Boleta validada",
+      payerName: "CARLOS PEREZ",
+      loanRef: "CAPAPR00099999",
+    });
+
+    const snapshotWithAsg = reconcileBancoGeneral(
+      loaded.statements,
+      loaded.achDetails,
+      loaded.yappyReports,
+      { manualAssignments },
+    );
+
+    const upsertedRows: Record<string, unknown>[] = [];
+    const mockSupabase = {
+      from: vi.fn((table: string) => {
+        if (table === "recon_uploads") {
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            order: vi.fn().mockReturnThis(),
+            limit: vi.fn().mockReturnThis(),
+            maybeSingle: vi.fn().mockResolvedValue({
+              data: { id: "00000000-0000-0000-0000-000000000001" },
+              error: null,
+            }),
+          };
+        }
+        if (table === "recon_transactions") {
+          return {
+            upsert: vi.fn((rows: Record<string, unknown>[]) => {
+              upsertedRows.push(...rows);
+              return Promise.resolve({ error: null });
+            }),
+          };
+        }
+        return {
+          upsert: vi.fn().mockResolvedValue({ error: null }),
+          insert: vi.fn().mockResolvedValue({ error: null }),
+          delete: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockResolvedValue({ error: null }),
+        };
+      }),
+    };
+
+    await syncSnapshotToDatabase(
+      mockSupabase as unknown as SupabaseClient,
+      "00000000-0000-0000-0000-000000000099",
+      snapshotWithAsg,
+    );
+
+    // All deposits should be confirmed
+    const deposits = upsertedRows.filter((r) => r.code === "DEPOSITO");
+    expect(deposits.length).toBeGreaterThan(0);
+    for (const d of deposits) {
+      expect(d.state).toBe("confirmed");
+    }
+
+    // The manually assigned deposit should have payer and loan ref populated
+    const assignedDeposit = deposits.find(
+      (d) => String(d.row_hash).endsWith(`|${sampleDeposit!.uid}`),
+    );
+    expect(assignedDeposit).toBeDefined();
+    expect(assignedDeposit?.payer_name_raw).toBe("CARLOS PEREZ");
+    expect(assignedDeposit?.rail_native_ref).toBe("CAPAPR00099999");
+  });
 });

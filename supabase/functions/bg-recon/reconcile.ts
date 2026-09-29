@@ -37,7 +37,7 @@ const LOAN_KEYWORDS = ["prestamo", "abono", "cuota", "pago", "quincena", "credic
 const RE_LOAN_REF = /\b(cap[a-z]{0,4}\s*\d{5,12})\b/i;
 
 const RE_BATCH_CREDIT = /^ACH - CREDICLARO/i;
-const RE_REVERSAL = /^REVERSAS POR RECHAZOS ACH\s+(\d{8})/i;
+const RE_REVERSAL = /^REVERSAS POR RECHAZOS ACH(?:\s+([A-Za-z0-9]+))?/i;
 const RE_YAPPY_DEP = /^DEPOSITO YAPPY\b.*?\((\d+)\s+TRANSACCION/i;
 const RE_YAPPY_COM = /^COMISION TRANSACCIONES YAPPY/i;
 const RE_ACH_XPRESS = /^ACH XPRESS - (.+)$/i;
@@ -102,11 +102,24 @@ function *combinations<T>(arr: T[], maxLen: number): Generator<T[]> {
   }
 }
 
-function getBatchToken(detail: { channel?: string | null; fortnight?: number | null; isDelinquent?: boolean }): string {
+function getBatchToken(detail: {
+  channel?: string | null;
+  fortnight?: number | null;
+  isDelinquent?: boolean;
+  batchName?: string | null;
+  filename?: string;
+}): string {
   const channel = detail.channel || "X";
   const fn = detail.fortnight ? String(detail.fortnight) : "";
   const morosos = detail.isDelinquent ? "M" : "";
-  return `${channel}${fn}${morosos}`;
+  const base = `${channel}${fn}${morosos}`;
+
+  const refName = detail.filename || detail.batchName || "";
+  const mSuffix = /-(\d{6,})\b/.exec(refName);
+  if (mSuffix && (!detail.fortnight || channel === "X")) {
+    return `${base}_${mSuffix[1]}`;
+  }
+  return base;
 }
 
 function classifyDebits(description: string): string {
@@ -197,7 +210,8 @@ export function reconcileBancoGeneral(
     } else if (m.debit != null && m.debit > 0) {
       const mRev = RE_REVERSAL.exec(desc);
       if (mRev) {
-        m.batchDateHint = mRev[1];
+        const rawRef = mRev[1] || "";
+        m.batchDateHint = /^\d{8}$/.test(rawRef) ? rawRef : m.date.replace(/-/g, "");
         m.isConsumed = false;
         reversals.push(m);
       } else if (RE_YAPPY_COM.test(desc)) {
@@ -333,7 +347,7 @@ export function reconcileBancoGeneral(
 
   for (const fl of allBatchDates) {
     const dts = uniqueBatches.filter((dt) => dt.batchDateStr === fl);
-    const revs = reversals.filter((r) => r.batchDateHint === fl);
+    const revs = reversals.filter((r) => r.batchDateHint === fl || (!r.isConsumed && r.date === (dts[0]?.effectiveDate || `${fl.slice(0, 4)}-${fl.slice(4, 6)}-${fl.slice(6, 8)}`)));
 
     for (const dt of dts) {
       const batchUid = `lote#${fl}#${getBatchToken(dt)}#r${dt.retryCount}`;

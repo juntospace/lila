@@ -89,6 +89,14 @@ export function parseBgAchDetail(
   };
 
   let inTable = false;
+  let isManual = false;
+  let colRoute = 0;
+  let colAccount = 1;
+  let colAmount = 2;
+  let colClientId = 3;
+  let colClientName = 4;
+  let colAddenda = 5;
+  let colError = 6;
 
   for (const row of rawRows) {
     if (!row || !Array.isArray(row)) continue;
@@ -100,6 +108,9 @@ export function parseBgAchDetail(
     if (!inTable) {
       if (s0.startsWith("Detalles del")) {
         out.variant = "A";
+        if (s0.toLowerCase().includes("manual")) {
+          isManual = true;
+        }
         continue;
       }
       if (s0.startsWith("Rechazos del")) {
@@ -147,29 +158,46 @@ export function parseBgAchDetail(
         continue;
       }
 
-      if (s0 === "CODIGO DE RUTA") {
+      if (row.some((c) => String(c ?? "").toUpperCase().includes("CODIGO DE RUTA"))) {
         inTable = true;
+        const headers = row.map((c) => String(c ?? "").trim().toUpperCase());
+        const fRoute = headers.findIndex((h) => h.includes("CODIGO DE RUTA") || h.includes("RUTA"));
+        const fAccount = headers.findIndex((h) => h.includes("CUENTA"));
+        const fAmount = headers.findIndex((h) => h.includes("MONTO"));
+        const fClientId = headers.findIndex((h) => h === "BENEFICIARIO");
+        const fClientName = headers.findIndex((h) => h.includes("NOMBRE DEL BENEFICIARIO") || h.includes("NOMBRE"));
+        const fAddenda = headers.findIndex((h) => h.includes("ADDENDA"));
+        const fError = headers.findIndex((h) => h.includes("ERROR"));
+
+        if (fRoute !== -1) colRoute = fRoute;
+        if (fAccount !== -1) colAccount = fAccount;
+        if (fAmount !== -1) colAmount = fAmount;
+        if (fClientId !== -1) colClientId = fClientId;
+        if (fClientName !== -1) colClientName = fClientName;
+        if (fAddenda !== -1) colAddenda = fAddenda;
+        if (fError !== -1) colError = fError;
         continue;
       }
       continue;
     }
 
-    const amountMinor = parseAmountMinor(row[2]);
-    const amount = parseAmountFloat(row[2]);
+    // Inside detail table
+    const amountMinor = parseAmountMinor(row[colAmount]);
+    const amount = parseAmountFloat(row[colAmount]);
     if (amountMinor == null || amount == null) continue;
 
-    const errorRaw = row[6] != null ? String(row[6]).trim() : "";
+    const errorRaw = colError !== -1 && row[colError] != null ? String(row[colError]).trim() : "";
     const mErr = RE_ERROR_CODE.exec(errorRaw);
     const errorCode = mErr ? mErr[1].toUpperCase() : errorRaw ? "R??" : "";
 
     out.rows.push({
-      routingCode: row[0] != null ? String(row[0]).trim() : "",
-      accountNumber: row[1] != null ? String(row[1]).trim() : "",
+      routingCode: colRoute !== -1 && row[colRoute] != null ? String(row[colRoute]).trim() : "",
+      accountNumber: colAccount !== -1 && row[colAccount] != null ? String(row[colAccount]).trim() : "",
       amountMinor,
       amount,
-      clientId: row[3] != null ? String(row[3]).trim() : "",
-      clientName: row[4] != null ? String(row[4]).trim() : "",
-      addenda: row[5] != null ? String(row[5]).trim() : "",
+      clientId: colClientId !== -1 && row[colClientId] != null ? String(row[colClientId]).trim() : "",
+      clientName: colClientName !== -1 && row[colClientName] != null ? String(row[colClientName]).trim() : "",
+      addenda: colAddenda !== -1 && row[colAddenda] != null ? String(row[colAddenda]).trim() : "",
       errorCode,
       errorDescription: errorRaw,
     });
@@ -187,7 +215,22 @@ export function parseBgAchDetail(
   out.succeededSum = Number(out.succeededSumMinor) / 100;
 
   if (!out.batchName) {
-    out.errors.push('Missing "Nombre de archivo" line: cannot identify batch');
+    if (isManual || filename.toLowerCase().includes("ach")) {
+      out.batchName = filename.replace(/\.xlsx?$/i, "");
+      if (out.effectiveDate) {
+        out.batchDateStr = out.effectiveDate.replace(/-/g, "");
+        out.batchDate = out.effectiveDate;
+      }
+      const allRoutes = out.rows.map((r) => r.routingCode).filter(Boolean);
+      if (allRoutes.length > 0 && allRoutes.every((r) => r === "0071")) {
+        out.channel = "BG";
+      } else if (allRoutes.length > 0) {
+        out.channel = "TER";
+      }
+      out.declaredTotalAmountMinor = out.rows.reduce((sum, r) => sum + r.amountMinor, 0n);
+    } else {
+      out.errors.push('Missing "Nombre de archivo" line: cannot identify batch');
+    }
   }
   if (!out.effectiveDate) {
     out.errors.push('Missing "Fecha efectiva"');

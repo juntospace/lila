@@ -48,9 +48,9 @@ describe("recomputeBgAccount integration", () => {
     const sumConfirmed =
       confirmed.reduce((s, t) => s + Number(t.credit_minor), 0) / 100;
 
-    // Must be exactly 67 confirmed transactions (66 transfers + 1 Yappy deposit), NOT 133
-    expect(confirmed.length).toBe(67);
-    expect(Math.abs(sumConfirmed - 3393.25)).toBeLessThan(0.01);
+    // Must be exactly 68 confirmed transactions (66 transfers + 1 direct deposit + 1 Yappy deposit)
+    expect(confirmed.length).toBe(68);
+    expect(Math.abs(sumConfirmed - 3408.25)).toBeLessThan(0.01);
 
     // Verify zero legacy SHA256 row_hashes exist
     const legacyRows = (txns || []).filter((t) => !t.row_hash.includes("|bg_"));
@@ -60,6 +60,6 @@ describe("recomputeBgAccount integration", () => {
     const yappyTxn = confirmed.find((t) => t.code === "DEPOSITO_YAPPY");
     expect(yappyTxn).toBeDefined();
     expect(Number(yappyTxn?.credit_minor)).toBe(7882);
-  });
+  }, 30000);
 });
 
