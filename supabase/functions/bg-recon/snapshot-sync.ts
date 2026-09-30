@@ -13,6 +13,7 @@ export interface SyncSnapshotResult {
   alertsUpserted: number;
   incomingUpserted: number;
   yappyDepositsUpserted: number;
+  achBatchesUpserted: number;
 }
 
 export async function syncSnapshotToDatabase(
@@ -52,7 +53,6 @@ export async function syncSnapshotToDatabase(
     batch_uid: b.uid,
     batch_date_str: b.batchDateStr,
     batch_filename: b.detailFilename,
-    batch_name: b.batchName,
     channel: b.channel,
     fortnight: b.fortnight,
     is_delinquent: b.isDelinquent,
@@ -279,6 +279,60 @@ export async function syncSnapshotToDatabase(
     }
   }
 
+  // 9. Sync Consolidated ACH Collection Batches into recon_transactions
+  // Ensures settled/approved ACH batches sum into loan inflows (total captado en el día) with a canonical, deterministic row_hash.
+  const achBatchTxnInserts = snapshot.batches
+    .filter((b) => {
+      const amount = b.succeededAmount ?? b.itemizedSucceededAmount ?? 0;
+      return amount > 0;
+    })
+    .map((b) => {
+      const isSettled = b.status === "settled" || b.status === "settled_no_reversals";
+      const amount = isSettled
+        ? (b.succeededAmount ?? b.itemizedSucceededAmount ?? 0)
+        : (b.itemizedSucceededAmount ?? b.succeededAmount ?? 0);
+      const amountMinor = BigInt(Math.round(amount * 100));
+      const postedAt =
+        b.creditDate ||
+        b.effectiveDate ||
+        (b.batchDateStr && b.batchDateStr.length === 8
+          ? `${b.batchDateStr.slice(0, 4)}-${b.batchDateStr.slice(4, 6)}-${b.batchDateStr.slice(6, 8)}`
+          : new Date().toISOString().slice(0, 10));
+
+      const count = b.succeededTransactions ?? b.succeededRowsCount ?? 0;
+      const desc = b.batchName
+        ? `LOTE ACH - ${b.batchName} (${count} exitosas)`
+        : `LOTE ACH ${b.batchDateStr} (${count} exitosas)`;
+
+      return {
+        ...(fallbackUploadId ? { upload_id: fallbackUploadId } : {}),
+        account_id: accountId,
+        posted_at: postedAt,
+        code: "COBRO_ACH",
+        description: desc,
+        debit_minor: 0,
+        credit_minor: amountMinor,
+        balance_minor: null,
+        currency: "USD",
+        payer_name_raw: "BANCO GENERAL - LOTE ACH",
+        rail_native_ref: b.uid,
+        kind: "loan_inflow",
+        state: isSettled ? "confirmed" : "pending",
+        row_hash: `${accountId}|bg_ach_batch|${b.uid}`,
+      };
+    });
+
+  for (let i = 0; i < achBatchTxnInserts.length; i += CHUNK_SIZE) {
+    const chunk = achBatchTxnInserts.slice(i, i + CHUNK_SIZE);
+    const { error: achError } = await supabase
+      .from("recon_transactions")
+      .upsert(chunk, { onConflict: "account_id,row_hash" });
+    if (achError) {
+      console.error("Error upserting recon_transactions for BG ACH batches in Edge Function:", achError);
+      throw achError;
+    }
+  }
+
   return {
     batchesUpserted: batchInserts.length,
     yappyBatchesUpserted: yappyBatchInserts.length,
@@ -288,6 +342,7 @@ export async function syncSnapshotToDatabase(
     alertsUpserted: alertInserts.length,
     incomingUpserted: incomingTxnInserts.length,
     yappyDepositsUpserted: yappyTxnInserts.length,
+    achBatchesUpserted: achBatchTxnInserts.length,
   };
 }
 

@@ -416,3 +416,10 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/bac-recon-recompute/deno.json"
 entrypoint = "./functions/bac-recon-recompute/index.ts"
+
+[functions.bg-recon]
+enabled = true
+verify_jwt = false
+import_map = "./functions/bg-recon/deno.json"
+entrypoint = "./functions/bg-recon/index.ts"
+
