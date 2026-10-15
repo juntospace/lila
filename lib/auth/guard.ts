@@ -106,3 +106,18 @@ export async function requireReconWriter(): Promise<OperatorSession> {
   }
   return session;
 }
+
+/**
+ * Guard for routes that need portfolio-writer privileges (uploading backups,
+ * deleting snapshots, modifying risk policies).
+ * Mirrors the `is_portfolio_writer()` SECURITY DEFINER function used in RLS.
+ */
+export async function requirePortfolioWriter(): Promise<OperatorSession> {
+  const session = await requireOperator();
+  const role = session.profile.role;
+  if (role !== "loan_officer" && role !== "admin") {
+    redirect("/?error=insufficient_role");
+  }
+  return session;
+}
+

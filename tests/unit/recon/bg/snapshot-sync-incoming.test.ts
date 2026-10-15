@@ -73,13 +73,20 @@ describe("syncSnapshotToDatabase · BG Incoming synchronization", () => {
 
     expect(result.incomingUpserted).toBe(snapshot.incoming.length);
     expect(result.yappyDepositsUpserted).toBe(snapshot.yappyBatches.length);
-    expect(upsertedRows.length).toBe(snapshot.incoming.length + snapshot.yappyBatches.length);
+    expect(result.achBatchesUpserted).toBeDefined();
+    expect(upsertedRows.length).toBe(
+      snapshot.incoming.length + snapshot.yappyBatches.length + result.achBatchesUpserted,
+    );
 
     // Verify properties of upserted recon_transactions
     const receivedRows = upsertedRows.filter((r) => r.state === "confirmed");
     expect(receivedRows.length).toBeGreaterThan(0);
 
-    const incomingRows = upsertedRows.filter((r) => !String(r.row_hash).includes("|bg_yappy_dep|"));
+    const incomingRows = upsertedRows.filter(
+      (r) =>
+        !String(r.row_hash).includes("|bg_yappy_dep|") &&
+        !String(r.row_hash).includes("|bg_ach_batch|"),
+    );
     for (const r of incomingRows) {
       expect(r.account_id).toBe(accountId);
       expect(typeof r.posted_at).toBe("string");
@@ -99,6 +106,18 @@ describe("syncSnapshotToDatabase · BG Incoming synchronization", () => {
       expect(r.code).toBe("DEPOSITO_YAPPY");
       expect(typeof r.row_hash).toBe("string");
       expect((r.row_hash as string).startsWith(`${accountId}|bg_yappy_dep|`)).toBe(true);
+    }
+
+    const achBatchRows = upsertedRows.filter((r) => String(r.row_hash).includes("|bg_ach_batch|"));
+    expect(achBatchRows.length).toBe(result.achBatchesUpserted);
+    for (const r of achBatchRows) {
+      expect(r.account_id).toBe(accountId);
+      expect(typeof r.posted_at).toBe("string");
+      expect(r.kind).toBe("loan_inflow");
+      expect(["confirmed", "pending"]).toContain(r.state);
+      expect(r.code).toBe("COBRO_ACH");
+      expect(typeof r.row_hash).toBe("string");
+      expect((r.row_hash as string).startsWith(`${accountId}|bg_ach_batch|`)).toBe(true);
     }
 
     // Verify specific August 20 transactions
