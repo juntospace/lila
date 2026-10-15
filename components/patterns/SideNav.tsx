@@ -3,9 +3,12 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  BarChart3,
   ClipboardList,
   FileSpreadsheet,
+  Layers,
   LayoutDashboard,
+  Sparkles,
   UserCircle2,
 } from "lucide-react";
 
@@ -13,10 +16,14 @@ import { cn } from "@/lib/utils/cn";
 
 const NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/portfolio", label: "Cartera", icon: Layers },
+  { href: "/portfolio/board", label: "Reporte Junta", icon: BarChart3 },
+  { href: "/portfolio/collections", label: "Plan Cobranzas", icon: Sparkles },
   { href: "/recon/upload", label: "Reconciliation", icon: FileSpreadsheet },
   { href: "/recon/audit", label: "Operator audit", icon: ClipboardList },
   { href: "/profile", label: "Profile", icon: UserCircle2 },
 ] as const;
+
 
 export function SideNav() {
   const pathname = usePathname();

@@ -1,6 +1,6 @@
 // End-to-end integration test for BG recompute engine and duplicate protection.
 
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { createClient } from "@supabase/supabase-js";
 import { describe, expect, it } from "vitest";
 
 import { recomputeBgAccount } from "@/lib/recon/bg/recompute";
