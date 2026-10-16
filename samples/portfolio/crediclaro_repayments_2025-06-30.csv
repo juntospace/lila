@@ -1,0 +1,8 @@
+"Loan Id","Loan #","Borrower","Collection Date","Principal Paid Amount","Interest Paid Amount","Fees Amount","Penalty Amount","Total Paid Amount","Payment Method"
+"1001","LN-1001","Carlos Mendoza","15/06/2025","200.00","50.00","0.00","0.00","250.00","ACH"
+"1002","LN-1002","Ana Morales","10/06/2025","120.00","30.00","0.00","0.00","150.00","Yappy"
+"1004","LN-1004","Luisa Fernandez","10/06/2025","160.00","40.00","0.00","0.00","200.00","Banco General"
+"1008","LN-1008","Beatriz Solis","28/06/2025","400.00","100.00","0.00","0.00","500.00","ACH"
+"1009","LN-1009","Sofia Valdes","18/06/2025","320.00","80.00","0.00","0.00","400.00","Yappy"
+"1001","LN-1001","Carlos Mendoza","15/07/2025","200.00","50.00","0.00","0.00","250.00","ACH"
+

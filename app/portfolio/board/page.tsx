@@ -1,14 +1,10 @@
 import Link from "next/link";
-import { UploadCloud, Layers } from "lucide-react";
+import { Layers, UploadCloud } from "lucide-react";
 
 import { OperatorShell } from "@/components/patterns/OperatorShell";
 import { requireOperator } from "@/lib/auth/guard";
 import { loadBoardDataset } from "@/lib/portfolio/board";
-import { isPreviewMode } from "@/lib/preview";
-import {
-  createSupabaseServerClient,
-  createSupabaseServiceClient,
-} from "@/lib/supabase/server";
+import { getPortfolioClient } from "@/lib/portfolio/client";
 
 import { BoardReportView } from "./board-view";
 
@@ -26,18 +22,23 @@ export default async function PortfolioBoardPage({
   const entityCode = params.entity || "crediclaro";
   const targetDate = params.date;
 
-  const supabase = isPreviewMode()
-    ? createSupabaseServiceClient()
-    : await createSupabaseServerClient();
+  const supabase = await getPortfolioClient();
   const dataset = await loadBoardDataset(supabase, entityCode, targetDate);
 
   return (
     <OperatorShell session={session}>
       <header className="mb-6 flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="font-display text-2xl font-bold tracking-tight text-fg">
-            Reporte de Junta Directiva
-          </h1>
+          <div className="flex items-center gap-2.5">
+            <h1 className="font-display text-2xl font-bold tracking-tight text-fg">
+              Reporte de Junta Directiva
+            </h1>
+            {dataset?.policyVersion && (
+              <span className="rounded-full bg-[#F1E6F8] px-2.5 py-0.5 text-xs font-semibold text-[#4C0374]">
+                Política {dataset.policyVersion}
+              </span>
+            )}
+          </div>
           <p className="mt-1 text-xs text-fg-muted">
             Cartera y envejecimiento de préstamos ·{" "}
             {entityCode === "crediclaro"
@@ -66,7 +67,6 @@ export default async function PortfolioBoardPage({
       {dataset ? (
         <BoardReportView data={dataset} />
       ) : (
-
         <div className="mx-auto max-w-xl rounded-2xl border border-border-subtle bg-bg-surface p-10 text-center shadow-xs">
           <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-[#F1E6F8] text-[#620494]">
             <UploadCloud className="h-6 w-6" />
@@ -76,7 +76,7 @@ export default async function PortfolioBoardPage({
           </h3>
           <p className="mt-1 text-xs text-fg-muted">
             Para visualizar las métricas y la distribución de mora para la Junta,
-            carga un backup de LoanDisk (CSV o ZIP) desde el panel de ingesta.
+            carga un backup de LoanDisk (CSV) desde el panel de ingesta.
           </p>
           <div className="mt-6 flex justify-center">
             <Link

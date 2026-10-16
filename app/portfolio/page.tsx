@@ -4,16 +4,13 @@ import {
   Calendar,
   Download,
   Layers,
+  ShieldCheck,
   Trash2,
 } from "lucide-react";
 
 import { OperatorShell } from "@/components/patterns/OperatorShell";
 import { requireOperator } from "@/lib/auth/guard";
-import { isPreviewMode } from "@/lib/preview";
-import {
-  createSupabaseServerClient,
-  createSupabaseServiceClient,
-} from "@/lib/supabase/server";
+import { getPortfolioClient } from "@/lib/portfolio/client";
 
 import { deleteSnapshotAction } from "./actions";
 import { PortfolioUploadPanel } from "./upload-panel";
@@ -22,16 +19,18 @@ export const dynamic = "force-dynamic";
 
 export default async function PortfolioIndexPage() {
   const session = await requireOperator();
-  const supabase = isPreviewMode()
-    ? createSupabaseServiceClient()
-    : await createSupabaseServerClient();
+  const supabase = await getPortfolioClient();
 
   const { data: snapshotsData } = await supabase
     .from("portfolio_snapshots")
-    .select(`
+    .select(
+      `
       *,
-      portfolio_entities (code, display_name)
-    `)
+      portfolio_entities (code, display_name),
+      portfolio_policy (version),
+      portfolio_ingest_batches (*)
+    `,
+    )
     .order("snapshot_date", { ascending: false });
 
   const snapshots = snapshotsData || [];
@@ -44,10 +43,11 @@ export default async function PortfolioIndexPage() {
       <header className="mb-6 flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="font-display text-2xl font-bold tracking-tight text-fg">
-            Gestión de Cartera & Reportes
+            Gestión de Cartera &amp; Reportes
           </h1>
           <p className="mt-1 text-xs text-fg-muted">
-            Historial de instantáneas de LoanDisk, reportes ejecutivos de Junta y planes de cobranza.
+            Historial de instantáneas de LoanDisk, reportes ejecutivos de Junta y
+            planes de cobranza.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -69,7 +69,6 @@ export default async function PortfolioIndexPage() {
       </header>
 
       <div className="space-y-8">
-
         {/* Ingest Panel */}
         <PortfolioUploadPanel />
 
@@ -90,6 +89,7 @@ export default async function PortfolioIndexPage() {
                 <tr className="border-b border-border-subtle bg-bg-raised/60 text-[10px] font-bold uppercase tracking-wider text-fg-subtle">
                   <th className="py-2.5 px-3">Fecha de corte</th>
                   <th className="py-2.5 px-3">Entidad</th>
+                  <th className="py-2.5 px-3">Política</th>
                   <th className="py-2.5 px-3 text-right">Préstamos</th>
                   <th className="py-2.5 px-3 text-right">Saldo abierto</th>
                   <th className="py-2.5 px-3 text-right">CeR 30+</th>
@@ -111,8 +111,11 @@ export default async function PortfolioIndexPage() {
                     <td className="py-2.5 px-3 font-medium text-fg">
                       {s.portfolio_entities?.display_name || "Crediclaro"}
                     </td>
+                    <td className="py-2.5 px-3 font-mono text-fg-muted">
+                      {s.portfolio_policy?.version || "v1.0"}
+                    </td>
                     <td className="py-2.5 px-3 text-right font-mono text-fg">
-                      {s.total_open_loans.toLocaleString()}
+                      {s.total_open_loans.toLocaleString("en-US")}
                     </td>
                     <td className="py-2.5 px-3 text-right font-mono font-bold text-fg">
                       {fmtMoney(Number(s.total_open_balance))}
@@ -123,8 +126,8 @@ export default async function PortfolioIndexPage() {
                           Number(s.cer30_percentage) <= 15
                             ? "bg-emerald-100 text-emerald-800"
                             : Number(s.cer30_percentage) <= 28
-                            ? "bg-amber-100 text-amber-800"
-                            : "bg-rose-100 text-rose-800"
+                              ? "bg-amber-100 text-amber-800"
+                              : "bg-rose-100 text-rose-800"
                         }`}
                       >
                         {Number(s.cer30_percentage).toFixed(1)}%
@@ -136,14 +139,14 @@ export default async function PortfolioIndexPage() {
                           Number(s.cer90_percentage) <= 8
                             ? "bg-emerald-100 text-emerald-800"
                             : Number(s.cer90_percentage) <= 18
-                            ? "bg-amber-100 text-amber-800"
-                            : "bg-rose-100 text-rose-800"
+                              ? "bg-amber-100 text-amber-800"
+                              : "bg-rose-100 text-rose-800"
                         }`}
                       >
                         {Number(s.cer90_percentage).toFixed(1)}%
                       </span>
                     </td>
-                    <td className="py-2.5 px-3 text-right font-mono text-emerald-600 font-semibold">
+                    <td className="py-2.5 px-3 text-right font-mono font-semibold text-emerald-600">
                       {fmtMoney(Number(s.total_collected_handover))}
                     </td>
                     <td className="py-2.5 px-3 text-center font-mono">
@@ -201,12 +204,115 @@ export default async function PortfolioIndexPage() {
 
             {snapshots.length === 0 && (
               <div className="p-8 text-center text-xs text-fg-muted">
-                No hay instantáneas guardadas todavía. Carga un archivo arriba para
-                comenzar.
+                No hay instantáneas guardadas todavía. Carga un archivo arriba
+                para comenzar.
               </div>
             )}
           </div>
         </div>
+
+        {/* Data Quality Panel per Snapshot (Fase 4.3) */}
+        {snapshots.length > 0 && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 text-[#620494]" />
+              <h3 className="text-sm font-semibold text-fg">
+                Calidad de datos y conciliación por instantánea
+              </h3>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              {snapshots.map((s) => {
+                const batches = Array.isArray(s.portfolio_ingest_batches)
+                  ? s.portfolio_ingest_batches
+                  : s.portfolio_ingest_batches
+                    ? [s.portfolio_ingest_batches]
+                    : [];
+                const b = batches[0];
+
+                const futureExcl =
+                  b?.future_payments_excluded ??
+                  s.future_payments_excluded_count ??
+                  0;
+                const cashAhead = b?.cash_ahead_count ?? s.cash_ahead_count ?? 0;
+                const adminCount = b?.admin_excluded_count ?? 0;
+                const adminAmount = Number(b?.admin_excluded_amount ?? 0);
+                const unknownMethods: string[] = Array.isArray(
+                  b?.unknown_methods,
+                )
+                  ? b.unknown_methods
+                  : [];
+                const missingFields: string[] = Array.isArray(
+                  b?.missing_custom_fields,
+                )
+                  ? b.missing_custom_fields
+                  : [];
+                const missingReleased = Number(
+                  b?.missing_released_date_count ?? 0,
+                );
+
+                return (
+                  <div
+                    key={`quality-${s.id}`}
+                    className="rounded-xl border border-border-subtle bg-bg-surface p-4 text-xs shadow-xs space-y-2.5"
+                  >
+                    <div className="flex items-center justify-between border-b border-border-subtle pb-2">
+                      <span className="font-mono font-bold text-fg">
+                        {s.snapshot_date} ·{" "}
+                        {s.portfolio_entities?.display_name || "Crediclaro"}
+                      </span>
+                      {b ? (
+                        <span className="rounded bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                          Conciliado ({b.rows_loans} préstamos /{" "}
+                          {b.rows_repayments} pagos)
+                        </span>
+                      ) : (
+                        <span className="rounded bg-bg-raised px-2 py-0.5 text-[10px] text-fg-muted">
+                          Snapshot base
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-[11px] text-fg-muted">
+                      <div>
+                        Pagos futuros excluidos:{" "}
+                        <b className="text-fg">{futureExcl}</b>
+                      </div>
+                      <div>
+                        Ajuste de caja (cash_ahead):{" "}
+                        <b className="text-fg">{cashAhead}</b>
+                      </div>
+                      <div>
+                        Mov. administrativos excl.:{" "}
+                        <b className="text-fg">
+                          {adminCount} ({fmtMoney(adminAmount)})
+                        </b>
+                      </div>
+                      <div>
+                        Sin Released Date:{" "}
+                        <b className="text-fg">{missingReleased}</b>
+                      </div>
+                    </div>
+
+                    {unknownMethods.length > 0 && (
+                      <div className="rounded bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900">
+                        <b>Métodos sin clasificar:</b>{" "}
+                        {unknownMethods.join(", ")}
+                      </div>
+                    )}
+
+                    {missingFields.length > 0 && (
+                      <div className="rounded bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900">
+                        <b>Campos personalizados faltantes:</b>{" "}
+                        {missingFields.join(", ")}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
     </OperatorShell>
   );

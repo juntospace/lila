@@ -1,28 +1,22 @@
 // Financial Engine — Source of Truth for Board Report & Collections Plan
 // Faithful TypeScript implementation of Python generate_report.py & generar_acciones.py
 
+import { DEFAULT_POLICY } from "./policy";
 import type {
   EnrichedLoan,
   EnrichedRepayment,
   PortfolioBucket,
+  PortfolioPolicy,
   PortfolioSegment,
 } from "./types";
 
-export const HANDOVER_DATE = "2025-06-01"; // Management handover cutoff
-export const CO_UNSECURED = 180; // Castigo threshold unsecured (days)
-export const CO_SECURED = 360; // Castigo threshold secured (days)
+export const HANDOVER_DATE = DEFAULT_POLICY.handoverDate; // Management handover cutoff
+export const CO_UNSECURED = DEFAULT_POLICY.coUnsecured; // Castigo threshold unsecured (days)
+export const CO_SECURED = DEFAULT_POLICY.coSecured; // Castigo threshold secured (days)
 
-export const BUCKETS: PortfolioBucket[] = [
-  "Al día",
-  "1-30",
-  "31-60",
-  "61-90",
-  "91-180",
-  "181-365",
-  "365+",
-];
+export const BUCKETS: PortfolioBucket[] = DEFAULT_POLICY.bucketNames;
 
-export const BUCKET_BINS = [-1, 0, 30, 60, 90, 180, 365, 1e9];
+export const BUCKET_BINS = DEFAULT_POLICY.bucketBins;
 
 export const BUCKET_COLORS = [
   "#37A98A",
@@ -34,7 +28,7 @@ export const BUCKET_COLORS = [
   "#973A4A",
 ];
 
-export const PROV_RATES = [0.01, 0.05, 0.15, 0.25, 0.50, 0.90, 1.00];
+export const PROV_RATES = DEFAULT_POLICY.provRates;
 
 export const SEGMENTS: PortfolioSegment[] = [
   "Adelantos",
@@ -42,22 +36,9 @@ export const SEGMENTS: PortfolioSegment[] = [
   "Personal sin Garantía",
 ];
 
-export const REAL_METHODS = new Set([
-  "ach",
-  "cheque",
-  "yappy",
-  "deposito en efectivo",
-  "debito planilla (empleado)",
-  "debito planilla",
-]);
+export const REAL_METHODS = new Set(DEFAULT_POLICY.realMethods);
 
-export const ADMIN_METHODS = new Set([
-  "descuento por pronto pago",
-  "finiquito otorgado",
-  "traspaso a provision",
-  "traspaso de saldo",
-  "ajuste",
-]);
+export const ADMIN_METHODS = new Set(DEFAULT_POLICY.adminMethods);
 
 export const CLOSED_STATUSES = new Set(["fully paid", "restructured"]);
 
@@ -66,6 +47,14 @@ export const TG_VALS = ["Automóvil", "Moto", "NA"];
 export const TC_VALS = ["Heredada", "Vigente"];
 export const GC_VALS = ["BCS", "Michel Sanabria Rivera", "Legal - Ruben Castrejo"];
 export const MR_VALS = ["2025DIC", "2024DIC", "2021AGO", "NA"];
+
+export const CUSTOM_FIELD_NAMES = [
+  "Prestamo Garantizado",
+  "Tipo de Garantia",
+  "Tipo de Cartera",
+  "Gestor de Cobro",
+  "Motor de Riesgo (Adelantos)",
+] as const;
 
 export const GC_HEUR: Record<string, string> = {
   michel: "Michel Sanabria Rivera",
@@ -96,6 +85,20 @@ export function colfind(keys: string[], wanted: string): string | null {
   return null;
 }
 
+export function detectMissingCustomFields(
+  rows: Record<string, string>[],
+): string[] {
+  if (!rows || rows.length === 0) return [];
+  const keys = Object.keys(rows[0]);
+  const missing: string[] = [];
+  for (const field of CUSTOM_FIELD_NAMES) {
+    if (colfind(keys, field) === null) {
+      missing.push(field);
+    }
+  }
+  return missing;
+}
+
 export function canonVal(
   v: unknown,
   canonicalList: string[],
@@ -115,11 +118,30 @@ export function canonVal(
   return raw;
 }
 
+/**
+ * Strict numeric parser matching Python's pd.to_numeric(..., errors="coerce").fillna(0.0)
+ * after stripping commas and dollar signs. Rejects trailing garbage like "12abc" -> 0.
+ */
 export function num(s: unknown): number {
   if (s === null || s === undefined) return 0;
-  const clean = String(s).replace(/,/g, "").trim();
-  const n = parseFloat(clean);
-  return isNaN(n) ? 0 : n;
+  if (typeof s === "number") return Number.isFinite(s) ? s : 0;
+  const clean = String(s).replace(/[,$]/g, "").trim();
+  if (!clean) return 0;
+  const n = Number(clean);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * Parses Days Past Due without stripping commas, matching Python's
+ * pd.to_numeric(df["Days Past Due"], errors="coerce").fillna(0)
+ */
+export function parseDpd(s: unknown): number {
+  if (s === null || s === undefined) return 0;
+  if (typeof s === "number") return Number.isFinite(s) ? s : 0;
+  const str = String(s).trim();
+  if (!str) return 0;
+  const n = Number(str);
+  return Number.isFinite(n) ? n : 0;
 }
 
 /**
@@ -149,21 +171,24 @@ export function pdate(s: unknown): string | null {
  * Computes right-closed bucket index based on BUCKET_BINS:
  * [-1, 0, 30, 60, 90, 180, 365, 1e9]
  */
-export function getBucketIdx(dpd: number): number {
-  if (dpd <= 0) return 0; // "Al día"
-  if (dpd <= 30) return 1; // "1-30"
-  if (dpd <= 60) return 2; // "31-60"
-  if (dpd <= 90) return 3; // "61-90"
-  if (dpd <= 180) return 4; // "91-180"
-  if (dpd <= 365) return 5; // "181-365"
-  return 6; // "365+"
+export function getBucketIdx(
+  dpd: number,
+  bins: number[] = BUCKET_BINS,
+): number {
+  for (let i = 0; i < bins.length - 2; i++) {
+    if (dpd <= bins[i + 1]) return i;
+  }
+  return Math.max(0, bins.length - 2);
 }
 
 // =============================================================
 // Core Loan Enrichment — enrich()
 // =============================================================
 
-export function enrichLoan(raw: Record<string, string>): EnrichedLoan {
+export function enrichLoan(
+  raw: Record<string, string>,
+  policy: PortfolioPolicy = DEFAULT_POLICY,
+): EnrichedLoan {
   const keys = Object.keys(raw);
 
   const getCol = (name: string): string => {
@@ -172,7 +197,7 @@ export function enrichLoan(raw: Record<string, string>): EnrichedLoan {
   };
 
   const balance = num(getCol("Balance Amount"));
-  const rawDpd = num(getCol("Days Past Due"));
+  const rawDpd = parseDpd(getCol("Days Past Due"));
   const releasedDate = pdate(getCol("Released Date"));
   const statusRaw = getCol("Loan Status Name").trim();
 
@@ -215,8 +240,10 @@ export function enrichLoan(raw: Record<string, string>): EnrichedLoan {
   const pastCol = colfind(keys, "Past Due");
   const pendCol = colfind(keys, "Pending Due");
 
-  const hasPast = pastCol !== null && raw[pastCol] !== undefined && raw[pastCol].trim() !== "";
-  const hasPend = pendCol !== null && raw[pendCol] !== undefined && raw[pendCol].trim() !== "";
+  const hasPast =
+    pastCol !== null && raw[pastCol] !== undefined && raw[pastCol].trim() !== "";
+  const hasPend =
+    pendCol !== null && raw[pendCol] !== undefined && raw[pendCol].trim() !== "";
 
   const pastDue = hasPast ? num(raw[pastCol!]) : 0;
   const pendingDue = hasPend ? num(raw[pendCol!]) : 0;
@@ -228,18 +255,26 @@ export function enrichLoan(raw: Record<string, string>): EnrichedLoan {
 
   // If cash_ahead, force dpd = 0 ("Al día"), preserve dpdLoandisk for audit
   const dpd = cashAhead ? 0 : rawDpd;
-  const bucketIdx = getBucketIdx(dpd);
-  const bucket = BUCKETS[bucketIdx];
+  const bucketBins = policy.bucketBins || BUCKET_BINS;
+  const bucketNames = policy.bucketNames || BUCKETS;
+  const bucketIdx = getBucketIdx(dpd, bucketBins);
+  const bucket = bucketNames[bucketIdx] ?? BUCKETS[bucketIdx];
 
-  // Duration, Total Due, Installments, Repayment cycle
+  // Duration, Total Due, Installments (capped at 1500), Repayment cycle (Fase 2.7)
   const loanDuration = getCol("Loan Duration");
   const durMatch = loanDuration.match(/(\d+)/);
-  const installmentsCount = durMatch ? parseInt(durMatch[1], 10) : null;
+  const parsedInstallments = durMatch ? parseInt(durMatch[1], 10) : null;
+  const installmentsCount =
+    parsedInstallments !== null && parsedInstallments > 0
+      ? Math.min(parsedInstallments, 1500)
+      : null;
 
   const repaymentCycle = getCol("Repayment Cycle");
   const cycleType = repaymentCycle.toLowerCase().includes("month") ? 0 : 1;
 
-  const totalDueAmount = num(getCol("Total Due Amount"));
+  const rawTotalDue = num(getCol("Total Due Amount"));
+  const totalDueAmount =
+    rawTotalDue > 0 ? Math.round(rawTotalDue * 100) / 100 : 0;
   const lastPaymentDate = pdate(getCol("Last Payment Date"));
   const lastPaymentAmount = num(getCol("Last Payment Amount"));
 
@@ -265,7 +300,7 @@ export function enrichLoan(raw: Record<string, string>): EnrichedLoan {
     statusRaw,
     pastDue: Math.round(pastDue * 100) / 100,
     pendingDue: Math.round(pendingDue * 100) / 100,
-    totalDueAmount: Math.round(totalDueAmount * 100) / 100,
+    totalDueAmount,
     loanDuration: loanDuration.trim(),
     installmentsCount,
     repaymentCycle: repaymentCycle.trim(),
@@ -282,31 +317,54 @@ export function enrichLoan(raw: Record<string, string>): EnrichedLoan {
   };
 }
 
-export function enrichLoans(rows: Record<string, string>[]): EnrichedLoan[] {
-  return rows.map(enrichLoan);
+export function enrichLoans(
+  rows: Record<string, string>[],
+  policy: PortfolioPolicy = DEFAULT_POLICY,
+): EnrichedLoan[] {
+  return rows.map((r) => enrichLoan(r, policy));
 }
 
 // =============================================================
 // Repayment Classification & Processing
 // =============================================================
 
-export function detectMethodCol(rows: Record<string, string>[]): string | null {
+/**
+ * Detects the repayment method column by counting distinct recognized method
+ * values within the first 200 unique non-empty values of each column (Fase 2.3).
+ */
+export function detectMethodCol(
+  rows: Record<string, string>[],
+  policy: PortfolioPolicy = DEFAULT_POLICY,
+): string | null {
   if (!rows || rows.length === 0) return null;
-  const known = new Set([...REAL_METHODS, ...ADMIN_METHODS]);
-  const sample = rows.slice(0, 200);
+  const known = new Set([
+    ...policy.realMethods.map(normLabel),
+    ...policy.adminMethods.map(normLabel),
+  ]);
   const cols = Object.keys(rows[0]);
 
   let bestCol: string | null = null;
   let bestHits = 0;
 
   for (const c of cols) {
-    let hits = 0;
-    for (const r of sample) {
-      const v = normLabel(r[c]);
-      if (v && known.has(v)) {
-        hits++;
+    const uniqueRaw = new Set<string>();
+    for (const r of rows) {
+      const val = r[c];
+      if (val !== undefined && val !== null && String(val).trim() !== "") {
+        uniqueRaw.add(String(val));
+        if (uniqueRaw.size >= 200) break;
       }
     }
+
+    const recognizedDistinct = new Set<string>();
+    for (const u of uniqueRaw) {
+      const v = normLabel(u);
+      if (v && known.has(v)) {
+        recognizedDistinct.add(v);
+      }
+    }
+
+    const hits = recognizedDistinct.size;
     if (hits > bestHits) {
       bestHits = hits;
       bestCol = c;
@@ -319,6 +377,7 @@ export function detectMethodCol(rows: Record<string, string>[]): string | null {
 export function enrichRepayment(
   raw: Record<string, string>,
   methodCol: string | null,
+  policy: PortfolioPolicy = DEFAULT_POLICY,
 ): EnrichedRepayment {
   const keys = Object.keys(raw);
   const getCol = (name: string): string => {
@@ -330,22 +389,26 @@ export function enrichRepayment(
   const interest = num(getCol("Interest Paid Amount"));
   const penalty = num(getCol("Penalty Paid Amount"));
   const fees = num(getCol("Fees Paid Amount"));
-  const total = num(getCol("Total Paid Amount")) || prin + interest + penalty + fees;
+  const total =
+    num(getCol("Total Paid Amount")) || prin + interest + penalty + fees;
   const ingresos = interest + penalty + fees;
 
   const collectionDate = pdate(getCol("Collection Date")) || "";
   const methodRaw = methodCol ? (raw[methodCol] ?? "").trim() : "";
   const methodNorm = normLabel(methodRaw);
 
+  const realSet = new Set(policy.realMethods.map(normLabel));
+  const adminSet = new Set(policy.adminMethods.map(normLabel));
+
   let isReal = true;
   let isAdmin = false;
   let isUnknownMethod = false;
 
   if (methodCol && methodNorm) {
-    if (ADMIN_METHODS.has(methodNorm)) {
+    if (adminSet.has(methodNorm)) {
       isAdmin = true;
       isReal = false;
-    } else if (REAL_METHODS.has(methodNorm)) {
+    } else if (realSet.has(methodNorm)) {
       isReal = true;
       isAdmin = false;
     } else {
@@ -377,13 +440,14 @@ export function enrichRepayment(
 export function enrichRepayments(
   rows: Record<string, string>[],
   cutDate?: string,
+  policy: PortfolioPolicy = DEFAULT_POLICY,
 ): { repayments: EnrichedRepayment[]; futureExcludedCount: number } {
-  const methodCol = detectMethodCol(rows);
+  const methodCol = detectMethodCol(rows, policy);
   let futureExcludedCount = 0;
   const list: EnrichedRepayment[] = [];
 
   for (const r of rows) {
-    const rep = enrichRepayment(r, methodCol);
+    const rep = enrichRepayment(r, methodCol, policy);
     if (!rep.collectionDate) continue;
 
     // Filter future dated payments (§3.2 & §1.3)
@@ -396,4 +460,3 @@ export function enrichRepayments(
 
   return { repayments: list, futureExcludedCount };
 }
-
