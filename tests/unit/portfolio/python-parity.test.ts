@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import ExcelJS from "exceljs";
@@ -60,6 +61,15 @@ function parseSimpleCsv(text: string): Record<string, string>[] {
 describe("Python mathematical parity (end-to-end fixture suite)", () => {
   const fixturesDir = path.join(process.cwd(), "tests/fixtures/portfolio/parity");
   const expectedPath = path.join(fixturesDir, "expected/expected.json");
+  const loansMayPath = path.join(fixturesDir, "loans_2025-05-31.csv");
+
+  if (!fs.existsSync(loansMayPath) || !fs.existsSync(expectedPath)) {
+    execFileSync(
+      "python3",
+      [path.join(process.cwd(), "scripts/portfolio/export_python_expected.py")],
+      { cwd: process.cwd(), stdio: "inherit" }
+    );
+  }
 
   const expected = JSON.parse(fs.readFileSync(expectedPath, "utf8")) as {
     futureExcludedCount: number;
@@ -69,7 +79,7 @@ describe("Python mathematical parity (end-to-end fixture suite)", () => {
   };
 
   const loansMayRaw = parseSimpleCsv(
-    fs.readFileSync(path.join(fixturesDir, "loans_2025-05-31.csv"), "utf8")
+    fs.readFileSync(loansMayPath, "utf8")
   );
   const loansJunRaw = parseSimpleCsv(
     fs.readFileSync(path.join(fixturesDir, "loans_2025-06-30.csv"), "utf8")
