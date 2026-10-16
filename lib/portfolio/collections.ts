@@ -10,20 +10,55 @@ import {
   CO_SECURED,
   CO_UNSECURED,
 } from "./enrich";
+import { DEFAULT_POLICY } from "./policy";
 import type {
   ActionPlanItem,
   ActionPlanSummary,
   EnrichedLoan,
+  PortfolioPolicy,
 } from "./types";
 
 export const TOP_N_ACTIONS = 40;
+
+function pyRound0(val: number): number {
+  if (!Number.isFinite(val) || val === 0) return 0;
+  const floor = Math.floor(val);
+  const diff = val - floor;
+  if (Math.abs(diff - 0.5) < 1e-9) {
+    return floor % 2 === 0 ? floor : floor + 1;
+  }
+  return Math.round(val);
+}
+
+function pyRound2(val: number): number {
+  if (!Number.isFinite(val) || val === 0) return 0;
+  const sign = val < 0 ? -1 : 1;
+  const abs = Math.abs(val);
+  const str = abs.toFixed(20);
+  const dotIdx = str.indexOf(".");
+  const intStr = str.slice(0, dotIdx);
+  const fracStr = str.slice(dotIdx + 1);
+  const d2Str = fracStr.slice(0, 2);
+  const restStr = fracStr.slice(2);
+  const halfStr = "500000000000000000";
+
+  let cents = BigInt(intStr) * 100n + BigInt(d2Str);
+  if (restStr > halfStr) {
+    cents += 1n;
+  } else if (restStr === halfStr && cents % 2n !== 0n) {
+    cents += 1n;
+  }
+  return sign * (Number(cents) / 100);
+}
 
 export interface BuildPlanParams {
   loans: EnrichedLoan[];
   asOfDate: string; // YYYY-MM-DD
   prevBucketMap?: Record<string, number> | null; // loanId -> bucketIdx in previous snapshot
   lastRealPaymentMap?: Record<string, string> | null; // loanId -> last real payment YYYY-MM-DD
+  hasRepaymentsFile?: boolean; // Explicit flag whether a repayments file was loaded (Fase 2.1)
   prevDate?: string | null;
+  policy?: PortfolioPolicy;
 }
 
 export function buildCollectionsPlan(params: BuildPlanParams): {
@@ -35,8 +70,21 @@ export function buildCollectionsPlan(params: BuildPlanParams): {
     asOfDate,
     prevBucketMap,
     lastRealPaymentMap,
+    hasRepaymentsFile,
     prevDate = null,
+    policy = DEFAULT_POLICY,
   } = params;
+
+  const coSecured = policy.coSecured ?? policy.coSecuredDpd ?? CO_SECURED;
+  const coUnsecured = policy.coUnsecured ?? policy.coUnsecuredDpd ?? CO_UNSECURED;
+  const bucketNames = policy.bucketNames ?? BUCKETS;
+
+  // Fase 2.1: If a repayments file was loaded, lpd comes exclusively from lastRealPaymentMap
+  // without falling back to loan.lastPaymentDate. Only fallback when no repayments file exists.
+  const useRealPaymentsOnly =
+    hasRepaymentsFile !== undefined
+      ? hasRepaymentsFile
+      : lastRealPaymentMap !== undefined && lastRealPaymentMap !== null;
 
   const asOfTime = new Date(asOfDate).getTime();
   const openLoans = loans.filter((l) => l.isOpen);
@@ -46,13 +94,11 @@ export function buildCollectionsPlan(params: BuildPlanParams): {
   const items: ActionPlanItem[] = [];
 
   for (const loan of openLoans) {
-    const threshold = loan.secured ? CO_SECURED : CO_UNSECURED;
+    const threshold = loan.secured ? coSecured : coUnsecured;
 
-    // Determine last payment date (prefer last real payment, fallback to loan.lastPaymentDate)
-    const lpd =
-      lastRealPaymentMap && lastRealPaymentMap[loan.loanId]
-        ? lastRealPaymentMap[loan.loanId]
-        : loan.lastPaymentDate;
+    const lpd = useRealPaymentsOnly
+      ? lastRealPaymentMap?.[loan.loanId] ?? null
+      : loan.lastPaymentDate ?? null;
 
     let dsp: number | null = null;
     if (lpd) {
@@ -96,7 +142,7 @@ export function buildCollectionsPlan(params: BuildPlanParams): {
       dpd <= 180
     ) {
       motivos.push(
-        `Rodó de tramo (${BUCKETS[prevBi]} → ${BUCKETS[loan.bucketIdx]})`,
+        `Rodó de tramo (${bucketNames[prevBi]} → ${bucketNames[loan.bucketIdx]})`,
       );
       if (prio > 1) {
         prio = 1;
@@ -108,7 +154,7 @@ export function buildCollectionsPlan(params: BuildPlanParams): {
     if (dpd > 0 && dpd <= 90 && cura > 0.01) {
       const lev = bal / Math.max(cura, 25.0);
       motivos.push(
-        `Cura barata: $${Math.round(cura).toLocaleString()} re-envejece $${Math.round(bal).toLocaleString()}`,
+        `Cura barata: $${pyRound0(cura).toLocaleString("en-US")} re-envejece $${pyRound0(bal).toLocaleString("en-US")}`,
       );
       if (prio > 2) {
         prio = 2;
@@ -148,16 +194,17 @@ export function buildCollectionsPlan(params: BuildPlanParams): {
 
     items.push({
       prio: prio as 1 | 2 | 3,
-      score: Math.round(score * 100) / 100,
-      loanno: loan.loanNumber || loan.loanId,
+      score: pyRound2(score),
+      // Fase 2.6: Do not fallback to loanId when Loan # is empty
+      loanno: loan.loanNumber ?? "",
       cliente: loan.fullName,
       cel: loan.borrowerMobile,
       seg: loan.segment,
       producto: loan.product,
       dpd,
       tramo: loan.bucket,
-      saldo: Math.round(bal * 100) / 100,
-      cura: Math.round(cura * 100) / 100,
+      saldo: pyRound2(bal),
+      cura: pyRound2(cura),
       ultpago: lpd ?? "",
       motivo: motivos.join(" · "),
     });
@@ -180,15 +227,14 @@ export function buildCollectionsPlan(params: BuildPlanParams): {
 
   const resumen: ActionPlanSummary = {
     abiertos: openLoans.length,
-    saldo: Math.round(totalOpenBalance * 100) / 100,
+    saldo: pyRound2(totalOpenBalance),
     accionables: items.length,
     castigo_excl: castigoExclCount,
-    castigo_saldo: Math.round(castigoSaldo * 100) / 100,
+    castigo_saldo: pyRound2(castigoSaldo),
     prev_date: prevDate,
-    top40_cura: Math.round(top40Cura * 100) / 100,
-    top40_saldo: Math.round(top40Saldo * 100) / 100,
+    top40_cura: pyRound2(top40Cura),
+    top40_saldo: pyRound2(top40Saldo),
   };
 
   return { plan: items, resumen };
 }
-

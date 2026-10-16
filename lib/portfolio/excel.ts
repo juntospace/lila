@@ -39,6 +39,7 @@ export async function generateCollectionsWorkbook(
   plan: ActionPlanItem[],
   resumen: ActionPlanSummary,
   snapshotDate: string,
+  policyVersion?: string,
 ): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   wb.creator = "Lila · Plataforma de Cobranzas";
@@ -93,7 +94,7 @@ export async function generateCollectionsWorkbook(
     // Freeze panes below header
     ws.views = [{ state: "frozen", ySplit: headerRowIdx }];
 
-    // Populate data rows
+    // Populate data rows (Fase 2.8: no centered alignments on data rows, matching Python)
     for (let i = 0; i < items.length; i++) {
       const it = items[i];
       const rowIdx = headerRowIdx + 1 + i;
@@ -122,20 +123,14 @@ export async function generateCollectionsWorkbook(
         };
       }
 
-      // Format priority badge
+      // Format priority badge (bold + fill, no horizontal alignment in Python)
       const prioCell = row.getCell(1);
       prioCell.font = { name: FONT_NAME, size: 9, bold: true };
-      prioCell.alignment = { horizontal: "center" };
       prioCell.fill = {
         type: "pattern",
         pattern: "solid",
         fgColor: { argb: PRIO_FILL_COLORS[it.prio] ?? PRIO_FILL_COLORS[3] },
       };
-
-      // Alignment for numbers & center columns
-      row.getCell(6).alignment = { horizontal: "center" }; // DPD
-      row.getCell(7).alignment = { horizontal: "center" }; // Tramo
-      row.getCell(10).alignment = { horizontal: "center" }; // Último pago
 
       // Currency format on Saldo and Cura
       row.getCell(8).numFmt = CURRENCY_FORMAT;
@@ -162,15 +157,23 @@ export async function generateCollectionsWorkbook(
     plan,
   );
 
-  // 3. Sheet: Resumen
+  // 3. Sheet: Resumen (Fase 2.8: no color on A1 title)
   const wsResumen = wb.addWorksheet("Resumen");
   wsResumen.getCell("A1").value = "Resumen";
   wsResumen.getCell("A1").font = {
     name: FONT_NAME,
     size: 13,
     bold: true,
-    color: { argb: TITLE_COLOR },
   };
+
+  if (policyVersion) {
+    wsResumen.getCell("A2").value = `Política ${policyVersion}`;
+    wsResumen.getCell("A2").font = {
+      name: FONT_NAME,
+      size: 9,
+      color: { argb: SUBTITLE_COLOR },
+    };
+  }
 
   const filas: [string, string | number, boolean][] = [
     ["Fecha del batch", snapshotDate, false],
@@ -214,4 +217,3 @@ export async function generateCollectionsWorkbook(
   const buffer = await wb.xlsx.writeBuffer();
   return Buffer.from(buffer);
 }
-

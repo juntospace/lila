@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { ingestSnapshot } from "@/lib/portfolio/ingest";
 import { parseCsv } from "@/lib/portfolio/parser";
+import { loadActivePolicy } from "@/lib/portfolio/policy";
 
 const SUPABASE_URL =
   process.env.NEXT_PUBLIC_SUPABASE_URL || "http://127.0.0.1:54321";
@@ -44,9 +45,10 @@ describe("Seed & Integration test · Portfolio Ingest", () => {
     expect(result.totalLoans).toBe(8);
     expect(result.openLoans).toBe(6); // 1006 restructured & 1007 small balance excluded
     expect(result.openBalance).toBeGreaterThan(0);
+    expect(result.policyVersion).toBeDefined();
   });
 
-  it("ingests June 2025 snapshot into local Supabase and verifies rollups", async () => {
+  it("ingests June 2025 snapshot into local Supabase and verifies rollups & idempotent re-upload", async () => {
     const samplesDir = path.resolve(process.cwd(), "samples/portfolio");
     const loansCsv = fs.readFileSync(
       path.join(samplesDir, "crediclaro_loans_2025-06-30.csv"),
@@ -60,6 +62,18 @@ describe("Seed & Integration test · Portfolio Ingest", () => {
     const loansRaw = parseCsv(loansCsv);
     const repaymentsRaw = parseCsv(repaymentsCsv);
 
+    const result1 = await ingestSnapshot(supabase, {
+      entityCode: "crediclaro",
+      snapshotDate: "2025-06-30",
+      loansRaw,
+      repaymentsRaw,
+      sourceFiles: {
+        loans: "crediclaro_loans_2025-06-30.csv",
+        repayments: "crediclaro_repayments_2025-06-30.csv",
+      },
+    });
+
+    // Re-ingest same snapshot date to verify idempotency without duplicates
     const result = await ingestSnapshot(supabase, {
       entityCode: "crediclaro",
       snapshotDate: "2025-06-30",
@@ -71,11 +85,30 @@ describe("Seed & Integration test · Portfolio Ingest", () => {
       },
     });
 
+    expect(result.snapshotId).toBe(result1.snapshotId);
     expect(result.snapshotDate).toBe("2025-06-30");
     expect(result.totalLoans).toBe(9);
     expect(result.openLoans).toBe(7); // 1001, 1002, 1003, 1004, 1005, 1008, 1009
     expect(result.cashAheadCount).toBe(1); // 1002 Ana Morales
     expect(result.futurePaymentsExcludedCount).toBe(1); // 1001 payment on 15/07/2025 > 30/06/2025
+
+    const { count } = await supabase
+      .from("portfolio_loans")
+      .select("*", { count: "exact", head: true })
+      .eq("snapshot_id", result.snapshotId);
+    expect(count).toBe(9);
+  });
+
+  it("loads active CRO policy from portfolio_policy", async () => {
+    const { data: ent } = await supabase
+      .from("portfolio_entities")
+      .select("id")
+      .eq("code", "crediclaro")
+      .single();
+
+    const policy = await loadActivePolicy(supabase, ent!.id);
+    expect(policy.version).toBeDefined();
+    expect(policy.bucketNames).toHaveLength(7);
+    expect(policy.provRates).toHaveLength(7);
   });
 });
-

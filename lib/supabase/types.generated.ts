@@ -10,393 +10,42 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "14.5"
+    PostgrestVersion: "14.17"
   }
   public: {
     Tables: {
-      portfolio_entities: {
+      audit_events: {
         Row: {
-          code: string
+          action: string
+          actor_id: string | null
           created_at: string
-          display_name: string
           id: string
-          is_active: boolean
-          legal_name: string
-          updated_at: string
+          new_data: Json | null
+          old_data: Json | null
+          record_id: string | null
+          table_name: string
         }
         Insert: {
-          code: string
+          action: string
+          actor_id?: string | null
           created_at?: string
-          display_name: string
           id?: string
-          is_active?: boolean
-          legal_name: string
-          updated_at?: string
+          new_data?: Json | null
+          old_data?: Json | null
+          record_id?: string | null
+          table_name: string
         }
         Update: {
-          code?: string
+          action?: string
+          actor_id?: string | null
           created_at?: string
-          display_name?: string
           id?: string
-          is_active?: boolean
-          legal_name?: string
-          updated_at?: string
+          new_data?: Json | null
+          old_data?: Json | null
+          record_id?: string | null
+          table_name?: string
         }
         Relationships: []
-      }
-      portfolio_policy: {
-        Row: {
-          admin_methods: Json
-          bucket_bins: Json
-          bucket_names: Json
-          co_secured_dpd: number
-          co_unsecured_dpd: number
-          created_at: string
-          effective_from: string
-          handover_date: string
-          id: string
-          notes: string | null
-          prov_rates: Json
-          real_methods: Json
-          updated_at: string
-          version: string
-        }
-        Insert: {
-          admin_methods?: Json
-          bucket_bins?: Json
-          bucket_names?: Json
-          co_secured_dpd?: number
-          co_unsecured_dpd?: number
-          created_at?: string
-          effective_from: string
-          handover_date?: string
-          id?: string
-          notes?: string | null
-          prov_rates?: Json
-          real_methods?: Json
-          updated_at?: string
-          version?: string
-        }
-        Update: {
-          admin_methods?: Json
-          bucket_bins?: Json
-          bucket_names?: Json
-          co_secured_dpd?: number
-          co_unsecured_dpd?: number
-          created_at?: string
-          effective_from?: string
-          handover_date?: string
-          id?: string
-          notes?: string | null
-          prov_rates?: Json
-          real_methods?: Json
-          updated_at?: string
-          version?: string
-        }
-        Relationships: []
-      }
-      portfolio_snapshots: {
-        Row: {
-          as_of_date: string
-          cash_ahead_count: number
-          cer30_balance: number
-          cer30_percentage: number
-          cer90_balance: number
-          cer90_percentage: number
-          created_at: string
-          entity_id: string
-          future_payments_excluded_count: number
-          id: string
-          policy_id: string | null
-          snapshot_date: string
-          source_files: Json
-          status: string
-          total_collected_handover: number
-          total_open_balance: number
-          total_open_loans: number
-          updated_at: string
-        }
-        Insert: {
-          as_of_date: string
-          cash_ahead_count?: number
-          cer30_balance?: number
-          cer30_percentage?: number
-          cer90_balance?: number
-          cer90_percentage?: number
-          created_at?: string
-          entity_id: string
-          future_payments_excluded_count?: number
-          id?: string
-          policy_id?: string | null
-          snapshot_date: string
-          source_files?: Json
-          status?: string
-          total_collected_handover?: number
-          total_open_balance?: number
-          total_open_loans?: number
-          updated_at?: string
-        }
-        Update: {
-          as_of_date?: string
-          cash_ahead_count?: number
-          cer30_balance?: number
-          cer30_percentage?: number
-          cer90_balance?: number
-          cer90_percentage?: number
-          created_at?: string
-          entity_id?: string
-          future_payments_excluded_count?: number
-          id?: string
-          policy_id?: string | null
-          snapshot_date?: string
-          source_files?: Json
-          status?: string
-          total_collected_handover?: number
-          total_open_balance?: number
-          total_open_loans?: number
-          updated_at?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "portfolio_snapshots_entity_id_fkey"
-            columns: ["entity_id"]
-            isOneToOne: false
-            referencedRelation: "portfolio_entities"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "portfolio_snapshots_policy_id_fkey"
-            columns: ["policy_id"]
-            isOneToOne: false
-            referencedRelation: "portfolio_policy"
-            referencedColumns: ["id"]
-          }
-        ]
-      }
-      portfolio_loans: {
-        Row: {
-          balance: number
-          borrower_mobile: string | null
-          bucket: string
-          bucket_idx: number
-          cash_ahead: boolean
-          combo_key: string | null
-          created_at: string
-          cycle_type: number
-          dpd: number
-          dpd_loandisk: number
-          entity_id: string
-          full_name: string | null
-          gc: string | null
-          id: string
-          installments_count: number | null
-          is_open: boolean
-          last_payment_amount: number | null
-          last_payment_date: string | null
-          loan_duration: string | null
-          loan_number: string | null
-          mr: string | null
-          past_due: number | null
-          pending_due: number | null
-          pg: string | null
-          product: string | null
-          raw: Json
-          released_date: string | null
-          repayment_cycle: string | null
-          secured: boolean
-          segment: string
-          segment_idx: number
-          snapshot_date: string
-          snapshot_id: string
-          source_loan_id: string
-          status_raw: string | null
-          tc: string | null
-          tg: string | null
-          total_due_amount: number | null
-          updated_at: string
-        }
-        Insert: {
-          balance?: number
-          borrower_mobile?: string | null
-          bucket: string
-          bucket_idx?: number
-          cash_ahead?: boolean
-          combo_key?: string | null
-          created_at?: string
-          cycle_type?: number
-          dpd?: number
-          dpd_loandisk?: number
-          entity_id: string
-          full_name?: string | null
-          gc?: string | null
-          id?: string
-          installments_count?: number | null
-          is_open?: boolean
-          last_payment_amount?: number | null
-          last_payment_date?: string | null
-          loan_duration?: string | null
-          loan_number?: string | null
-          mr?: string | null
-          past_due?: number | null
-          pending_due?: number | null
-          pg?: string | null
-          product?: string | null
-          raw?: Json
-          released_date?: string | null
-          repayment_cycle?: string | null
-          secured?: boolean
-          segment: string
-          segment_idx: number
-          snapshot_date: string
-          snapshot_id: string
-          source_loan_id: string
-          status_raw?: string | null
-          tc?: string | null
-          tg?: string | null
-          total_due_amount?: number | null
-          updated_at?: string
-        }
-        Update: {
-          balance?: number
-          borrower_mobile?: string | null
-          bucket?: string
-          bucket_idx?: number
-          cash_ahead?: boolean
-          combo_key?: string | null
-          created_at?: string
-          cycle_type?: number
-          dpd?: number
-          dpd_loandisk?: number
-          entity_id?: string
-          full_name?: string | null
-          gc?: string | null
-          id?: string
-          installments_count?: number | null
-          is_open?: boolean
-          last_payment_amount?: number | null
-          last_payment_date?: string | null
-          loan_duration?: string | null
-          loan_number?: string | null
-          mr?: string | null
-          past_due?: number | null
-          pending_due?: number | null
-          pg?: string | null
-          product?: string | null
-          raw?: Json
-          released_date?: string | null
-          repayment_cycle?: string | null
-          secured?: boolean
-          segment?: string
-          segment_idx?: number
-          snapshot_date?: string
-          snapshot_id?: string
-          source_loan_id?: string
-          status_raw?: string | null
-          tc?: string | null
-          tg?: string | null
-          total_due_amount?: number | null
-          updated_at?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "portfolio_loans_entity_id_fkey"
-            columns: ["entity_id"]
-            isOneToOne: false
-            referencedRelation: "portfolio_entities"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "portfolio_loans_snapshot_id_fkey"
-            columns: ["snapshot_id"]
-            isOneToOne: false
-            referencedRelation: "portfolio_snapshots"
-            referencedColumns: ["id"]
-          }
-        ]
-      }
-      portfolio_loan_repayments: {
-        Row: {
-          collection_date: string
-          created_at: string
-          entity_id: string
-          fees_amount: number
-          id: string
-          ingresos_amount: number
-          interest_amount: number
-          is_admin: boolean
-          is_real: boolean
-          is_unknown_method: boolean
-          method_raw: string | null
-          penalty_amount: number
-          principal_amount: number
-          raw: Json
-          snapshot_date: string
-          snapshot_id: string
-          source_loan_id: string
-          source_repayment_id: string | null
-          total_amount: number
-          updated_at: string
-        }
-        Insert: {
-          collection_date: string
-          created_at?: string
-          entity_id: string
-          fees_amount?: number
-          id?: string
-          ingresos_amount?: number
-          interest_amount?: number
-          is_admin?: boolean
-          is_real?: boolean
-          is_unknown_method?: boolean
-          method_raw?: string | null
-          penalty_amount?: number
-          principal_amount?: number
-          raw?: Json
-          snapshot_date: string
-          snapshot_id: string
-          source_loan_id: string
-          source_repayment_id?: string | null
-          total_amount?: number
-          updated_at?: string
-        }
-        Update: {
-          collection_date?: string
-          created_at?: string
-          entity_id?: string
-          fees_amount?: number
-          id?: string
-          ingresos_amount?: number
-          interest_amount?: number
-          is_admin?: boolean
-          is_real?: boolean
-          is_unknown_method?: boolean
-          method_raw?: string | null
-          penalty_amount?: number
-          principal_amount?: number
-          raw?: Json
-          snapshot_date?: string
-          snapshot_id?: string
-          source_loan_id?: string
-          source_repayment_id?: string | null
-          total_amount?: number
-          updated_at?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "portfolio_loan_repayments_entity_id_fkey"
-            columns: ["entity_id"]
-            isOneToOne: false
-            referencedRelation: "portfolio_entities"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "portfolio_loan_repayments_snapshot_id_fkey"
-            columns: ["snapshot_id"]
-            isOneToOne: false
-            referencedRelation: "portfolio_snapshots"
-            referencedColumns: ["id"]
-          }
-        ]
       }
       bank_accounts: {
         Row: {
@@ -489,6 +138,461 @@ export type Database = {
           role?: Database["public"]["Enums"]["operator_role"]
         }
         Relationships: []
+      }
+      portfolio_entities: {
+        Row: {
+          code: string
+          created_at: string
+          display_name: string
+          id: string
+          is_active: boolean
+          legal_name: string
+          updated_at: string
+        }
+        Insert: {
+          code: string
+          created_at?: string
+          display_name: string
+          id?: string
+          is_active?: boolean
+          legal_name: string
+          updated_at?: string
+        }
+        Update: {
+          code?: string
+          created_at?: string
+          display_name?: string
+          id?: string
+          is_active?: boolean
+          legal_name?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      portfolio_loan_repayments: {
+        Row: {
+          collection_date: string
+          created_at: string
+          entity_id: string
+          fees_amount: number
+          id: string
+          ingresos_amount: number
+          interest_amount: number
+          is_admin: boolean
+          is_real: boolean
+          is_unknown_method: boolean
+          method_raw: string | null
+          penalty_amount: number
+          principal_amount: number
+          raw: Json
+          snapshot_date: string
+          snapshot_id: string
+          source_loan_id: string
+          source_repayment_id: string | null
+          total_amount: number
+          updated_at: string
+        }
+        Insert: {
+          collection_date: string
+          created_at?: string
+          entity_id: string
+          fees_amount?: number
+          id?: string
+          ingresos_amount?: number
+          interest_amount?: number
+          is_admin?: boolean
+          is_real?: boolean
+          is_unknown_method?: boolean
+          method_raw?: string | null
+          penalty_amount?: number
+          principal_amount?: number
+          raw?: Json
+          snapshot_date: string
+          snapshot_id: string
+          source_loan_id: string
+          source_repayment_id?: string | null
+          total_amount?: number
+          updated_at?: string
+        }
+        Update: {
+          collection_date?: string
+          created_at?: string
+          entity_id?: string
+          fees_amount?: number
+          id?: string
+          ingresos_amount?: number
+          interest_amount?: number
+          is_admin?: boolean
+          is_real?: boolean
+          is_unknown_method?: boolean
+          method_raw?: string | null
+          penalty_amount?: number
+          principal_amount?: number
+          raw?: Json
+          snapshot_date?: string
+          snapshot_id?: string
+          source_loan_id?: string
+          source_repayment_id?: string | null
+          total_amount?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "portfolio_loan_repayments_entity_id_fkey"
+            columns: ["entity_id"]
+            isOneToOne: false
+            referencedRelation: "portfolio_entities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portfolio_loan_repayments_snapshot_id_fkey"
+            columns: ["snapshot_id"]
+            isOneToOne: false
+            referencedRelation: "portfolio_snapshots"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      portfolio_loans: {
+        Row: {
+          balance: number
+          borrower_mobile: string | null
+          bucket: string
+          bucket_idx: number
+          cash_ahead: boolean
+          combo_key: string | null
+          created_at: string
+          cycle_type: number | null
+          dpd: number
+          dpd_loandisk: number
+          entity_id: string
+          full_name: string | null
+          gc: string | null
+          id: string
+          installments_count: number | null
+          is_open: boolean
+          last_payment_amount: number | null
+          last_payment_date: string | null
+          loan_duration: string | null
+          loan_number: string | null
+          mr: string | null
+          past_due: number | null
+          pending_due: number | null
+          pg: string | null
+          product: string | null
+          raw: Json
+          released_date: string | null
+          repayment_cycle: string | null
+          secured: boolean
+          segment: string
+          segment_idx: number
+          snapshot_date: string
+          snapshot_id: string
+          source_loan_id: string
+          status_raw: string | null
+          tc: string | null
+          tg: string | null
+          total_due_amount: number | null
+          updated_at: string
+        }
+        Insert: {
+          balance?: number
+          borrower_mobile?: string | null
+          bucket: string
+          bucket_idx?: number
+          cash_ahead?: boolean
+          combo_key?: string | null
+          created_at?: string
+          cycle_type?: number | null
+          dpd?: number
+          dpd_loandisk?: number
+          entity_id: string
+          full_name?: string | null
+          gc?: string | null
+          id?: string
+          installments_count?: number | null
+          is_open?: boolean
+          last_payment_amount?: number | null
+          last_payment_date?: string | null
+          loan_duration?: string | null
+          loan_number?: string | null
+          mr?: string | null
+          past_due?: number | null
+          pending_due?: number | null
+          pg?: string | null
+          product?: string | null
+          raw?: Json
+          released_date?: string | null
+          repayment_cycle?: string | null
+          secured?: boolean
+          segment: string
+          segment_idx: number
+          snapshot_date: string
+          snapshot_id: string
+          source_loan_id: string
+          status_raw?: string | null
+          tc?: string | null
+          tg?: string | null
+          total_due_amount?: number | null
+          updated_at?: string
+        }
+        Update: {
+          balance?: number
+          borrower_mobile?: string | null
+          bucket?: string
+          bucket_idx?: number
+          cash_ahead?: boolean
+          combo_key?: string | null
+          created_at?: string
+          cycle_type?: number | null
+          dpd?: number
+          dpd_loandisk?: number
+          entity_id?: string
+          full_name?: string | null
+          gc?: string | null
+          id?: string
+          installments_count?: number | null
+          is_open?: boolean
+          last_payment_amount?: number | null
+          last_payment_date?: string | null
+          loan_duration?: string | null
+          loan_number?: string | null
+          mr?: string | null
+          past_due?: number | null
+          pending_due?: number | null
+          pg?: string | null
+          product?: string | null
+          raw?: Json
+          released_date?: string | null
+          repayment_cycle?: string | null
+          secured?: boolean
+          segment?: string
+          segment_idx?: number
+          snapshot_date?: string
+          snapshot_id?: string
+          source_loan_id?: string
+          status_raw?: string | null
+          tc?: string | null
+          tg?: string | null
+          total_due_amount?: number | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "portfolio_loans_entity_id_fkey"
+            columns: ["entity_id"]
+            isOneToOne: false
+            referencedRelation: "portfolio_entities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portfolio_loans_snapshot_id_fkey"
+            columns: ["snapshot_id"]
+            isOneToOne: false
+            referencedRelation: "portfolio_snapshots"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      portfolio_policy: {
+        Row: {
+          admin_methods: Json
+          bucket_bins: Json
+          bucket_names: Json
+          co_secured_dpd: number
+          co_unsecured_dpd: number
+          created_at: string
+          effective_from: string
+          handover_date: string
+          id: string
+          notes: string | null
+          prov_rates: Json
+          real_methods: Json
+          updated_at: string
+          version: string
+        }
+        Insert: {
+          admin_methods?: Json
+          bucket_bins?: Json
+          bucket_names?: Json
+          co_secured_dpd?: number
+          co_unsecured_dpd?: number
+          created_at?: string
+          effective_from: string
+          handover_date?: string
+          id?: string
+          notes?: string | null
+          prov_rates?: Json
+          real_methods?: Json
+          updated_at?: string
+          version?: string
+        }
+        Update: {
+          admin_methods?: Json
+          bucket_bins?: Json
+          bucket_names?: Json
+          co_secured_dpd?: number
+          co_unsecured_dpd?: number
+          created_at?: string
+          effective_from?: string
+          handover_date?: string
+          id?: string
+          notes?: string | null
+          prov_rates?: Json
+          real_methods?: Json
+          updated_at?: string
+          version?: string
+        }
+        Relationships: []
+      }
+      portfolio_ingest_batches: {
+        Row: {
+          admin_excluded_amount: number
+          admin_excluded_count: number
+          cash_ahead_count: number
+          created_at: string
+          future_payments_excluded: number
+          id: string
+          missing_custom_fields: string[]
+          missing_released_date_count: number
+          rows_loans: number
+          rows_repayments: number
+          sha256_loans: string
+          sha256_repayments: string | null
+          snapshot_id: string
+          sum_balance_ingested: number
+          sum_balance_source: number
+          unknown_methods: string[]
+          uploaded_by: string | null
+        }
+        Insert: {
+          admin_excluded_amount?: number
+          admin_excluded_count?: number
+          cash_ahead_count?: number
+          created_at?: string
+          future_payments_excluded?: number
+          id?: string
+          missing_custom_fields?: string[]
+          missing_released_date_count?: number
+          rows_loans?: number
+          rows_repayments?: number
+          sha256_loans: string
+          sha256_repayments?: string | null
+          snapshot_id: string
+          sum_balance_ingested?: number
+          sum_balance_source?: number
+          unknown_methods?: string[]
+          uploaded_by?: string | null
+        }
+        Update: {
+          admin_excluded_amount?: number
+          admin_excluded_count?: number
+          cash_ahead_count?: number
+          created_at?: string
+          future_payments_excluded?: number
+          id?: string
+          missing_custom_fields?: string[]
+          missing_released_date_count?: number
+          rows_loans?: number
+          rows_repayments?: number
+          sha256_loans?: string
+          sha256_repayments?: string | null
+          snapshot_id?: string
+          sum_balance_ingested?: number
+          sum_balance_source?: number
+          unknown_methods?: string[]
+          uploaded_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "portfolio_ingest_batches_snapshot_id_fkey"
+            columns: ["snapshot_id"]
+            isOneToOne: false
+            referencedRelation: "portfolio_snapshots"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      portfolio_snapshots: {
+        Row: {
+          as_of_date: string
+          cash_ahead_count: number
+          cer30_balance: number
+          cer30_percentage: number
+          cer90_balance: number
+          cer90_percentage: number
+          created_at: string
+          entity_id: string
+          future_payments_excluded_count: number
+          has_repayments: boolean
+          id: string
+          policy_id: string | null
+          snapshot_date: string
+          source_files: Json
+          status: string
+          total_collected_handover: number
+          total_open_balance: number
+          total_open_loans: number
+          updated_at: string
+        }
+        Insert: {
+          as_of_date: string
+          cash_ahead_count?: number
+          cer30_balance?: number
+          cer30_percentage?: number
+          cer90_balance?: number
+          cer90_percentage?: number
+          created_at?: string
+          entity_id: string
+          future_payments_excluded_count?: number
+          has_repayments?: boolean
+          id?: string
+          policy_id?: string | null
+          snapshot_date: string
+          source_files?: Json
+          status?: string
+          total_collected_handover?: number
+          total_open_balance?: number
+          total_open_loans?: number
+          updated_at?: string
+        }
+        Update: {
+          as_of_date?: string
+          cash_ahead_count?: number
+          cer30_balance?: number
+          cer30_percentage?: number
+          cer90_balance?: number
+          cer90_percentage?: number
+          created_at?: string
+          entity_id?: string
+          future_payments_excluded_count?: number
+          has_repayments?: boolean
+          id?: string
+          policy_id?: string | null
+          snapshot_date?: string
+          source_files?: Json
+          status?: string
+          total_collected_handover?: number
+          total_open_balance?: number
+          total_open_loans?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "portfolio_snapshots_entity_id_fkey"
+            columns: ["entity_id"]
+            isOneToOne: false
+            referencedRelation: "portfolio_entities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portfolio_snapshots_policy_id_fkey"
+            columns: ["policy_id"]
+            isOneToOne: false
+            referencedRelation: "portfolio_policy"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       recon_ach_batch_lines: {
         Row: {
@@ -1132,7 +1236,7 @@ export type Database = {
           row_hash: string
           state: Database["public"]["Enums"]["recon_transactions_state_enum"]
           updated_at: string
-          upload_id: string
+          upload_id: string | null
         }
         Insert: {
           account_id: string
@@ -1153,7 +1257,7 @@ export type Database = {
           row_hash: string
           state?: Database["public"]["Enums"]["recon_transactions_state_enum"]
           updated_at?: string
-          upload_id: string
+          upload_id?: string | null
         }
         Update: {
           account_id?: string
@@ -1174,7 +1278,7 @@ export type Database = {
           row_hash?: string
           state?: Database["public"]["Enums"]["recon_transactions_state_enum"]
           updated_at?: string
-          upload_id?: string
+          upload_id?: string | null
         }
         Relationships: [
           {
@@ -1315,7 +1419,20 @@ export type Database = {
     }
     Functions: {
       is_active_operator: { Args: never; Returns: boolean }
+      is_portfolio_admin: { Args: never; Returns: boolean }
+      is_portfolio_writer: { Args: never; Returns: boolean }
       is_recon_writer: { Args: never; Returns: boolean }
+      portfolio_replace_snapshot: {
+        Args: {
+          p_entity_id: string
+          p_snapshot_date: string
+          p_snapshot: Json
+          p_loans: Json
+          p_repayments: Json
+          p_batch?: Json
+        }
+        Returns: string
+      }
     }
     Enums: {
       bank_accounts_rail_enum: "bac" | "bg"
@@ -1380,12 +1497,12 @@ export type Tables<
   DefaultSchemaTableNameOrOptions extends
     | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
         DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -1409,11 +1526,11 @@ export type TablesInsert<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -1434,11 +1551,11 @@ export type TablesUpdate<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -1459,11 +1576,11 @@ export type Enums<
   DefaultSchemaEnumNameOrOptions extends
     | keyof DefaultSchema["Enums"]
     | { schema: keyof DatabaseWithoutInternals },
-  EnumName extends DefaultSchemaEnumNameOrOptions extends {
+  EnumName extends (DefaultSchemaEnumNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaEnumNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -1476,11 +1593,11 @@ export type CompositeTypes<
   PublicCompositeTypeNameOrOptions extends
     | keyof DefaultSchema["CompositeTypes"]
     | { schema: keyof DatabaseWithoutInternals },
-  CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
+  CompositeTypeName extends (PublicCompositeTypeNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
-    : never = never,
+    : never) = never,
 > = PublicCompositeTypeNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }

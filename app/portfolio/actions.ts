@@ -1,21 +1,20 @@
 "use server";
 
+import { createHash } from "node:crypto";
 import { revalidatePath } from "next/cache";
 
 import { requirePortfolioWriter } from "@/lib/auth/guard";
+import { getPortfolioClient } from "@/lib/portfolio/client";
 import { ingestSnapshot } from "@/lib/portfolio/ingest";
 import { extractDateFromName, parseCsv } from "@/lib/portfolio/parser";
-import { isPreviewMode } from "@/lib/preview";
-import {
-  createSupabaseServerClient,
-  createSupabaseServiceClient,
-} from "@/lib/supabase/server";
+
+function sha256Hex(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
 
 export async function deleteSnapshotAction(snapshotId: string) {
   await requirePortfolioWriter();
-  const supabase = isPreviewMode()
-    ? createSupabaseServiceClient()
-    : await createSupabaseServerClient();
+  const supabase = await getPortfolioClient();
 
   const { error } = await supabase
     .from("portfolio_snapshots")
@@ -33,10 +32,8 @@ export async function deleteSnapshotAction(snapshotId: string) {
 }
 
 export async function uploadPortfolioBackupAction(formData: FormData) {
-  await requirePortfolioWriter();
-  const supabase = isPreviewMode()
-    ? createSupabaseServiceClient()
-    : await createSupabaseServerClient();
+  const session = await requirePortfolioWriter();
+  const supabase = await getPortfolioClient();
 
   const entityCode = (formData.get("entityCode") as string) || "crediclaro";
   let snapshotDate = formData.get("snapshotDate") as string | null;
@@ -62,11 +59,16 @@ export async function uploadPortfolioBackupAction(formData: FormData) {
   }
 
   const loansText = await loansFile.text();
+  const loansSha256 = sha256Hex(loansText);
   const loansRaw = parseCsv(loansText);
 
+  const hasRepaymentsFile = Boolean(repaymentsFile && repaymentsFile.size > 0);
   let repaymentsRaw: Record<string, string>[] = [];
-  if (repaymentsFile && repaymentsFile.size > 0) {
+  let repaymentsSha256: string | null = null;
+
+  if (hasRepaymentsFile && repaymentsFile) {
     const repaymentsText = await repaymentsFile.text();
+    repaymentsSha256 = sha256Hex(repaymentsText);
     repaymentsRaw = parseCsv(repaymentsText);
   }
 
@@ -75,9 +77,15 @@ export async function uploadPortfolioBackupAction(formData: FormData) {
     snapshotDate,
     loansRaw,
     repaymentsRaw,
+    hasRepaymentsFile,
+    loansSha256,
+    repaymentsSha256,
+    rejectDuplicateSha: true,
+    uploadedBy: session.userId,
     sourceFiles: {
       loansFile: loansFile.name,
-      repaymentsFile: repaymentsFile?.name,
+      repaymentsFile: hasRepaymentsFile ? repaymentsFile?.name : undefined,
+      hasRepaymentsFile,
     },
   });
 
@@ -87,4 +95,3 @@ export async function uploadPortfolioBackupAction(formData: FormData) {
 
   return { success: true, result };
 }
-

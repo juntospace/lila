@@ -23,18 +23,40 @@ export interface PortfolioEntity {
 }
 
 export interface PortfolioPolicy {
-  id?: string;
+  id?: string | null;
   version: string;
   effectiveFrom: string;
   handoverDate: string; // YYYY-MM-DD (Default 2025-06-01)
-  coUnsecuredDpd: number; // Default 180
-  coSecuredDpd: number; // Default 360
+  coUnsecured: number; // Default 180
+  coSecured: number; // Default 360
+  coUnsecuredDpd: number; // Alias of coUnsecured (Default 180)
+  coSecuredDpd: number; // Alias of coSecured (Default 360)
   bucketBins: number[]; // [-1, 0, 30, 60, 90, 180, 365, 1e9]
   bucketNames: PortfolioBucket[];
   provRates: number[]; // [0.01, 0.05, 0.15, 0.25, 0.50, 0.90, 1.00]
   realMethods: string[];
   adminMethods: string[];
   notes?: string | null;
+}
+
+export interface PortfolioIngestBatch {
+  id?: string;
+  snapshotId?: string;
+  sha256Loans: string;
+  sha256Repayments: string | null;
+  rowsLoans: number;
+  rowsRepayments: number;
+  sumBalanceSource: number;
+  sumBalanceIngested: number;
+  futurePaymentsExcluded: number;
+  cashAheadCount: number;
+  adminExcludedCount: number;
+  adminExcludedAmount: number;
+  unknownMethods: string[];
+  missingCustomFields: string[];
+  missingReleasedDateCount: number;
+  uploadedBy?: string | null;
+  createdAt?: string;
 }
 
 export interface EnrichedLoan {
@@ -105,8 +127,9 @@ export interface PortfolioSnapshot {
   totalCollectedHandover: number;
   cashAheadCount: number;
   futurePaymentsExcludedCount: number;
+  hasRepayments: boolean;
   sourceFiles: Record<string, unknown>;
-  status: "completed" | "in_progress" | "failed";
+  status: "completed" | "in_progress" | "loading" | "failed";
   createdAt?: string;
   updatedAt?: string;
 }
@@ -137,4 +160,3 @@ export interface ActionPlanSummary {
   top40_cura: number;
   top40_saldo: number;
 }
-

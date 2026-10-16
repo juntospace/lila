@@ -9,12 +9,13 @@ import type {
   BgParsedStatement,
 } from "@/lib/recon/bg/types";
 
-describe("Banco General - Saturday 2026-09-26 ACH Manual Reconcile", () => {
-  const dir = "/home/carluis/.gemini/antigravity/brain/aa36e7cd-c2b0-4ee8-9908-2b2b41f7c7a0/scratch/cg_files";
+const dir = "/home/carluis/.gemini/antigravity/brain/aa36e7cd-c2b0-4ee8-9908-2b2b41f7c7a0/scratch/cg_files";
+
+describe.runIf(fs.existsSync(dir))("Banco General - Saturday 2026-09-26 ACH Manual Reconcile", () => {
   const stmtPath = path.join(dir, "MOVIMIENTOS-CUENTA-CORRIENTE-2026-09-28-084853.xlsx");
-  const achFiles = fs.readdirSync(dir).filter((f) => f.startsWith("DETALLE-TRANSACCION-ACH-2026-09-26")).sort();
 
   it("parses and settles all 6 Saturday ACH manual batches with zero anomalies", () => {
+    const achFiles = fs.readdirSync(dir).filter((f) => f.startsWith("DETALLE-TRANSACCION-ACH-2026-09-26")).sort();
     // 1. Parse statement
     const stmtBuf = fs.readFileSync(stmtPath);
     const parsedStmt = detectAndParseBgFile(stmtBuf, "MOVIMIENTOS-CUENTA-CORRIENTE-2026-09-28-084853.xlsx") as BgParsedStatement;

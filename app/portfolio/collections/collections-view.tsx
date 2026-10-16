@@ -9,12 +9,14 @@ interface CollectionsViewProps {
   plan: ActionPlanItem[];
   resumen: ActionPlanSummary;
   snapshotDate: string;
+  policyVersion?: string;
 }
 
 export function CollectionsView({
   plan,
   resumen,
   snapshotDate,
+  policyVersion = "v1.0",
 }: CollectionsViewProps) {
   const [activeTab, setActiveTab] = useState<"hoy" | "todos" | "resumen">("hoy");
   const [search, setSearch] = useState("");
@@ -314,6 +316,12 @@ export function CollectionsView({
             Resumen Operativo de Cobranzas
           </h3>
           <div className="divide-y divide-border-subtle text-xs">
+            <div className="flex justify-between py-2.5">
+              <span className="text-fg-muted">Política CRO</span>
+              <span className="font-mono font-bold text-[#620494]">
+                Política {policyVersion}
+              </span>
+            </div>
             <div className="flex justify-between py-2.5">
               <span className="text-fg-muted">Fecha del batch</span>
               <span className="font-mono font-bold text-fg">{snapshotDate}</span>
