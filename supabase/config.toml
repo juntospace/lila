@@ -423,3 +423,9 @@ verify_jwt = false
 import_map = "./functions/bg-recon/deno.json"
 entrypoint = "./functions/bg-recon/index.ts"
 
+[functions.bg-recon-recompute]
+enabled = true
+verify_jwt = false
+import_map = "./functions/bg-recon-recompute/deno.json"
+entrypoint = "./functions/bg-recon-recompute/index.ts"
+

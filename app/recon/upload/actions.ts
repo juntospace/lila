@@ -15,6 +15,7 @@ import {
   type BgParsedAchDetail,
   type BgParsedStatement,
   type BgParsedYappyReport,
+  type BgReconciliationSnapshot,
 } from "@/lib/recon/bg";
 import { recomputeBgAccount } from "@/lib/recon/bg/recompute";
 import {
@@ -207,86 +208,147 @@ export async function uploadStatement(
     }> = [];
     const warnings: string[] = [];
 
-    const adminSupabase = createSupabaseServiceClient();
+    // Try delegating upload ingestion to bg-recon Edge Function
+    try {
+      const { publicEnv, serverEnv } = await import("@/lib/env");
+      const serviceKey = serverEnv().SUPABASE_SERVICE_ROLE_KEY;
+      const fnUrl = `${publicEnv.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/bg-recon?format=json&account_id=${account.id}&skip_recompute=true`;
 
-    for (const f of files) {
-      const bytes = new Uint8Array(await f.arrayBuffer());
-      const sha = createHash("sha256").update(bytes).digest("hex");
+      for (const f of files) {
+        const b = new Uint8Array(await f.arrayBuffer());
+        const edgeFormData = new FormData();
+        const edgeFile = new File([b], f.name, {
+          type: f.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        });
+        edgeFormData.append("file", edgeFile);
+        edgeFormData.append("account_id", account.id);
+        edgeFormData.append("skip_recompute", "true");
 
-      // 1. Check if file was already uploaded for this account
-      const { data: existingUpload } = await supabase
-        .from("recon_uploads")
-        .select("id, original_filename, rows_total")
-        .eq("account_id", account.id)
-        .eq("file_sha256", sha)
-        .maybeSingle();
-
-      if (existingUpload) {
-        duplicateFilesCount++;
-        continue;
-      }
-
-      // 2. Parse file with CCBG v2 sniffer
-      const parsed = detectAndParseBgFile(bytes, f.name);
-      if (!parsed) {
-        warnings.push(`File "${f.name}" was not recognized as a Banco General statement, ACH detail, or Yappy report.`);
-        continue;
-      }
-
-      newFilesCount++;
-      newCachedFiles.push({ filename: f.name, bytes, parsed });
-
-      // 3. Determine metadata & method
-      let uploadMethod: "statement_bg_excel" | "ach_detail_bg_excel" | "yappy_bg_excel" = "statement_bg_excel";
-      let startDate: string | null = null;
-      let endDate: string | null = null;
-      const rowsCount = parsed.rows.length;
-
-      if (parsed.fileType === "statement") {
-        uploadMethod = "statement_bg_excel";
-        startDate = parsed.startDate || null;
-        endDate = parsed.endDate || null;
-      } else if (parsed.fileType === "ach_detail") {
-        uploadMethod = "ach_detail_bg_excel";
-        startDate = parsed.effectiveDate || parsed.batchDate || null;
-        endDate = startDate;
-      } else if (parsed.fileType === "yappy") {
-        uploadMethod = "yappy_bg_excel";
-        if (parsed.rows.length > 0) {
-          const sortedDates = parsed.rows.map((r) => r.date).filter(Boolean).sort();
-          startDate = sortedDates[0] || null;
-          endDate = sortedDates[sortedDates.length - 1] || null;
-        }
-      }
-
-      // 4. Upload raw file to Supabase Storage bucket recon-statements
-      const ext = f.name.endsWith(".xls") ? "xls" : f.name.endsWith(".pdf") ? "pdf" : "xlsx";
-      const storagePath = `${account.id}/${sha}.${ext}`;
-      await adminSupabase.storage
-        .from("recon-statements")
-        .upload(storagePath, bytes, {
-          contentType: f.type || "application/octet-stream",
-          upsert: true,
-        })
-        .catch((err) => {
-          console.warn(`Storage upload failed for "${f.name}":`, err);
+        const response = await fetch(fnUrl, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${serviceKey}`,
+            apikey: publicEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+            "x-user-id": session.userId,
+          },
+          body: edgeFormData,
         });
 
-      // 5. Register in recon_uploads table
-      await supabase.from("recon_uploads").insert({
-        account_id: account.id,
-        original_filename: f.name,
-        file_sha256: sha,
-        uploaded_by: session.userId,
-        storage_path: storagePath,
-        method: uploadMethod,
-        rows_total: rowsCount,
-        rows_new: rowsCount,
-        rows_duplicate: 0,
-        date_range_start: startDate,
-        date_range_end: endDate,
-        status: "committed",
-      });
+        if (!response.ok) {
+          const text = await response.text().catch(() => "");
+          throw new Error(`Edge Function bg-recon returned HTTP ${response.status}: ${text}`);
+        }
+
+        const edgeData = await response.json();
+        if (edgeData && typeof edgeData === "object" && "error" in edgeData && edgeData.error) {
+          throw new Error(`Edge Function bg-recon error: ${edgeData.error}`);
+        }
+
+        if (Array.isArray(edgeData?.warnings)) {
+          warnings.push(...edgeData.warnings);
+        }
+
+        const parsedSummary = edgeData?.files_processed || [];
+        for (const item of parsedSummary) {
+          if (item.isDuplicate) {
+            duplicateFilesCount++;
+          } else {
+            newFilesCount++;
+            const parsed = detectAndParseBgFile(b, f.name);
+            if (parsed) {
+              newCachedFiles.push({ filename: f.name, bytes: b, parsed });
+            }
+          }
+        }
+      }
+    } catch (edgeErr) {
+      console.warn("bg-recon Edge Function failed or limited, running local ingest fallback:", edgeErr);
+      duplicateFilesCount = 0;
+      newFilesCount = 0;
+      newCachedFiles.length = 0;
+      warnings.length = 0;
+
+      const adminSupabase = createSupabaseServiceClient();
+
+      for (const f of files) {
+        const bytes = new Uint8Array(await f.arrayBuffer());
+        const sha = createHash("sha256").update(bytes).digest("hex");
+
+        // 1. Check if file was already uploaded for this account
+        const { data: existingUpload } = await supabase
+          .from("recon_uploads")
+          .select("id, original_filename, rows_total")
+          .eq("account_id", account.id)
+          .eq("file_sha256", sha)
+          .maybeSingle();
+
+        if (existingUpload) {
+          duplicateFilesCount++;
+          continue;
+        }
+
+        // 2. Parse file with CCBG v2 sniffer
+        const parsed = detectAndParseBgFile(bytes, f.name);
+        if (!parsed) {
+          warnings.push(`File "${f.name}" was not recognized as a Banco General statement, ACH detail, or Yappy report.`);
+          continue;
+        }
+
+        newFilesCount++;
+        newCachedFiles.push({ filename: f.name, bytes, parsed });
+
+        // 3. Determine metadata & method
+        let uploadMethod: "statement_bg_excel" | "ach_detail_bg_excel" | "yappy_bg_excel" = "statement_bg_excel";
+        let startDate: string | null = null;
+        let endDate: string | null = null;
+        const rowsCount = parsed.rows.length;
+
+        if (parsed.fileType === "statement") {
+          uploadMethod = "statement_bg_excel";
+          startDate = parsed.startDate || null;
+          endDate = parsed.endDate || null;
+        } else if (parsed.fileType === "ach_detail") {
+          uploadMethod = "ach_detail_bg_excel";
+          startDate = parsed.effectiveDate || parsed.batchDate || null;
+          endDate = startDate;
+        } else if (parsed.fileType === "yappy") {
+          uploadMethod = "yappy_bg_excel";
+          if (parsed.rows.length > 0) {
+            const sortedDates = parsed.rows.map((r) => r.date).filter(Boolean).sort();
+            startDate = sortedDates[0] || null;
+            endDate = sortedDates[sortedDates.length - 1] || null;
+          }
+        }
+
+        // 4. Upload raw file to Supabase Storage bucket recon-statements
+        const ext = f.name.endsWith(".xls") ? "xls" : f.name.endsWith(".pdf") ? "pdf" : "xlsx";
+        const storagePath = `${account.id}/${sha}.${ext}`;
+        await adminSupabase.storage
+          .from("recon-statements")
+          .upload(storagePath, bytes, {
+            contentType: f.type || "application/octet-stream",
+            upsert: true,
+          })
+          .catch((err) => {
+            console.warn(`Storage upload failed for "${f.name}":`, err);
+          });
+
+        // 5. Register in recon_uploads table
+        await supabase.from("recon_uploads").insert({
+          account_id: account.id,
+          original_filename: f.name,
+          file_sha256: sha,
+          uploaded_by: session.userId,
+          storage_path: storagePath,
+          method: uploadMethod,
+          rows_total: rowsCount,
+          rows_new: rowsCount,
+          rows_duplicate: 0,
+          date_range_start: startDate,
+          date_range_end: endDate,
+          status: "committed",
+        });
+      }
     }
 
     // If ALL files were duplicates, return immediately without corrupting metrics
@@ -327,15 +389,37 @@ export async function uploadStatement(
       };
     }
 
-    // 6. Execute account-wide recompute across all active files
-    const recomputeResult = await recomputeBgAccount(supabase, account.id, {
-      cachedFiles: newCachedFiles,
-    });
+    // 6. Execute account-wide recompute across all active files via Edge Function (with fallback)
+    let snapshot: BgReconciliationSnapshot | null = null;
+    try {
+      const { data: edgeRecompute, error: recomputeErr } =
+        await supabase.functions.invoke("bg-recon-recompute", {
+          body: { account_id: account.id },
+        });
+
+      if (recomputeErr || edgeRecompute?.error || !edgeRecompute?.snapshot) {
+        console.warn(
+          "Edge Function bg-recon-recompute failed, running direct fallback:",
+          recomputeErr || edgeRecompute?.error,
+        );
+        const recomputeResult = await recomputeBgAccount(supabase, account.id, {
+          cachedFiles: newCachedFiles,
+        });
+        snapshot = recomputeResult.snapshot;
+      } else {
+        snapshot = edgeRecompute.snapshot;
+      }
+    } catch (recomputeErr) {
+      console.warn("Edge Function bg-recon-recompute exception, running direct fallback:", recomputeErr);
+      const recomputeResult = await recomputeBgAccount(supabase, account.id, {
+        cachedFiles: newCachedFiles,
+      });
+      snapshot = recomputeResult.snapshot;
+    }
 
     revalidatePath("/recon/upload");
     revalidatePath(`/recon/accounts/${account.id}`);
 
-    const snapshot = recomputeResult.snapshot;
     const summaryMsg = `Ingested ${newFilesCount} new BG file${newFilesCount === 1 ? "" : "s"}${
       duplicateFilesCount > 0
         ? ` (${duplicateFilesCount} duplicate file${duplicateFilesCount === 1 ? "" : "s"} skipped)`
@@ -619,14 +703,27 @@ export async function deleteUpload(uploadId: string): Promise<DeleteUploadResult
 
     // 2. Full recompute for Banco General account from remaining active files
     try {
-      await recomputeBgAccount(supabase, accountId);
+      const { data, error } = await supabase.functions.invoke("bg-recon-recompute", {
+        body: { account_id: accountId },
+      });
+      if (error || data?.error) {
+        console.warn(
+          "Edge Function bg-recon-recompute failed during deleteUpload, falling back to direct server recompute:",
+          error || data?.error,
+        );
+        await recomputeBgAccount(supabase, accountId);
+      }
     } catch (err) {
-      return {
-        status: "error",
-        message: `Deletion completed but BG recompute failed: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      };
+      try {
+        await recomputeBgAccount(supabase, accountId);
+      } catch (fbErr) {
+        return {
+          status: "error",
+          message: `Deletion completed but BG recompute failed: ${
+            fbErr instanceof Error ? fbErr.message : String(fbErr)
+          }`,
+        };
+      }
     }
 
     revalidatePath("/recon/upload");

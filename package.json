@@ -16,7 +16,9 @@
     "test": "vitest run --exclude='tests/integration/**'",
     "test:watch": "vitest",
     "test:integration": "vitest run tests/integration",
-    "test:recon": "deno test --no-check --import-map=supabase/functions/bac-recon/deno.json --allow-net --allow-env supabase/functions/bac-recon/tests/integration_test.ts"
+    "test:recon": "deno test --no-check --import-map=supabase/functions/bac-recon/deno.json --allow-net --allow-env supabase/functions/bac-recon/tests/integration_test.ts",
+    "test:recon:bg": "deno test --no-check --import-map=supabase/functions/bg-recon/deno.json --allow-net --allow-env supabase/functions/bg-recon/tests/integration_test.ts",
+    "test:recon:all": "pnpm test:recon && pnpm test:recon:bg"
   },
   "dependencies": {
     "@radix-ui/react-label": "^2.1.8",

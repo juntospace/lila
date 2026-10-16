@@ -279,6 +279,7 @@ export async function recomputeAccount(
     accountId,
     linkedPrIds,
     autoConfirmedPrIds,
+    unmatchedDaCount,
   );
   const daStats = await recomputeDAStates(supabase, accountId, linkedDaIds);
 
@@ -652,11 +653,40 @@ async function persistAllBatchLinks(
   return { paired, conflicts };
 }
 
+/**
+ * Evaluates whether the latest statement upload confirms same-day clearing compensation.
+ * Conditions:
+ * 1. statement_downloaded_at is present.
+ * 2. Time in Panama (America/Panama, UTC-5) is >= 14:30 (after the afternoon ACH clearing cutoff).
+ * 3. saldo_diferido_minor is 0 (all retained/deferred items for the day have settled).
+ */
+export function isSameDayBatchCompensated(
+  statementDownloadedAt: string | null | undefined,
+  saldoDiferidoMinor: bigint | number | string | null | undefined,
+): boolean {
+  if (!statementDownloadedAt) return false;
+  const d = new Date(statementDownloadedAt);
+  if (Number.isNaN(d.getTime())) return false;
+
+  const panamaTime = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Panama",
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(d);
+
+  if (panamaTime < "14:30") return false;
+
+  if (saldoDiferidoMinor === null || saldoDiferidoMinor === undefined) return false;
+  return BigInt(saldoDiferidoMinor) === 0n;
+}
+
 async function recomputePRStates(
   supabase: SupabaseClient,
   accountId: string,
   linkedPrIds: Set<string>,
   autoConfirmedPrIds: Set<string>,
+  unmatchedDaCount: number = 0,
 ): Promise<{ confirmed: number; rejected: number; pending: number }> {
   const prRows: { id: string; state: string; posted_at: string }[] = [];
   let cursor = 0;
@@ -692,6 +722,29 @@ async function recomputePRStates(
     .maybeSingle();
 
   const maxAccountDate: string | null = (maxTxnData?.posted_at as string | null) ?? null;
+
+  // Fetch the latest upload to check for same-day compensation metadata
+  const { data: latestUploadData } = await supabase
+    .from("recon_uploads")
+    .select("statement_downloaded_at, saldo_diferido_minor, date_range_end")
+    .eq("account_id", accountId)
+    .order("uploaded_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const isSameDayCompensated = isSameDayBatchCompensated(
+    latestUploadData?.statement_downloaded_at as string | null,
+    latestUploadData?.saldo_diferido_minor as string | number | null,
+  );
+
+  const uploadCoversMaxDate =
+    !latestUploadData?.date_range_end ||
+    !maxAccountDate ||
+    (latestUploadData.date_range_end as string) >= maxAccountDate;
+
+  const sameDayConfirmedEligible =
+    isSameDayCompensated && unmatchedDaCount === 0 && uploadCoversMaxDate;
+
   const overrides = await fetchManualOverrides(supabase, accountId);
 
   const buckets = {
@@ -714,8 +767,9 @@ async function recomputePRStates(
       if (override === "confirmed" || override === "rejected" || override === "pending") {
         targetState = override;
       } else if (
+        (cutoffDate && pr.posted_at <= cutoffDate) ||
         (autoConfirmedPrIds.has(id) && maxAccountDate && pr.posted_at < maxAccountDate) ||
-        (cutoffDate && pr.posted_at <= cutoffDate)
+        (sameDayConfirmedEligible && maxAccountDate && pr.posted_at === maxAccountDate)
       ) {
         targetState = "confirmed";
       }

@@ -194,6 +194,9 @@ describe('parseBACSheet', () => {
     expect(result.header.accountHolder).toBe('JUNTO SOLUCIONES, S.A.');
     expect(result.header.saldoInicialMinor).toBe(10000n);
     expect(result.header.saldoFinalMinor).toBe(15050n);
+    expect(result.header.saldoDisponibleMinor).toBe(15050n);
+    expect(result.header.saldoDiferidoMinor).toBe(0n);
+    expect(result.header.statementDownloadedAt).toBe('2026-04-22T14:57:29.000Z');
     expect(result.integrity.ok).toBe(true);
     expect(result.warnings).not.toContain('Account number not found in header preamble.');
   });

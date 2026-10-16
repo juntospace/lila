@@ -89,8 +89,19 @@ export async function recomputeAccountAction(
       .single();
 
     if (account?.rail === "bg") {
-      const { recomputeBgAccount } = await import("@/lib/recon/bg/recompute");
-      await recomputeBgAccount(supabase, accountId);
+      const { data, error } = await supabase.functions.invoke("bg-recon-recompute", {
+        body: { account_id: accountId },
+      });
+
+      if (error || data?.error) {
+        console.warn(
+          "Edge Function bg-recon-recompute failed, falling back to direct server recompute:",
+          error || data?.error,
+        );
+        const { recomputeBgAccount } = await import("@/lib/recon/bg/recompute");
+        await recomputeBgAccount(supabase, accountId);
+      }
+
       revalidatePath(`/recon/accounts/${accountId}`);
       return { status: "ok" };
     }

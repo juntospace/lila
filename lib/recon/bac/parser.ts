@@ -29,6 +29,9 @@ export interface BACHeader {
   currency: string;
   saldoInicialMinor: bigint;
   saldoFinalMinor: bigint;
+  saldoDisponibleMinor: bigint;
+  saldoDiferidoMinor: bigint;
+  statementDownloadedAt: string | null;
   dateRangeStart: string; // ISO YYYY-MM-DD
   dateRangeEnd: string;
 }
@@ -129,6 +132,30 @@ export function parseSpanishDate(v: Cell): string | null {
   return Number.isNaN(t) ? null : iso;
 }
 
+// "DD/MM/YYYY HH:MM:SS" / "DD-MM-YYYY HH:MM" / Date → ISO YYYY-MM-DDTHH:MM:SS.sssZ (UTC, parsed as America/Panama UTC-5).
+export function parseSpanishDateTime(v: Cell): string | null {
+  if (v instanceof Date && !isNaN(v.getTime())) {
+    return v.toISOString();
+  }
+  const s = asString(v);
+  if (!s) return null;
+  const m = s.match(
+    /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/,
+  );
+  if (!m) return null;
+  const dd = m[1].padStart(2, '0');
+  const mm = m[2].padStart(2, '0');
+  let yy = m[3];
+  if (yy.length === 2) yy = (Number(yy) >= 50 ? '19' : '20') + yy;
+  const hh = (m[4] ?? '00').padStart(2, '0');
+  const min = (m[5] ?? '00').padStart(2, '0');
+  const ss = (m[6] ?? '00').padStart(2, '0');
+  // BAC exports in Panama time (UTC-5, no daylight saving time)
+  const isoWithTz = `${yy}-${mm}-${dd}T${hh}:${min}:${ss}-05:00`;
+  const t = Date.parse(isoWithTz);
+  return Number.isNaN(t) ? null : new Date(t).toISOString();
+}
+
 // "DVTO AM04-JORGE MIGUEL DIAZ P" → { returnCode: 'AM04', payerNameRaw: '...' }.
 //
 // Real BAC exports use both **DVTO** ("devuelto") and **RCZO** ("rechazo")
@@ -226,6 +253,9 @@ function readPreambleHeader(
   currency: string;
   saldoInicialMinor: bigint;
   saldoFinalMinor: bigint;
+  saldoDisponibleMinor: bigint;
+  saldoDiferidoMinor: bigint;
+  statementDownloadedAt: string | null;
   dateRangeStart: string | null;
   dateRangeEnd: string | null;
 } {
@@ -247,6 +277,9 @@ function readPreambleHeader(
     currency: /^(moneda|currency)\b/i,
     saldoInicial: /^saldo\s+inicial\b/i,
     saldoFinal: /^saldo\s+(final|en\s+libros)\b/i,
+    saldoDisponible: /^saldo\s+disponible\b/i,
+    saldoDiferido: /^(retenidos\s+y\s+diferidos|diferidos?)\b/i,
+    fechaEmision: /^fecha\b/i,
     desde: /^(desde|inicio|from)\b/i,
     hasta: /^(hasta|fin|to)\b/i,
     periodo: /^per[ií]odo\b/i,
@@ -257,6 +290,11 @@ function readPreambleHeader(
   let currency = '';
   let saldoInicialMinor = 0n;
   let saldoFinalMinor = 0n;
+  let saldoDisponibleMinor = 0n;
+  let saldoDisponibleFound = false;
+  let saldoDiferidoMinor = 0n;
+  let saldoDiferidoFound = false;
+  let statementDownloadedAt: string | null = null;
   let dateRangeStart: string | null = null;
   let dateRangeEnd: string | null = null;
 
@@ -294,6 +332,15 @@ function readPreambleHeader(
         saldoInicialMinor = parseMinor(valueAfter(r, c));
       } else if (saldoFinalMinor === 0n && labels.saldoFinal.test(text)) {
         saldoFinalMinor = parseMinor(valueAfter(r, c));
+      } else if (!saldoDisponibleFound && labels.saldoDisponible.test(text)) {
+        saldoDisponibleMinor = parseMinor(valueAfter(r, c));
+        saldoDisponibleFound = true;
+      } else if (!saldoDiferidoFound && labels.saldoDiferido.test(text)) {
+        saldoDiferidoMinor = parseMinor(valueAfter(r, c));
+        saldoDiferidoFound = true;
+      } else if (!statementDownloadedAt && labels.fechaEmision.test(text) && !/saldo/i.test(text)) {
+        const dt = parseSpanishDateTime(valueAfter(r, c));
+        if (dt) statementDownloadedAt = dt;
       } else if (!dateRangeStart && labels.desde.test(text)) {
         dateRangeStart = parseSpanishDate(valueAfter(r, c));
       } else if (!dateRangeEnd && labels.hasta.test(text)) {
@@ -318,6 +365,9 @@ function readPreambleHeader(
     currency: currency || 'USD',
     saldoInicialMinor,
     saldoFinalMinor,
+    saldoDisponibleMinor: saldoDisponibleFound ? saldoDisponibleMinor : saldoFinalMinor,
+    saldoDiferidoMinor,
+    statementDownloadedAt,
     dateRangeStart,
     dateRangeEnd,
   };
@@ -417,6 +467,9 @@ export function parseBACSheet(matrix: Cell[][]): BACParseResult {
     currency: preamble.currency,
     saldoInicialMinor: preamble.saldoInicialMinor,
     saldoFinalMinor: preamble.saldoFinalMinor,
+    saldoDisponibleMinor: preamble.saldoDisponibleMinor,
+    saldoDiferidoMinor: preamble.saldoDiferidoMinor,
+    statementDownloadedAt: preamble.statementDownloadedAt,
     // Fall back to observed date range if the preamble did not declare one.
     dateRangeStart: preamble.dateRangeStart ?? firstSeenDate ?? '',
     dateRangeEnd: preamble.dateRangeEnd ?? lastSeenDate ?? '',
