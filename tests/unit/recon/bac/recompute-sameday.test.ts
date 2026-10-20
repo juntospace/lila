@@ -1,5 +1,8 @@
+import * as fs from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import * as XLSX from 'xlsx';
 import { isSameDayBatchCompensated } from '@/lib/recon/bac/recompute';
+import { parseBACSheet } from '@/lib/recon/bac';
 
 describe('isSameDayBatchCompensated', () => {
   it('returns false when statementDownloadedAt is null or undefined', () => {
@@ -44,6 +47,30 @@ describe('isSameDayBatchCompensated', () => {
     // Late afternoon: 17:00:00 Panama time
     const lateAfternoon = '2026-04-22T17:00:00-05:00';
     expect(isSameDayBatchCompensated(lateAfternoon, 0n)).toBe(true);
+  });
+
+  it('correctly parses the real 16-Oct statement and marks same-day compensated', () => {
+    if (!fs.existsSync('/tmp/16oct.xls')) return;
+    const bytes = fs.readFileSync('/tmp/16oct.xls');
+    const wb = XLSX.read(bytes, { type: 'buffer', cellDates: true });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false }) as unknown[][];
+    const parsed = parseBACSheet(matrix);
+
+    expect(parsed.header.saldoInicialMinor).toBe(936338n);
+    expect(parsed.header.saldoFinalMinor).toBe(1321133n);
+    expect(parsed.header.saldoDisponibleMinor).toBe(1321133n);
+    expect(parsed.header.saldoDiferidoMinor).toBe(0n);
+    expect(parsed.header.statementDownloadedAt).toBe('2026-10-16T21:38:39.000Z');
+    expect(parsed.integrity.ok).toBe(true);
+
+    // Must qualify as same-day compensated!
+    expect(
+      isSameDayBatchCompensated(
+        parsed.header.statementDownloadedAt,
+        parsed.header.saldoDiferidoMinor,
+      ),
+    ).toBe(true);
   });
 });
 
