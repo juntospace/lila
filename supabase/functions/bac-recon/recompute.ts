@@ -85,7 +85,7 @@ function previousWorkingDay(iso: string): string {
 
 const SUPABASE_PAGE_LIMIT = 1000;
 const SUPABASE_PAGE_SAFETY_CAP = 200_000;
-const ID_CHUNK = 100;
+const ID_CHUNK = 1000;
 
 export interface RecomputeStats {
   reversalsPaired: number;
@@ -353,7 +353,7 @@ async function fetchAliasMap(
 // Internals
 // =============================================================
 
-const BATCH_INSERT_CHUNK = 100;
+const BATCH_INSERT_CHUNK = 1000;
 
 function checkError(error: unknown): void {
   if (!error) return;
