@@ -74,7 +74,7 @@ const SUPABASE_PAGE_SAFETY_CAP = 200_000;
 // (~8 KB limit), which made revalidateLinks miss bad pairings that lived
 // past chunk position 100 — diagnostic showed `revalidated=0` with bad
 // pairings still in DB. Same chunk size the export route uses.
-const ID_CHUNK = 100;
+const ID_CHUNK = 1000;
 
 export interface RecomputeStats {
   reversalsPaired: number;
@@ -351,7 +351,7 @@ async function fetchAliasMap(
 // Internals
 // =============================================================
 
-const BATCH_INSERT_CHUNK = 100;
+const BATCH_INSERT_CHUNK = 1000;
 
 function checkError(error: unknown): void {
   if (!error) return;
