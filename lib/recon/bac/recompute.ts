@@ -74,7 +74,7 @@ const SUPABASE_PAGE_SAFETY_CAP = 200_000;
 // (~8 KB limit), which made revalidateLinks miss bad pairings that lived
 // past chunk position 100 — diagnostic showed `revalidated=0` with bad
 // pairings still in DB. Same chunk size the export route uses.
-const ID_CHUNK = 1000;
+const ID_CHUNK = 100;
 
 export interface RecomputeStats {
   reversalsPaired: number;
@@ -435,47 +435,31 @@ async function fetchLinkedTxnIds(
   const linkedDaIds = new Set<string>();
   const linksByPrId = new Map<string, LinkRow>();
 
-  // Collect transaction IDs for this account (paginated).
-  const txnIds: string[] = [];
   let cursor = 0;
   while (cursor < SUPABASE_PAGE_SAFETY_CAP) {
     const { data, error } = await supabase
-      .from("recon_transactions")
-      .select("id")
-      .eq("account_id", accountId)
-      .order("id", { ascending: true })
+      .from("recon_links")
+      .select("pr_txn_id, da_txn_id, match_strategy, recon_transactions!recon_links_pr_txn_id_fkey!inner(account_id)")
+      .eq("recon_transactions.account_id", accountId)
       .range(cursor, cursor + SUPABASE_PAGE_LIMIT - 1);
 
     checkError(error);
     if (!data || data.length === 0) break;
-    for (const r of data) txnIds.push(r.id as string);
+
+    for (const l of data) {
+      const prId = l.pr_txn_id as string;
+      const daId = l.da_txn_id as string;
+      linkedPrIds.add(prId);
+      linkedDaIds.add(daId);
+      linksByPrId.set(prId, {
+        pr_txn_id: prId,
+        da_txn_id: daId,
+        match_strategy: l.match_strategy as string,
+      });
+    }
+
     if (data.length < SUPABASE_PAGE_LIMIT) break;
     cursor += SUPABASE_PAGE_LIMIT;
-  }
-
-  if (txnIds.length > 0) {
-    for (const side of ["pr_txn_id", "da_txn_id"] as const) {
-      for (let i = 0; i < txnIds.length; i += ID_CHUNK) {
-        const chunk = txnIds.slice(i, i + ID_CHUNK);
-        const { data, error } = await supabase
-          .from("recon_links")
-          .select("pr_txn_id, da_txn_id, match_strategy")
-          .in(side, chunk);
-
-        checkError(error);
-        for (const l of data ?? []) {
-          const prId = l.pr_txn_id as string;
-          const daId = l.da_txn_id as string;
-          linkedPrIds.add(prId);
-          linkedDaIds.add(daId);
-          linksByPrId.set(prId, {
-            pr_txn_id: prId,
-            da_txn_id: daId,
-            match_strategy: l.match_strategy as string,
-          });
-        }
-      }
-    }
   }
 
   return { linkedPrIds, linkedDaIds, links: Array.from(linksByPrId.values()) };
@@ -503,14 +487,19 @@ async function wipeAutoLinks(
   }
   if (autoPrIds.length === 0) return 0;
 
-  for (let i = 0; i < autoPrIds.length; i += ID_CHUNK) {
-    const chunk = autoPrIds.slice(i, i + ID_CHUNK);
-    const { error } = await supabase
-      .from("recon_links")
-      .delete()
-      .in("pr_txn_id", chunk);
-    checkError(error);
+  const CONCURRENCY = 5;
+  for (let i = 0; i < autoPrIds.length; i += ID_CHUNK * CONCURRENCY) {
+    const batchPromises = [];
+    for (let c = 0; c < CONCURRENCY && i + c * ID_CHUNK < autoPrIds.length; c++) {
+      const chunk = autoPrIds.slice(i + c * ID_CHUNK, i + (c + 1) * ID_CHUNK);
+      batchPromises.push(
+        supabase.from("recon_links").delete().in("pr_txn_id", chunk),
+      );
+    }
+    const results = await Promise.all(batchPromises);
+    for (const r of results) checkError(r.error);
   }
+
   for (const id of autoPrIds) linkedPrIds.delete(id);
   for (const id of autoDaIds) linkedDaIds.delete(id);
   return autoPrIds.length;
@@ -864,12 +853,16 @@ async function applyStateUpdates(
   ids: string[],
 ): Promise<void> {
   if (ids.length === 0) return;
-  for (let i = 0; i < ids.length; i += ID_CHUNK) {
-    const chunk = ids.slice(i, i + ID_CHUNK);
-    const { error } = await supabase
-      .from("recon_transactions")
-      .update({ state })
-      .in("id", chunk);
-    checkError(error);
+  const CONCURRENCY = 5;
+  for (let i = 0; i < ids.length; i += ID_CHUNK * CONCURRENCY) {
+    const batchPromises = [];
+    for (let c = 0; c < CONCURRENCY && i + c * ID_CHUNK < ids.length; c++) {
+      const chunk = ids.slice(i + c * ID_CHUNK, i + (c + 1) * ID_CHUNK);
+      batchPromises.push(
+        supabase.from("recon_transactions").update({ state }).in("id", chunk),
+      );
+    }
+    const results = await Promise.all(batchPromises);
+    for (const r of results) checkError(r.error);
   }
 }
