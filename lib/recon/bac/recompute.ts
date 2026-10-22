@@ -643,19 +643,29 @@ async function persistAllBatchLinks(
 }
 
 /**
- * Evaluates whether the latest statement upload confirms same-day clearing compensation.
+ * Evaluates whether a statement upload confirms clearing compensation.
  * Conditions:
  * 1. statement_downloaded_at is present.
- * 2. Time in Panama (America/Panama, UTC-5) is >= 14:30 (after the afternoon ACH clearing cutoff).
- * 3. saldo_diferido_minor is 0 (all retained/deferred items for the day have settled).
+ * 2. If saldo_diferido_minor is present, it must be 0 (all retained/deferred items have settled).
+ * 3. Timing:
+ *    - If downloaded on a calendar date (in Panama) after statementEndDate, the day is closed.
+ *    - If downloaded on the same date, time in Panama must be >= 14:30 (after afternoon ACH clearing cutoff).
  */
 export function isSameDayBatchCompensated(
   statementDownloadedAt: string | null | undefined,
   saldoDiferidoMinor: bigint | number | string | null | undefined,
+  statementEndDate?: string | null | undefined,
 ): boolean {
   if (!statementDownloadedAt) return false;
   const d = new Date(statementDownloadedAt);
   if (Number.isNaN(d.getTime())) return false;
+
+  const panamaDate = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Panama",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
 
   const panamaTime = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Panama",
@@ -664,10 +674,15 @@ export function isSameDayBatchCompensated(
     minute: "2-digit",
   }).format(d);
 
-  if (panamaTime < "14:30") return false;
+  if (saldoDiferidoMinor !== null && saldoDiferidoMinor !== undefined) {
+    if (BigInt(saldoDiferidoMinor) !== 0n) return false;
+  }
 
-  if (saldoDiferidoMinor === null || saldoDiferidoMinor === undefined) return false;
-  return BigInt(saldoDiferidoMinor) === 0n;
+  if (statementEndDate && panamaDate > statementEndDate) {
+    return true;
+  }
+
+  return panamaTime >= "14:30";
 }
 
 async function recomputePRStates(
@@ -724,6 +739,7 @@ async function recomputePRStates(
   const isSameDayCompensated = isSameDayBatchCompensated(
     latestUploadData?.statement_downloaded_at as string | null,
     latestUploadData?.saldo_diferido_minor as string | number | null,
+    latestUploadData?.date_range_end as string | null,
   );
 
   const uploadCoversMaxDate =
@@ -743,7 +759,19 @@ async function recomputePRStates(
   };
   const counts = { confirmed: 0, rejected: 0, pending: 0 };
 
-  const cutoffDate = maxAccountDate ? previousWorkingDay(maxAccountDate) : null;
+  const todayInPanama = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Panama",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+
+  const isMaxDatePast = maxAccountDate ? maxAccountDate < todayInPanama : false;
+  const isMaxDateClosed = isMaxDatePast || sameDayConfirmedEligible;
+
+  const cutoffDate = maxAccountDate
+    ? (isMaxDateClosed ? maxAccountDate : previousWorkingDay(maxAccountDate))
+    : null;
 
   for (const pr of prRows) {
     const id = pr.id;
@@ -757,6 +785,7 @@ async function recomputePRStates(
         targetState = override;
       } else if (
         (cutoffDate && pr.posted_at <= cutoffDate) ||
+        (autoConfirmedPrIds.has(id) && isMaxDateClosed && pr.posted_at <= maxAccountDate) ||
         (autoConfirmedPrIds.has(id) && maxAccountDate && pr.posted_at < maxAccountDate) ||
         (sameDayConfirmedEligible && maxAccountDate && pr.posted_at === maxAccountDate)
       ) {
