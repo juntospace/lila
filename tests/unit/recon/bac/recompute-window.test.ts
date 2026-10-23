@@ -32,42 +32,59 @@ describe("recomputeAccount Active Sliding Window", () => {
 
   function createMockSupabase(options?: {
     maxPostedAt?: string;
-    links?: any[];
-    prs?: any[];
-    das?: any[];
+    links?: unknown[];
+    prs?: unknown[];
+    das?: unknown[];
     priorConfirmedPrs?: number;
     priorRejectedPrs?: number;
     priorRejectedDas?: number;
   }) {
-    const rpcCalls: { fn: string; params: any }[] = [];
-    const queries: { table: string; filters: Record<string, any> }[] = [];
+    const rpcCalls: { fn: string; params: Record<string, unknown> }[] = [];
+    const queries: { table: string; filters: Record<string, unknown> }[] = [];
 
     const mockClient = {
-      rpc: vi.fn(async (fn: string, params: any) => {
+      rpc: vi.fn(async (fn: string, params: Record<string, unknown>) => {
         rpcCalls.push({ fn, params });
         if (fn === "recon_wipe_auto_links") return { data: 5, error: null };
         if (fn === "recon_bulk_update_states") return { data: 1, error: null };
         return { data: null, error: null };
       }),
       from: vi.fn((table: string) => {
-        const filterState: Record<string, any> = {};
+        const filterState: Record<string, unknown> = {};
 
-        const chain: any = {
-          select: vi.fn((_cols: string, opts?: any) => {
+        type MockChain = {
+          select: ReturnType<typeof vi.fn>;
+          eq: ReturnType<typeof vi.fn>;
+          gte: ReturnType<typeof vi.fn>;
+          lt: ReturnType<typeof vi.fn>;
+          or: ReturnType<typeof vi.fn>;
+          order: ReturnType<typeof vi.fn>;
+          limit: ReturnType<typeof vi.fn>;
+          range: ReturnType<typeof vi.fn>;
+          maybeSingle: ReturnType<typeof vi.fn>;
+          insert: ReturnType<typeof vi.fn>;
+          delete: ReturnType<typeof vi.fn>;
+          update: ReturnType<typeof vi.fn>;
+          in: ReturnType<typeof vi.fn>;
+          then: (resolve: (arg: unknown) => void) => void;
+        };
+
+        const chain: MockChain = {
+          select: vi.fn((_cols: string, opts?: { head?: boolean; count?: string }) => {
             if (opts?.head && opts?.count === "exact") {
               filterState.headCount = true;
             }
             return chain;
           }),
-          eq: vi.fn((col: string, val: any) => {
+          eq: vi.fn((col: string, val: unknown) => {
             filterState[col] = val;
             return chain;
           }),
-          gte: vi.fn((col: string, val: any) => {
+          gte: vi.fn((col: string, val: unknown) => {
             filterState[`gte_${col}`] = val;
             return chain;
           }),
-          lt: vi.fn((col: string, val: any) => {
+          lt: vi.fn((col: string, val: unknown) => {
             filterState[`lt_${col}`] = val;
             return chain;
           }),
@@ -75,7 +92,7 @@ describe("recomputeAccount Active Sliding Window", () => {
             filterState.or = expr;
             return chain;
           }),
-          order: vi.fn((col: string, _opts?: any) => {
+          order: vi.fn((col: string) => {
             filterState.orderBy = col;
             return chain;
           }),
@@ -136,7 +153,7 @@ describe("recomputeAccount Active Sliding Window", () => {
           delete: vi.fn(() => chain),
           update: vi.fn(() => chain),
           in: vi.fn(() => Promise.resolve({ data: [], error: null })),
-          then: (resolve: any) => {
+          then: (resolve: (arg: unknown) => void) => {
             queries.push({ table, filters: { ...filterState } });
             if (filterState.headCount) {
               if (table === "recon_transactions") {

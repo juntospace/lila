@@ -714,6 +714,10 @@ export async function deleteUpload(uploadId: string): Promise<DeleteUploadResult
         await recomputeBgAccount(supabase, accountId);
       }
     } catch (err) {
+      console.warn(
+        "Edge Function bg-recon-recompute failed during deleteUpload, falling back to direct server recompute:",
+        err,
+      );
       try {
         await recomputeBgAccount(supabase, accountId);
       } catch (fbErr) {
