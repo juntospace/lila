@@ -1,8 +1,11 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { describe, expect, it, vi } from "vitest";
 import {
   deserializeBgParsedFile,
   serializeBgParsedFile,
   type BgDetectedFileResult,
+  type BgParsedAchDetail,
+  type BgParsedStatement,
 } from "@/lib/recon/bg";
 import { recomputeBgAccount } from "@/lib/recon/bg/recompute";
 
@@ -33,12 +36,12 @@ describe("BgParsedFile Serialization & Parity", () => {
     };
 
     const serialized = serializeBgParsedFile(original);
-    const revived = deserializeBgParsedFile(serialized);
+    const revived = deserializeBgParsedFile(serialized) as BgParsedStatement;
 
     expect(revived).toEqual(original);
-    expect(typeof (revived as any).rows[0].creditMinor).toBe("bigint");
-    expect((revived as any).rows[0].creditMinor).toBe(15050n);
-    expect((revived as any).downloadedAt).toBeInstanceOf(Date);
+    expect(typeof revived.rows[0].creditMinor).toBe("bigint");
+    expect(revived.rows[0].creditMinor).toBe(15050n);
+    expect(revived.downloadedAt).toBeInstanceOf(Date);
   });
 
   it("serializes and deserializes BgParsedAchDetail preserving BigInt totals", () => {
@@ -83,13 +86,13 @@ describe("BgParsedFile Serialization & Parity", () => {
     };
 
     const serialized = serializeBgParsedFile(original);
-    const revived = deserializeBgParsedFile(serialized);
+    const revived = deserializeBgParsedFile(serialized) as BgParsedAchDetail;
 
     expect(revived).toEqual(original);
-    expect(typeof (revived as any).rejectedSumMinor).toBe("bigint");
-    expect((revived as any).rejectedSumMinor).toBe(10000n);
-    expect(typeof (revived as any).rows[0].amountMinor).toBe("bigint");
-    expect((revived as any).rows[0].amountMinor).toBe(5000n);
+    expect(typeof revived.rejectedSumMinor).toBe("bigint");
+    expect(revived.rejectedSumMinor).toBe(10000n);
+    expect(typeof revived.rows[0].amountMinor).toBe("bigint");
+    expect(revived.rows[0].amountMinor).toBe(5000n);
   });
 });
 
@@ -143,7 +146,7 @@ describe("recomputeBgAccount with cached parsed_payload (0 storage downloads)", 
               limit: vi.fn().mockImplementation(() => ({
                 maybeSingle: vi.fn().mockResolvedValue({ data: { id: "up-001" }, error: null }),
               })),
-              then: (resolve: any) =>
+              then: (resolve: (val: unknown) => void) =>
                 resolve({
                   data: [
                     {
@@ -184,9 +187,9 @@ describe("recomputeBgAccount with cached parsed_payload (0 storage downloads)", 
     };
 
     const res = await recomputeBgAccount(
-      mockSupabase as any,
+      mockSupabase as unknown as SupabaseClient,
       accountId,
-      { storageClient: mockSupabase as any },
+      { storageClient: mockSupabase as unknown as SupabaseClient },
     );
 
     expect(res.status).toBe("ok");

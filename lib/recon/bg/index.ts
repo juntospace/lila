@@ -15,6 +15,7 @@ export {
   serializeBgParsedFile,
   deserializeBgParsedFile,
   BG_PARSER_VERSION,
+  type BgDetectedFileResult,
 } from "./parsers/sniffer";
 export {
   parseAmountFloat,
