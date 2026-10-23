@@ -250,7 +250,7 @@ for each row execute function public.set_user_profile_role_from_allowlist();
 -- =============================================================
 
 do $$ begin
-  create type bank_accounts_rail_enum as enum ('bac');
+  create type bank_accounts_rail_enum as enum ('bac', 'bg');
 exception when duplicate_object then null; end $$;
 
 do $$ begin
@@ -258,7 +258,12 @@ do $$ begin
 exception when duplicate_object then null; end $$;
 
 do $$ begin
-  create type recon_uploads_method_enum as enum ('statement_excel');
+  create type recon_uploads_method_enum as enum (
+    'statement_excel',
+    'statement_bg_excel',
+    'ach_detail_bg_excel',
+    'yappy_bg_excel'
+  );
 exception when duplicate_object then null; end $$;
 
 do $$ begin
@@ -279,7 +284,7 @@ exception when duplicate_object then null; end $$;
 
 do $$ begin
   create type recon_links_strategy_enum as enum (
-    'auto_fifo_name_amount', 'manual'
+    'auto_fifo_name_amount', 'auto_batch_link', 'manual'
   );
 exception when duplicate_object then null; end $$;
 
