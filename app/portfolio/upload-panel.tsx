@@ -79,9 +79,12 @@ export function PortfolioUploadPanel() {
               defaultValue="crediclaro"
               className="mt-1 w-full rounded-lg border border-border-subtle bg-bg-surface px-3 py-2 text-xs text-fg focus:border-[#620494] focus:outline-hidden"
             >
-              <option value="crediclaro">Crediclaro, S.A.</option>
+              <option value="crediclaro">Crediclaro, S.A. (Predeterminada)</option>
               <option value="junto_soluciones">Junto Soluciones, S.A.</option>
             </select>
+            <p className="mt-1 text-[11px] text-fg-muted">
+              Por defecto Crediclaro (cartera LoanDisk Branch 1). No necesitas cambiarla.
+            </p>
           </div>
 
           <div>

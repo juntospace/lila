@@ -29,9 +29,19 @@ export default {
         );
       }
 
+      const windowDays = body.window_days ?? body.windowDays;
+      const fromDate = body.from_date ?? body.fromDate;
+      const fullLifetime = body.full_lifetime ?? body.fullLifetime;
+
+      const options = {
+        windowDays: typeof windowDays === "number" ? windowDays : undefined,
+        fromDate: typeof fromDate === "string" ? fromDate : undefined,
+        fullLifetime: Boolean(fullLifetime),
+      };
+
       // 3. Run Recompute using Admin Supabase Client inside Edge Function
       const adminSupabase = getAdminClient();
-      const stats = await recomputeAccount(adminSupabase, accountId, session.userId);
+      const stats = await recomputeAccount(adminSupabase, accountId, session.userId, options);
 
       return new Response(
         JSON.stringify({ status: "ok", stats }),

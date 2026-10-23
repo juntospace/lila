@@ -50,19 +50,19 @@ export function CollectionsView({
     switch (p) {
       case 1:
         return (
-          <span className="inline-flex items-center rounded-md bg-rose-100 px-2 py-0.5 text-xs font-bold text-rose-700">
+          <span className="inline-flex items-center rounded-md border border-rose-500/30 bg-rose-500/15 px-2 py-0.5 text-[11px] font-bold text-rose-400">
             P1
           </span>
         );
       case 2:
         return (
-          <span className="inline-flex items-center rounded-md bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-700">
+          <span className="inline-flex items-center rounded-md border border-amber-500/30 bg-amber-500/15 px-2 py-0.5 text-[11px] font-bold text-amber-400">
             P2
           </span>
         );
       case 3:
         return (
-          <span className="inline-flex items-center rounded-md bg-emerald-100 px-2 py-0.5 text-xs font-bold text-emerald-700">
+          <span className="inline-flex items-center rounded-md border border-emerald-500/30 bg-emerald-500/15 px-2 py-0.5 text-[11px] font-bold text-emerald-400">
             P3
           </span>
         );
@@ -74,7 +74,7 @@ export function CollectionsView({
       {/* Top Action Bar & Summary Header */}
       <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border-subtle bg-bg-surface p-4 shadow-xs">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#F1E6F8] text-[#620494]">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-purple-500/30 bg-purple-500/15 text-purple-300">
             <Sparkles className="h-5 w-5" />
           </div>
           <div>
@@ -104,7 +104,7 @@ export function CollectionsView({
           <span className="text-[10px] font-bold uppercase tracking-wider text-fg-subtle">
             Cobro objetivo Top 40
           </span>
-          <div className="mt-1 text-xl font-bold text-emerald-600">
+          <div className="mt-1 font-mono text-xl font-bold text-emerald-400">
             {fmtMoney(resumen.top40_cura)}
           </div>
           <div className="text-xs text-fg-muted">
@@ -200,40 +200,40 @@ export function CollectionsView({
             <div className="flex gap-1 text-xs">
               <button
                 onClick={() => setPrioFilter(null)}
-                className={`rounded px-2 py-1 ${
+                className={`rounded px-2.5 py-1 text-xs transition ${
                   prioFilter === null
-                    ? "bg-bg-raised font-bold text-fg"
-                    : "text-fg-muted hover:text-fg"
+                    ? "border border-border bg-bg-raised font-bold text-fg"
+                    : "border border-transparent text-fg-muted hover:text-fg"
                 }`}
               >
                 Todas
               </button>
               <button
                 onClick={() => setPrioFilter(1)}
-                className={`rounded px-2 py-1 ${
+                className={`rounded px-2.5 py-1 text-xs transition ${
                   prioFilter === 1
-                    ? "bg-rose-100 font-bold text-rose-800"
-                    : "text-fg-muted hover:text-fg"
+                    ? "border border-rose-500/40 bg-rose-500/20 font-bold text-rose-300"
+                    : "border border-transparent text-fg-muted hover:text-fg"
                 }`}
               >
                 P1
               </button>
               <button
                 onClick={() => setPrioFilter(2)}
-                className={`rounded px-2 py-1 ${
+                className={`rounded px-2.5 py-1 text-xs transition ${
                   prioFilter === 2
-                    ? "bg-amber-100 font-bold text-amber-800"
-                    : "text-fg-muted hover:text-fg"
+                    ? "border border-amber-500/40 bg-amber-500/20 font-bold text-amber-300"
+                    : "border border-transparent text-fg-muted hover:text-fg"
                 }`}
               >
                 P2
               </button>
               <button
                 onClick={() => setPrioFilter(3)}
-                className={`rounded px-2 py-1 ${
+                className={`rounded px-2.5 py-1 text-xs transition ${
                   prioFilter === 3
-                    ? "bg-emerald-100 font-bold text-emerald-800"
-                    : "text-fg-muted hover:text-fg"
+                    ? "border border-emerald-500/40 bg-emerald-500/20 font-bold text-emerald-300"
+                    : "border border-transparent text-fg-muted hover:text-fg"
                 }`}
               >
                 P3
@@ -248,51 +248,51 @@ export function CollectionsView({
         <div className="overflow-x-auto rounded-xl border border-border-subtle bg-bg-surface shadow-xs">
           <table className="w-full border-collapse text-left text-xs">
             <thead>
-              <tr className="border-b border-border-subtle bg-[#EDEAFB]/50 text-[10px] font-bold uppercase tracking-wider text-[#4A3FB0]">
-                <th className="py-2.5 px-3 text-center">Prio</th>
-                <th className="py-2.5 px-3">Préstamo #</th>
-                <th className="py-2.5 px-3">Cliente</th>
-                <th className="py-2.5 px-3">Celular</th>
-                <th className="py-2.5 px-3">Segmento</th>
-                <th className="py-2.5 px-3 text-center">DPD</th>
-                <th className="py-2.5 px-3 text-center">Tramo</th>
-                <th className="py-2.5 px-3 text-right">Saldo</th>
-                <th className="py-2.5 px-3 text-right">Monto a cobrar</th>
-                <th className="py-2.5 px-3 text-center">Último pago</th>
-                <th className="py-2.5 px-3">Motivo / Acción</th>
+              <tr className="border-b border-border-subtle bg-bg-raised/60 text-[10px] font-bold uppercase tracking-wider text-fg-subtle">
+                <th className="py-2.5 px-3 text-center whitespace-nowrap">Prio</th>
+                <th className="py-2.5 px-3 whitespace-nowrap">Préstamo #</th>
+                <th className="py-2.5 px-3 whitespace-nowrap">Cliente</th>
+                <th className="py-2.5 px-3 whitespace-nowrap">Celular</th>
+                <th className="py-2.5 px-3 whitespace-nowrap">Segmento</th>
+                <th className="py-2.5 px-3 text-center whitespace-nowrap">DPD</th>
+                <th className="py-2.5 px-3 text-center whitespace-nowrap">Tramo</th>
+                <th className="py-2.5 px-3 text-right whitespace-nowrap">Saldo</th>
+                <th className="py-2.5 px-3 text-right whitespace-nowrap">Monto a cobrar</th>
+                <th className="py-2.5 px-3 text-center whitespace-nowrap">Último pago</th>
+                <th className="py-2.5 px-3 whitespace-nowrap">Motivo / Acción</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border-subtle">
               {filteredItems.map((item, idx) => (
-                <tr key={idx} className="hover:bg-bg-raised/40">
-                  <td className="py-2.5 px-3 text-center">
+                <tr key={idx} className="transition-colors hover:bg-bg-raised/40">
+                  <td className="py-2.5 px-3 text-center whitespace-nowrap">
                     {getPrioBadge(item.prio)}
                   </td>
-                  <td className="py-2.5 px-3 font-mono font-medium text-fg">
+                  <td className="py-2.5 px-3 font-mono font-medium text-fg whitespace-nowrap">
                     {item.loanno}
                   </td>
-                  <td className="py-2.5 px-3 font-medium text-fg">
+                  <td className="py-2.5 px-3 font-medium text-fg whitespace-nowrap">
                     {item.cliente}
                   </td>
-                  <td className="py-2.5 px-3 font-mono text-fg-muted">
+                  <td className="py-2.5 px-3 font-mono text-fg-muted whitespace-nowrap">
                     {item.cel || "—"}
                   </td>
-                  <td className="py-2.5 px-3 text-fg-muted">{item.seg}</td>
-                  <td className="py-2.5 px-3 text-center font-mono font-bold text-fg">
+                  <td className="py-2.5 px-3 text-fg-muted whitespace-nowrap">{item.seg}</td>
+                  <td className="py-2.5 px-3 text-center font-mono font-bold text-fg tabular-nums whitespace-nowrap">
                     {item.dpd}
                   </td>
-                  <td className="py-2.5 px-3 text-center">
-                    <span className="rounded-full bg-bg-raised px-2 py-0.5 text-[10px] font-medium text-fg-muted">
+                  <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                    <span className="rounded-full border border-border-subtle bg-bg-raised px-2 py-0.5 text-[10px] font-medium text-fg-muted">
                       {item.tramo}
                     </span>
                   </td>
-                  <td className="py-2.5 px-3 text-right font-mono font-bold text-fg">
+                  <td className="py-2.5 px-3 text-right font-mono font-bold text-fg tabular-nums whitespace-nowrap">
                     {fmtMoney(item.saldo)}
                   </td>
-                  <td className="py-2.5 px-3 text-right font-mono font-bold text-emerald-600">
+                  <td className="py-2.5 px-3 text-right font-mono font-bold text-emerald-400 tabular-nums whitespace-nowrap">
                     {fmtMoney(item.cura)}
                   </td>
-                  <td className="py-2.5 px-3 text-center font-mono text-fg-muted">
+                  <td className="py-2.5 px-3 text-center font-mono text-fg-muted tabular-nums whitespace-nowrap">
                     {item.ultpago || "—"}
                   </td>
                   <td className="py-2.5 px-3 text-fg-muted">{item.motivo}</td>
@@ -318,7 +318,7 @@ export function CollectionsView({
           <div className="divide-y divide-border-subtle text-xs">
             <div className="flex justify-between py-2.5">
               <span className="text-fg-muted">Política CRO</span>
-              <span className="font-mono font-bold text-[#620494]">
+              <span className="font-mono font-bold text-purple-400">
                 Política {policyVersion}
               </span>
             </div>
@@ -366,19 +366,19 @@ export function CollectionsView({
                 {fmtMoney(resumen.castigo_saldo)}
               </span>
             </div>
-            <div className="flex justify-between py-2.5 bg-emerald-50/50 px-2 rounded">
-              <span className="font-semibold text-emerald-900">
+            <div className="flex justify-between rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2.5">
+              <span className="font-semibold text-emerald-300">
                 Cobro objetivo del Top (suma &quot;Monto a cobrar&quot;)
               </span>
-              <span className="font-mono font-bold text-emerald-700">
+              <span className="font-mono font-bold text-emerald-400">
                 {fmtMoney(resumen.top40_cura)}
               </span>
             </div>
-            <div className="flex justify-between py-2.5 bg-purple-50/50 px-2 rounded">
-              <span className="font-semibold text-purple-900">
+            <div className="flex justify-between rounded-lg border border-purple-500/20 bg-purple-500/10 px-3 py-2.5">
+              <span className="font-semibold text-purple-300">
                 Saldo que ese cobro re-envejece
               </span>
-              <span className="font-mono font-bold text-purple-700">
+              <span className="font-mono font-bold text-purple-300">
                 {fmtMoney(resumen.top40_saldo)}
               </span>
             </div>

@@ -31,7 +31,7 @@ export default async function PortfolioCollectionsPage({
     return (
       <OperatorShell session={session}>
         <div className="mx-auto max-w-xl rounded-2xl border border-border-subtle bg-bg-surface p-10 text-center shadow-xs">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-[#F1E6F8] text-[#620494]">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full border border-purple-500/30 bg-purple-500/15 text-purple-300">
             <UploadCloud className="h-6 w-6" />
           </div>
           <h3 className="text-base font-semibold text-fg">
@@ -65,7 +65,7 @@ export default async function PortfolioCollectionsPage({
             <h1 className="font-display text-2xl font-bold tracking-tight text-fg">
               Plan Diario de Cobranzas
             </h1>
-            <span className="rounded-full bg-[#F1E6F8] px-2.5 py-0.5 text-xs font-semibold text-[#4C0374]">
+            <span className="rounded-full border border-purple-500/30 bg-purple-500/15 px-2.5 py-0.5 text-xs font-semibold text-purple-300">
               Política {policy.version}
             </span>
           </div>

@@ -77,6 +77,7 @@ export type RecomputeActionResult = {
  */
 export async function recomputeAccountAction(
   accountId: string,
+  options?: { windowDays?: number; fromDate?: string; fullLifetime?: boolean },
 ): Promise<RecomputeActionResult> {
   const session = await requireReconWriter();
   const supabase = await createSupabaseServerClient();
@@ -108,14 +109,19 @@ export async function recomputeAccountAction(
 
     let stats: RecomputeStats;
     const { data, error } = await supabase.functions.invoke("bac-recon-recompute", {
-      body: { account_id: accountId },
+      body: {
+        account_id: accountId,
+        window_days: options?.windowDays,
+        from_date: options?.fromDate,
+        full_lifetime: options?.fullLifetime,
+      },
     });
 
     if (error || data?.error) {
       // Fallback to local JS execution if Edge Function limits/fails (e.g. Supabase CLI local Deno worker limits)
       console.warn("Edge Function recompute failed, falling back to direct server recompute:", error || data?.error);
       const { recomputeAccount } = await import("@/lib/recon/bac/recompute");
-      stats = await recomputeAccount(supabase, accountId, session.userId);
+      stats = await recomputeAccount(supabase, accountId, session.userId, options);
     } else {
       stats = data.stats;
     }

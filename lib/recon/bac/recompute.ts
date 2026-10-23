@@ -67,6 +67,17 @@ import {
 import { parseDvtoDescription } from "./parser";
 import { previousWorkingDay } from "../format";
 
+/**
+ * Subtracts `days` working days from `isoDate` (YYYY-MM-DD), skipping weekends.
+ */
+export function subtractWorkingDays(isoDate: string, days: number): string {
+  let current = isoDate;
+  for (let i = 0; i < days; i++) {
+    current = previousWorkingDay(current);
+  }
+  return current;
+}
+
 const SUPABASE_PAGE_LIMIT = 1000;
 const SUPABASE_PAGE_SAFETY_CAP = 200_000;
 // 100 keeps `?id=in.(uuid1,...,uuid100)` URLs well under 4 KB. PostgREST
@@ -117,31 +128,75 @@ export interface RecomputeStats {
   aliasesLoaded: number;
 }
 
+export interface RecomputeOptions {
+  /**
+   * Number of working days for the active sliding window (default: 15).
+   * Unconsolidated items ('pending' PRs, 'pending_pair' DAs) are ALWAYS
+   * included regardless of window size.
+   */
+  windowDays?: number;
+  /**
+   * Optional explicit start date for the window (YYYY-MM-DD).
+   */
+  fromDate?: string;
+  /**
+   * Set true to force a full account lifetime recompute (wipes all auto links
+   * and loads all historical transactions).
+   */
+  fullLifetime?: boolean;
+}
+
 export async function recomputeAccount(
   supabase: SupabaseClient,
   accountId: string,
   uploadedBy?: string | null,
+  options?: RecomputeOptions,
 ): Promise<RecomputeStats> {
-  // 1. Pre-fetch every existing recon_links row for this account.
-  //    Used for: (a) the diagnostic "preexistingLinks" count, (b) input
-  //    to wipeAutoLinks below, (c) the post-wipe survivors which are the
-  //    Sets fed into the state recompute.
+  // Determine window start date
+  let windowStartDate: string | undefined;
+  if (options?.fullLifetime) {
+    windowStartDate = undefined;
+  } else if (options?.fromDate) {
+    windowStartDate = options.fromDate;
+  } else {
+    const windowDays = options?.windowDays ?? 15;
+    const { data: maxTxnData } = await supabase
+      .from("recon_transactions")
+      .select("posted_at")
+      .eq("account_id", accountId)
+      .order("posted_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const todayInPanama = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Panama",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+
+    const anchorDate = (maxTxnData?.posted_at as string | null) ?? todayInPanama;
+    windowStartDate = subtractWorkingDays(anchorDate, windowDays);
+  }
+
+  // 1. Pre-fetch recon_links within the active window (plus all manual pairs).
+  //    Used for: (a) diagnostic counts, (b) input to wipeAutoLinks,
+  //    (c) survivors fed into the state recompute.
   const { linkedPrIds, linkedDaIds, links } = await fetchLinkedTxnIds(
     supabase,
     accountId,
+    windowStartDate,
   );
   const preexistingLinks = linkedPrIds.size;
 
-  // 1a. Wipe ALL auto links (auto_batch_link + legacy auto_fifo_name_amount)
-  //     and remove their ids from the Sets so the linker re-creates them
-  //     from scratch under the current algorithm. Manual operator pairings
-  //     are preserved.
+  // 1a. Wipe auto links within the active window. Manual pairings stay put.
   const autoLinksWiped = await wipeAutoLinks(
     supabase,
     links,
     linkedPrIds,
     linkedDaIds,
     accountId,
+    windowStartDate,
   );
 
   // 2. Load operator-curated aliases. The linker consults these AFTER the
@@ -149,11 +204,20 @@ export async function recomputeAccount(
   const aliases = await fetchAliasMap(supabase, accountId);
   const aliasesLoaded = aliases.size;
 
-  // 3. Batch-aware pairing. Load every unpaired PR + DA in the account
-  //    (after the wipe, only manually-paired rows are linked), run the
-  //    pure linker, persist the resulting auto_batch_link rows.
-  const unpairedPRs = await fetchUnpairedPRs(supabase, accountId, linkedPrIds);
-  const unpairedDAs = await fetchUnpairedDAs(supabase, accountId, linkedDaIds);
+  // 3. Batch-aware pairing. Load unpaired PR + DA in the active window
+  //    (or unconsolidated lifetime items), run the pure linker, persist new links.
+  const unpairedPRs = await fetchUnpairedPRs(
+    supabase,
+    accountId,
+    linkedPrIds,
+    windowStartDate,
+  );
+  const unpairedDAs = await fetchUnpairedDAs(
+    supabase,
+    accountId,
+    linkedDaIds,
+    windowStartDate,
+  );
   const unpairedDaInput = unpairedDAs.length;
 
   const prBatches = groupPRBatches(unpairedPRs);
@@ -281,8 +345,14 @@ export async function recomputeAccount(
     linkedPrIds,
     autoConfirmedPrIds,
     unmatchedDaCount,
+    windowStartDate,
   );
-  const daStats = await recomputeDAStates(supabase, accountId, linkedDaIds);
+  const daStats = await recomputeDAStates(
+    supabase,
+    accountId,
+    linkedDaIds,
+    windowStartDate,
+  );
 
   const { count: txnCount } = await supabase
     .from("recon_transactions")
@@ -421,12 +491,13 @@ interface LinkRow {
 }
 
 /**
- * Walk every recon_links row whose PR or DA lives in this account and build
- * Sets of their ids plus the raw link rows.
+ * Walk recon_links rows for this account and build Sets of their ids plus raw link rows.
+ * When windowStartDate is provided, fetches all manual pairings + links within the active window.
  */
 async function fetchLinkedTxnIds(
   supabase: SupabaseClient,
   accountId: string,
+  windowStartDate?: string,
 ): Promise<{
   linkedPrIds: Set<string>;
   linkedDaIds: Set<string>;
@@ -436,18 +507,10 @@ async function fetchLinkedTxnIds(
   const linkedDaIds = new Set<string>();
   const linksByPrId = new Map<string, LinkRow>();
 
-  let cursor = 0;
-  while (cursor < SUPABASE_PAGE_SAFETY_CAP) {
-    const { data, error } = await supabase
-      .from("recon_links")
-      .select("pr_txn_id, da_txn_id, match_strategy, recon_transactions!recon_links_pr_txn_id_fkey!inner(account_id)")
-      .eq("recon_transactions.account_id", accountId)
-      .range(cursor, cursor + SUPABASE_PAGE_LIMIT - 1);
-
-    checkError(error);
-    if (!data || data.length === 0) break;
-
-    for (const l of data) {
+  const ingestRows = (
+    rows: { pr_txn_id: unknown; da_txn_id: unknown; match_strategy: unknown }[],
+  ) => {
+    for (const l of rows) {
       const prId = l.pr_txn_id as string;
       const daId = l.da_txn_id as string;
       linkedPrIds.add(prId);
@@ -458,9 +521,50 @@ async function fetchLinkedTxnIds(
         match_strategy: l.match_strategy as string,
       });
     }
+  };
 
-    if (data.length < SUPABASE_PAGE_LIMIT) break;
-    cursor += SUPABASE_PAGE_LIMIT;
+  if (windowStartDate) {
+    // 1. Always load all manual pairings for the account (so manual pairs are never lost)
+    const { data: manualData, error: manualErr } = await supabase
+      .from("recon_links")
+      .select("pr_txn_id, da_txn_id, match_strategy, recon_transactions!recon_links_pr_txn_id_fkey!inner(account_id)")
+      .eq("recon_transactions.account_id", accountId)
+      .eq("match_strategy", "manual");
+    checkError(manualErr);
+    if (manualData) ingestRows(manualData);
+
+    // 2. Load links within the active window (posted_at >= windowStartDate)
+    let cursor = 0;
+    while (cursor < SUPABASE_PAGE_SAFETY_CAP) {
+      const { data, error } = await supabase
+        .from("recon_links")
+        .select("pr_txn_id, da_txn_id, match_strategy, recon_transactions!recon_links_pr_txn_id_fkey!inner(account_id, posted_at)")
+        .eq("recon_transactions.account_id", accountId)
+        .gte("recon_transactions.posted_at", windowStartDate)
+        .range(cursor, cursor + SUPABASE_PAGE_LIMIT - 1);
+
+      checkError(error);
+      if (!data || data.length === 0) break;
+      ingestRows(data);
+      if (data.length < SUPABASE_PAGE_LIMIT) break;
+      cursor += SUPABASE_PAGE_LIMIT;
+    }
+  } else {
+    // Full lifetime query
+    let cursor = 0;
+    while (cursor < SUPABASE_PAGE_SAFETY_CAP) {
+      const { data, error } = await supabase
+        .from("recon_links")
+        .select("pr_txn_id, da_txn_id, match_strategy, recon_transactions!recon_links_pr_txn_id_fkey!inner(account_id)")
+        .eq("recon_transactions.account_id", accountId)
+        .range(cursor, cursor + SUPABASE_PAGE_LIMIT - 1);
+
+      checkError(error);
+      if (!data || data.length === 0) break;
+      ingestRows(data);
+      if (data.length < SUPABASE_PAGE_LIMIT) break;
+      cursor += SUPABASE_PAGE_LIMIT;
+    }
   }
 
   return { linkedPrIds, linkedDaIds, links: Array.from(linksByPrId.values()) };
@@ -469,9 +573,8 @@ async function fetchLinkedTxnIds(
 const AUTO_STRATEGIES = new Set(["auto_fifo_name_amount", "auto_batch_link"]);
 
 /**
- * Delete every auto recon_link in the account (both `auto_batch_link`
- * and the legacy `auto_fifo_name_amount` strategy) and remove their ids
- * from the in-memory Sets. Manual operator pairings stay put.
+ * Delete auto recon_links in the account (or within the active window) and remove
+ * their ids from the in-memory Sets. Manual operator pairings stay put.
  */
 async function wipeAutoLinks(
   supabase: SupabaseClient,
@@ -479,6 +582,7 @@ async function wipeAutoLinks(
   linkedPrIds: Set<string>,
   linkedDaIds: Set<string>,
   accountId?: string,
+  windowStartDate?: string,
 ): Promise<number> {
   const autoPrIds: string[] = [];
   const autoDaIds: string[] = [];
@@ -493,7 +597,10 @@ async function wipeAutoLinks(
   if (accountId) {
     const { data: rpcDeleted, error: rpcErr } = await supabase.rpc(
       "recon_wipe_auto_links",
-      { p_account_id: accountId },
+      {
+        p_account_id: accountId,
+        p_since_date: windowStartDate ?? null,
+      },
     );
     if (!rpcErr && typeof rpcDeleted === "number") {
       for (const id of autoPrIds) linkedPrIds.delete(id);
@@ -524,15 +631,22 @@ async function fetchUnpairedPRs(
   supabase: SupabaseClient,
   accountId: string,
   linkedPrIds: Set<string>,
+  windowStartDate?: string,
 ): Promise<PRRowForBatch[]> {
   const all: PRRowForBatch[] = [];
   let cursor = 0;
   while (cursor < SUPABASE_PAGE_SAFETY_CAP) {
-    const { data, error } = await supabase
+    let query = supabase
       .from("recon_transactions")
       .select("id, posted_at, rail_native_ref, credit_minor, description")
       .eq("account_id", accountId)
-      .eq("code", "PR")
+      .eq("code", "PR");
+
+    if (windowStartDate) {
+      query = query.or(`posted_at.gte.${windowStartDate},state.in.(pending,pending_pair)`);
+    }
+
+    const { data, error } = await query
       .order("posted_at", { ascending: true })
       .order("id", { ascending: true })
       .range(cursor, cursor + SUPABASE_PAGE_LIMIT - 1);
@@ -564,15 +678,22 @@ async function fetchUnpairedDAs(
   supabase: SupabaseClient,
   accountId: string,
   linkedDaIds: Set<string>,
+  windowStartDate?: string,
 ): Promise<DARowForBatch[]> {
   const all: DARowForBatch[] = [];
   let cursor = 0;
   while (cursor < SUPABASE_PAGE_SAFETY_CAP) {
-    const { data, error } = await supabase
+    let query = supabase
       .from("recon_transactions")
       .select("id, posted_at, rail_native_ref, debit_minor, payer_name_raw")
       .eq("account_id", accountId)
-      .eq("code", "DA")
+      .eq("code", "DA");
+
+    if (windowStartDate) {
+      query = query.or(`posted_at.gte.${windowStartDate},state.in.(pending,pending_pair)`);
+    }
+
+    const { data, error } = await query
       .order("posted_at", { ascending: true })
       .order("id", { ascending: true })
       .range(cursor, cursor + SUPABASE_PAGE_LIMIT - 1);
@@ -689,9 +810,8 @@ export function isSameDayBatchCompensated(
     minute: "2-digit",
   }).format(d);
 
-  if (saldoDiferidoMinor !== null && saldoDiferidoMinor !== undefined) {
-    if (BigInt(saldoDiferidoMinor) !== 0n) return false;
-  }
+  if (saldoDiferidoMinor === null || saldoDiferidoMinor === undefined) return false;
+  if (BigInt(saldoDiferidoMinor) !== 0n) return false;
 
   if (statementEndDate && panamaDate > statementEndDate) {
     return true;
@@ -706,15 +826,22 @@ async function recomputePRStates(
   linkedPrIds: Set<string>,
   autoConfirmedPrIds: Set<string>,
   unmatchedDaCount: number = 0,
+  windowStartDate?: string,
 ): Promise<{ confirmed: number; rejected: number; pending: number }> {
   const prRows: { id: string; state: string; posted_at: string }[] = [];
   let cursor = 0;
   while (cursor < SUPABASE_PAGE_SAFETY_CAP) {
-    const { data, error } = await supabase
+    let query = supabase
       .from("recon_transactions")
       .select("id, state, posted_at")
       .eq("account_id", accountId)
-      .eq("code", "PR")
+      .eq("code", "PR");
+
+    if (windowStartDate) {
+      query = query.or(`posted_at.gte.${windowStartDate},state.in.(pending,pending_pair)`);
+    }
+
+    const { data, error } = await query
       .order("id", { ascending: true })
       .range(cursor, cursor + SUPABASE_PAGE_LIMIT - 1);
     checkError(error);
@@ -820,6 +947,29 @@ async function recomputePRStates(
   await applyStateUpdates(supabase, "confirmed", buckets.confirmed);
   await applyStateUpdates(supabase, "pending", buckets.pending);
 
+  if (windowStartDate) {
+    const [priorConf, priorRej] = await Promise.all([
+      supabase
+        .from("recon_transactions")
+        .select("id", { count: "exact", head: true })
+        .eq("account_id", accountId)
+        .eq("code", "PR")
+        .eq("state", "confirmed")
+        .lt("posted_at", windowStartDate),
+      supabase
+        .from("recon_transactions")
+        .select("id", { count: "exact", head: true })
+        .eq("account_id", accountId)
+        .eq("code", "PR")
+        .eq("state", "rejected")
+        .lt("posted_at", windowStartDate),
+    ]);
+    checkError(priorConf.error);
+    checkError(priorRej.error);
+    counts.confirmed += priorConf.count ?? 0;
+    counts.rejected += priorRej.count ?? 0;
+  }
+
   return counts;
 }
 
@@ -854,17 +1004,24 @@ async function recomputeDAStates(
   supabase: SupabaseClient,
   accountId: string,
   linkedDaIds: Set<string>,
+  windowStartDate?: string,
 ): Promise<{ rejected: number; pendingPair: number }> {
   const buckets = { rejected: [] as string[], pending_pair: [] as string[] };
   const counts = { rejected: 0, pendingPair: 0 };
 
   let cursor = 0;
   while (cursor < SUPABASE_PAGE_SAFETY_CAP) {
-    const { data, error } = await supabase
+    let query = supabase
       .from("recon_transactions")
       .select("id, state")
       .eq("account_id", accountId)
-      .eq("code", "DA")
+      .eq("code", "DA");
+
+    if (windowStartDate) {
+      query = query.or(`posted_at.gte.${windowStartDate},state.in.(pending,pending_pair)`);
+    }
+
+    const { data, error } = await query
       .order("id", { ascending: true })
       .range(cursor, cursor + SUPABASE_PAGE_LIMIT - 1);
     checkError(error);
@@ -887,6 +1044,18 @@ async function recomputeDAStates(
 
   await applyStateUpdates(supabase, "rejected", buckets.rejected);
   await applyStateUpdates(supabase, "pending_pair", buckets.pending_pair);
+
+  if (windowStartDate) {
+    const { count: priorRej, error: priorErr } = await supabase
+      .from("recon_transactions")
+      .select("id", { count: "exact", head: true })
+      .eq("account_id", accountId)
+      .eq("code", "DA")
+      .eq("state", "rejected")
+      .lt("posted_at", windowStartDate);
+    checkError(priorErr);
+    counts.rejected += priorRej ?? 0;
+  }
 
   return counts;
 }

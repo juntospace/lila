@@ -2,10 +2,11 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   experimental: {
-    // Bank statement Excel files are typically a few hundred KB but can grow
-    // past the 1 MB default for full-month exports. 10 MB gives generous
-    // headroom while still rejecting accidental uploads of giant files.
-    serverActions: { bodySizeLimit: "10mb" },
+    // LoanDisk repayments CSV files can exceed 20 MB for full portfolios,
+    // and bank statements can also be several MBs.
+    // 100 MB allows processing full historical backups without stream truncation.
+    serverActions: { bodySizeLimit: "100mb" },
+    proxyClientMaxBodySize: "100mb",
   },
 };
 
