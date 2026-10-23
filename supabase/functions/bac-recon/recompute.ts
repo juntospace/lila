@@ -149,6 +149,7 @@ export async function recomputeAccount(
     links,
     linkedPrIds,
     linkedDaIds,
+    accountId,
   );
 
   // 2. Load aliases
@@ -479,6 +480,7 @@ async function wipeAutoLinks(
   links: LinkRow[],
   linkedPrIds: Set<string>,
   linkedDaIds: Set<string>,
+  accountId?: string,
 ): Promise<number> {
   const autoPrIds: string[] = [];
   const autoDaIds: string[] = [];
@@ -488,6 +490,19 @@ async function wipeAutoLinks(
     autoDaIds.push(l.da_txn_id);
   }
   if (autoPrIds.length === 0) return 0;
+
+  // Try fast server-side RPC first
+  if (accountId) {
+    const { data: rpcDeleted, error: rpcErr } = await supabase.rpc(
+      "recon_wipe_auto_links",
+      { p_account_id: accountId },
+    );
+    if (!rpcErr && typeof rpcDeleted === "number") {
+      for (const id of autoPrIds) linkedPrIds.delete(id);
+      for (const id of autoDaIds) linkedDaIds.delete(id);
+      return rpcDeleted;
+    }
+  }
 
   const CONCURRENCY = 5;
   for (let i = 0; i < autoPrIds.length; i += ID_CHUNK * CONCURRENCY) {
@@ -886,6 +901,14 @@ async function applyStateUpdates(
   ids: string[],
 ): Promise<void> {
   if (ids.length === 0) return;
+
+  // Try fast server-side bulk update RPC first
+  const { error: rpcErr } = await supabase.rpc("recon_bulk_update_states", {
+    p_txn_ids: ids,
+    p_state: state,
+  });
+  if (!rpcErr) return;
+
   const CONCURRENCY = 5;
   for (let i = 0; i < ids.length; i += ID_CHUNK * CONCURRENCY) {
     const batchPromises = [];
