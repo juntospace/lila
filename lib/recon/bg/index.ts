@@ -10,7 +10,12 @@ export { parseBgStatement } from "./parsers/statement";
 export { parseBgAchDetail } from "./parsers/ach-detail";
 export { parseBgYappyReport } from "./parsers/yappy";
 export { parseBgAchDetailPdfText } from "./parsers/pdf-detail";
-export { detectAndParseBgFile } from "./parsers/sniffer";
+export {
+  detectAndParseBgFile,
+  serializeBgParsedFile,
+  deserializeBgParsedFile,
+  BG_PARSER_VERSION,
+} from "./parsers/sniffer";
 export {
   parseAmountFloat,
   parseAmountMinor,

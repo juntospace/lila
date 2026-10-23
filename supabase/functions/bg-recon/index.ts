@@ -2,7 +2,11 @@ import "@supabase/functions-js/edge-runtime.d.ts";
 
 import { requireAuth, getAdminClient } from "../_shared/auth.ts";
 import { computeFileSha256, uploadToStorage } from "../_shared/storage.ts";
-import { detectAndParseBgFile } from "./parsers/sniffer.ts";
+import {
+  detectAndParseBgFile,
+  serializeBgParsedFile,
+  BG_PARSER_VERSION,
+} from "./parsers/sniffer.ts";
 import { recomputeBgAccount } from "./recompute.ts";
 import { toCanonicalJsonContract } from "./formatters.ts";
 import type {
@@ -128,6 +132,8 @@ export default {
               date_range_start: startDate,
               date_range_end: endDate,
               status: "committed",
+              parsed_payload: serializeBgParsedFile(parsed),
+              parser_version: BG_PARSER_VERSION,
             });
 
             parsedFilesSummary.push({

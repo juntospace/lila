@@ -153,3 +153,82 @@ export function detectAndParseBgFile(
 
   return null;
 }
+
+export const BG_PARSER_VERSION = 1;
+
+/**
+ * Safely serializes a BgDetectedFileResult into a JSON-compatible object
+ * for storage in PostgreSQL jsonb, converting BigInt and Date to serializable formats.
+ */
+export function serializeBgParsedFile(
+  parsed: BgDetectedFileResult,
+): Record<string, unknown> {
+  return JSON.parse(
+    JSON.stringify(parsed, (_key, value) => {
+      if (typeof value === "bigint") {
+        return { __type: "bigint", value: value.toString() };
+      }
+      return value;
+    }),
+  );
+}
+
+/**
+ * Deserializes a jsonb object back into a native BgDetectedFileResult,
+ * restoring BigInt and Date instances.
+ */
+export function deserializeBgParsedFile(
+  data: unknown,
+): BgDetectedFileResult {
+  if (!data || typeof data !== "object") {
+    throw new Error("Invalid parsed_payload data");
+  }
+
+  const revived = JSON.parse(
+    JSON.stringify(data),
+    (key, value) => {
+      if (
+        value &&
+        typeof value === "object" &&
+        value.__type === "bigint" &&
+        typeof value.value === "string"
+      ) {
+        return BigInt(value.value);
+      }
+      if (
+        (key === "downloadedAt") &&
+        typeof value === "string"
+      ) {
+        return new Date(value);
+      }
+      return value;
+    },
+  ) as BgDetectedFileResult;
+
+  // Ensure top-level BigInts that may not have been tagged or were plain strings/numbers in some rows
+  if (revived.fileType === "ach_detail") {
+    revived.rejectedSumMinor = BigInt(String(revived.rejectedSumMinor ?? 0));
+    revived.succeededSumMinor = BigInt(String(revived.succeededSumMinor ?? 0));
+    if (revived.declaredRejectionsAmountMinor != null) {
+      revived.declaredRejectionsAmountMinor = BigInt(String(revived.declaredRejectionsAmountMinor));
+    }
+    if (revived.declaredTotalAmountMinor != null) {
+      revived.declaredTotalAmountMinor = BigInt(String(revived.declaredTotalAmountMinor));
+    }
+    for (const row of revived.rows) {
+      row.amountMinor = BigInt(String(row.amountMinor ?? 0));
+    }
+  } else if (revived.fileType === "statement") {
+    for (const row of revived.rows) {
+      if (row.debitMinor != null) row.debitMinor = BigInt(String(row.debitMinor));
+      if (row.creditMinor != null) row.creditMinor = BigInt(String(row.creditMinor));
+      if (row.balanceMinor != null) row.balanceMinor = BigInt(String(row.balanceMinor));
+    }
+  } else if (revived.fileType === "yappy") {
+    for (const row of revived.rows) {
+      row.amountMinor = BigInt(String(row.amountMinor ?? 0));
+    }
+  }
+
+  return revived;
+}

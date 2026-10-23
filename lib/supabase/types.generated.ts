@@ -1309,6 +1309,8 @@ export type Database = {
           integrity_ok: boolean | null
           method: Database["public"]["Enums"]["recon_uploads_method_enum"]
           original_filename: string | null
+          parsed_payload: unknown | null
+          parser_version: number | null
           rows_duplicate: number
           rows_new: number
           rows_total: number
@@ -1331,6 +1333,8 @@ export type Database = {
           integrity_ok?: boolean | null
           method: Database["public"]["Enums"]["recon_uploads_method_enum"]
           original_filename?: string | null
+          parsed_payload?: unknown | null
+          parser_version?: number | null
           rows_duplicate?: number
           rows_new?: number
           rows_total?: number
@@ -1353,6 +1357,8 @@ export type Database = {
           integrity_ok?: boolean | null
           method?: Database["public"]["Enums"]["recon_uploads_method_enum"]
           original_filename?: string | null
+          parsed_payload?: unknown | null
+          parser_version?: number | null
           rows_duplicate?: number
           rows_new?: number
           rows_total?: number

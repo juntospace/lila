@@ -1,10 +1,15 @@
-// Deterministic Account-wide Recompute Engine for Banco General (CCBG v2) in Supabase Edge Functions.
+// Deterministic Account-wide Recompute Engine for Banco General (CCBG v2).
 // Reloads all active statement, ACH detail, and Yappy exports from private storage,
 // re-runs full cross-file reconciliation, and synchronizes the canonical snapshot to the database.
 
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 
-import { detectAndParseBgFile } from "./parsers/sniffer.ts";
+import {
+  detectAndParseBgFile,
+  deserializeBgParsedFile,
+  serializeBgParsedFile,
+  BG_PARSER_VERSION,
+} from "./parsers/sniffer.ts";
 import { reconcileBancoGeneral } from "./reconcile.ts";
 import {
   fetchManualAssignments,
@@ -52,10 +57,12 @@ export async function recomputeBgAccount(
     throw new Error(`Bank account ${accountId} is on rail "${account.rail}", expected "bg"`);
   }
 
-  // 2. Fetch all active uploads for this account
+  // 2. Fetch all active uploads for this account (including cached parsed_payload)
   const { data: uploads, error: upErr } = await supabase
     .from("recon_uploads")
-    .select("id, original_filename, storage_path, method, date_range_start, date_range_end")
+    .select(
+      "id, original_filename, storage_path, method, date_range_start, date_range_end, parsed_payload, parser_version",
+    )
     .eq("account_id", accountId)
     .order("created_at", { ascending: true });
 
@@ -88,7 +95,11 @@ export async function recomputeBgAccount(
   const achDetails: BgParsedAchDetail[] = [];
   const yappyReports: BgParsedYappyReport[] = [];
 
-  const adminSupabase = options?.storageClient || supabase;
+  let adminSupabase = options?.storageClient;
+  if (!adminSupabase) {
+    const { getAdminClient } = await import("../_shared/auth.ts");
+    adminSupabase = getAdminClient();
+  }
   const cachedMap = new Map<
     string,
     {
@@ -108,6 +119,16 @@ export async function recomputeBgAccount(
   for (const up of uploads) {
     let parsed = cachedMap.get(up.original_filename)?.parsed;
 
+    // 4a. Fast path: load directly from PostgreSQL parsed_payload (0 storage downloads)
+    if (!parsed && up.parsed_payload && up.parser_version === BG_PARSER_VERSION) {
+      try {
+        parsed = deserializeBgParsedFile(up.parsed_payload);
+      } catch (deserErr) {
+        console.warn(`Failed to deserialize parsed_payload for "${up.original_filename}":`, deserErr);
+      }
+    }
+
+    // 4b. Slow fallback + Lazy Backfill: download from storage once, parse, and persist to PostgreSQL
     if (!parsed) {
       let bytes = cachedMap.get(up.original_filename)?.bytes;
       if (!bytes && up.storage_path) {
@@ -123,6 +144,20 @@ export async function recomputeBgAccount(
 
       if (bytes) {
         parsed = detectAndParseBgFile(bytes, up.original_filename) || undefined;
+        if (parsed) {
+          // Lazy backfill into PostgreSQL so it never downloads again!
+          try {
+            await supabase
+              .from("recon_uploads")
+              .update({
+                parsed_payload: serializeBgParsedFile(parsed),
+                parser_version: BG_PARSER_VERSION,
+              })
+              .eq("id", up.id);
+          } catch (bfErr: unknown) {
+            console.warn(`Lazy backfill failed for upload ${up.id}:`, bfErr);
+          }
+        }
       }
     }
 
@@ -160,4 +195,3 @@ export async function recomputeBgAccount(
     syncResult,
   };
 }
-

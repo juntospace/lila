@@ -10,6 +10,8 @@ import { ingestBACFile, parseBACSheet, type IngestResult } from "@/lib/recon/bac
 import { recomputeAccount } from "@/lib/recon/bac/recompute";
 import {
   detectAndParseBgFile,
+  serializeBgParsedFile,
+  BG_PARSER_VERSION,
   type BGAchDetailIngestResult,
   type BGStatementIngestResult,
   type BgParsedAchDetail,
@@ -347,6 +349,8 @@ export async function uploadStatement(
           date_range_start: startDate,
           date_range_end: endDate,
           status: "committed",
+          parsed_payload: serializeBgParsedFile(parsed),
+          parser_version: BG_PARSER_VERSION,
         });
       }
     }
