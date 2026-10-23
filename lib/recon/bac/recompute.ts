@@ -344,7 +344,6 @@ export async function recomputeAccount(
     accountId,
     linkedPrIds,
     autoConfirmedPrIds,
-    unmatchedDaCount,
     windowStartDate,
   );
   const daStats = await recomputeDAStates(
@@ -781,9 +780,10 @@ async function persistAllBatchLinks(
 /**
  * Evaluates whether a statement upload confirms clearing compensation.
  * Conditions:
- * 1. statement_downloaded_at is present.
- * 2. If saldo_diferido_minor is present, it must be 0 (all retained/deferred items have settled).
- * 3. Timing:
+ * 1. Primary rule (BAC Operations): If saldo_diferido_minor is present,
+ *    and equals 0, the bank has $0.00 retained/deferred items. All clearings are settled.
+ *    If > 0, items remain deferred/pending.
+ * 2. Fallback rule (when extract lacks explicit saldo_diferido cell):
  *    - If downloaded on a calendar date (in Panama) after statementEndDate, the day is closed.
  *    - If downloaded on the same date, time in Panama must be >= 14:30 (after afternoon ACH clearing cutoff).
  */
@@ -792,6 +792,14 @@ export function isSameDayBatchCompensated(
   saldoDiferidoMinor: bigint | number | string | null | undefined,
   statementEndDate?: string | null | undefined,
 ): boolean {
+  if (saldoDiferidoMinor !== null && saldoDiferidoMinor !== undefined) {
+    try {
+      return BigInt(saldoDiferidoMinor) === 0n;
+    } catch {
+      return false;
+    }
+  }
+
   if (!statementDownloadedAt) return false;
   const d = new Date(statementDownloadedAt);
   if (Number.isNaN(d.getTime())) return false;
@@ -810,9 +818,6 @@ export function isSameDayBatchCompensated(
     minute: "2-digit",
   }).format(d);
 
-  if (saldoDiferidoMinor === null || saldoDiferidoMinor === undefined) return false;
-  if (BigInt(saldoDiferidoMinor) !== 0n) return false;
-
   if (statementEndDate && panamaDate > statementEndDate) {
     return true;
   }
@@ -825,7 +830,6 @@ async function recomputePRStates(
   accountId: string,
   linkedPrIds: Set<string>,
   autoConfirmedPrIds: Set<string>,
-  unmatchedDaCount: number = 0,
   windowStartDate?: string,
 ): Promise<{ confirmed: number; rejected: number; pending: number }> {
   const prRows: { id: string; state: string; posted_at: string }[] = [];
@@ -890,7 +894,7 @@ async function recomputePRStates(
     (latestUploadData.date_range_end as string) >= maxAccountDate;
 
   const sameDayConfirmedEligible =
-    isSameDayCompensated && unmatchedDaCount === 0 && uploadCoversMaxDate;
+    isSameDayCompensated && uploadCoversMaxDate;
 
   const overrides = await fetchManualOverrides(supabase, accountId);
 

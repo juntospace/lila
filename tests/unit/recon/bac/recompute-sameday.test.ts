@@ -5,48 +5,41 @@ import { isSameDayBatchCompensated } from '@/lib/recon/bac/recompute';
 import { parseBACSheet } from '@/lib/recon/bac';
 
 describe('isSameDayBatchCompensated', () => {
-  it('returns false when statementDownloadedAt is null or undefined', () => {
-    expect(isSameDayBatchCompensated(null, 0n)).toBe(false);
-    expect(isSameDayBatchCompensated(undefined, 0n)).toBe(false);
-    expect(isSameDayBatchCompensated('invalid-date', 0n)).toBe(false);
-  });
-
-  it('returns false when download time in Panama is before 14:30 (morning/early afternoon)', () => {
-    // 09:57:29 Panama time (UTC-5) -> 14:57:29 UTC
+  it('returns true when saldo_diferido_minor == 0 regardless of time of day (Darwins / Operations rule)', () => {
+    // 09:57:29 Panama time (morning reconciliation)
     const morningPanama = '2026-04-22T09:57:29-05:00';
-    expect(isSameDayBatchCompensated(morningPanama, 0n)).toBe(false);
+    expect(isSameDayBatchCompensated(morningPanama, 0n)).toBe(true);
+    expect(isSameDayBatchCompensated(morningPanama, '0')).toBe(true);
 
-    // 11:30:00 Panama time
-    const lateMorningPanama = '2026-04-22T11:30:00-05:00';
-    expect(isSameDayBatchCompensated(lateMorningPanama, 0n)).toBe(false);
+    // 10:59:00 Panama time
+    const midMorningPanama = '2026-04-22T10:59:00-05:00';
+    expect(isSameDayBatchCompensated(midMorningPanama, 0n)).toBe(true);
 
-    // 14:15:00 Panama time (15 mins before cutoff)
-    const justBeforeCutoff = '2026-04-22T14:15:00-05:00';
-    expect(isSameDayBatchCompensated(justBeforeCutoff, 0n)).toBe(false);
+    // 14:15:00 Panama time
+    const earlyAfternoon = '2026-04-22T14:15:00-05:00';
+    expect(isSameDayBatchCompensated(earlyAfternoon, 0n)).toBe(true);
+
+    // Even if statementDownloadedAt is not present, saldo_diferido == 0 proves bank settled all items
+    expect(isSameDayBatchCompensated(null, 0n)).toBe(true);
   });
 
-  it('returns false when download time is after 14:30 but saldo_diferido_minor > 0', () => {
-    // 14:45:00 Panama time, but $500.00 still retained/deferred
+  it('returns false whenever saldo_diferido_minor > 0 (pending in-flight clearings)', () => {
+    const morningPanama = '2026-04-22T09:57:29-05:00';
+    expect(isSameDayBatchCompensated(morningPanama, 50000n)).toBe(false);
+
     const afternoonPanama = '2026-04-22T14:45:00-05:00';
     expect(isSameDayBatchCompensated(afternoonPanama, 50000n)).toBe(false);
     expect(isSameDayBatchCompensated(afternoonPanama, 100n)).toBe(false);
-    expect(isSameDayBatchCompensated(afternoonPanama, null)).toBe(false);
-    expect(isSameDayBatchCompensated(afternoonPanama, undefined)).toBe(false);
   });
 
-  it('returns true when download time is >= 14:30 Panama time AND saldo_diferido_minor == 0', () => {
-    // Exactly at cutoff: 14:30:00 Panama time
-    const exactCutoff = '2026-04-22T14:30:00-05:00';
-    expect(isSameDayBatchCompensated(exactCutoff, 0n)).toBe(true);
-    expect(isSameDayBatchCompensated(exactCutoff, '0')).toBe(true);
+  it('falls back to timestamp cutoff when saldo_diferido_minor is null/undefined', () => {
+    const morningPanama = '2026-04-22T09:57:29-05:00';
+    expect(isSameDayBatchCompensated(morningPanama, null)).toBe(false);
+    expect(isSameDayBatchCompensated(morningPanama, undefined)).toBe(false);
 
-    // Typical afternoon reconciliation: 14:45:00 Panama time
-    const afternoon = '2026-04-22T14:45:00-05:00';
-    expect(isSameDayBatchCompensated(afternoon, 0n)).toBe(true);
-
-    // Late afternoon: 17:00:00 Panama time
-    const lateAfternoon = '2026-04-22T17:00:00-05:00';
-    expect(isSameDayBatchCompensated(lateAfternoon, 0n)).toBe(true);
+    const afternoonPanama = '2026-04-22T14:45:00-05:00';
+    expect(isSameDayBatchCompensated(afternoonPanama, null)).toBe(true);
+    expect(isSameDayBatchCompensated(afternoonPanama, undefined)).toBe(true);
   });
 
   it('correctly parses the real 16-Oct statement and marks same-day compensated', () => {
