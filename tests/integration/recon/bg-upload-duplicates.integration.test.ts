@@ -8,6 +8,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY =
 
 import { createClient } from "@supabase/supabase-js";
 import { describe, expect, it, vi } from "vitest";
+import * as XLSX from "xlsx";
 
 vi.mock("next/headers", () => ({
   cookies: vi.fn().mockResolvedValue({
@@ -61,7 +62,7 @@ describe("uploadStatement duplicate detection", () => {
     expect(account).toBeDefined();
     if (!account) return;
 
-    // 2. Fetch an existing upload file from storage
+    // 2. Fetch an existing upload file from storage or create a fresh fixture
     const { data: uploads } = await supabase
       .from("recon_uploads")
       .select("id, original_filename, storage_path")
@@ -69,23 +70,49 @@ describe("uploadStatement duplicate detection", () => {
       .limit(1);
 
     const existingUpload = uploads?.[0];
-    expect(existingUpload).toBeDefined();
-    if (!existingUpload || !existingUpload.storage_path) return;
+    let mockFile: File;
+    let hadExistingUpload = false;
 
-    const { data: blob, error: dlErr } = await supabase.storage
-      .from("recon-statements")
-      .download(existingUpload.storage_path);
+    if (existingUpload && existingUpload.storage_path) {
+      hadExistingUpload = true;
+      const { data: blob, error: dlErr } = await supabase.storage
+        .from("recon-statements")
+        .download(existingUpload.storage_path);
 
-    expect(dlErr).toBeNull();
-    expect(blob).toBeDefined();
-    if (!blob) return;
+      expect(dlErr).toBeNull();
+      expect(blob).toBeDefined();
+      if (!blob) return;
 
-    const fileBytes = await blob.arrayBuffer();
-    const mockFile = new File([fileBytes], existingUpload.original_filename, {
-      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    });
+      const fileBytes = await blob.arrayBuffer();
+      mockFile = new File([fileBytes], existingUpload.original_filename, {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+    } else {
+      // Ephemeral / fresh database scenario (e.g. CI): create a synthetic valid BG statement
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.aoa_to_sheet([
+        ["Numero de Cuenta: 03-43-01-106691-6"],
+        ["Cliente: CREDICLARO, S.A."],
+        [],
+        ["Fecha", "Referencia", "Descripcion", "Debitos", "Creditos", "Saldo"],
+        ["01/08/2026", "REF100", "TRANSF BANCARIA DE CLIENTE EJEMPLO", "", "100.00", "5000.00"],
+      ]);
+      XLSX.utils.book_append_sheet(wb, ws, "CUENTA CORRIENTE");
+      const fileBytes = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+      mockFile = new File([fileBytes], "MOVIMIENTOS-CUENTA-CORRIENTE-SYNTHETIC.xlsx", {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
 
-    // 3. Construct FormData as if user selected this file (even alongside others)
+      // Upload once so it exists in the system
+      const initialFormData = new FormData();
+      initialFormData.append("account_id", account.id);
+      initialFormData.append("file", mockFile);
+      const initialRes = await uploadStatement({ status: "idle" }, initialFormData);
+      expect(initialRes.status).toBe("success");
+      expect(initialRes.result?.fileWasDuplicate).toBe(false);
+    }
+
+    // 3. Construct FormData as if user selected this file again (duplicate upload)
     const formData = new FormData();
     formData.append("account_id", account.id);
     formData.append("file", mockFile);
@@ -98,15 +125,17 @@ describe("uploadStatement duplicate detection", () => {
     expect(res.result?.rowsNew).toBe(0);
     expect(res.message).toContain("already uploaded");
 
-    // 5. Verify transaction counts for Sept 14-15 remain exactly 67 (not inflated)
-    const { data: confirmed } = await supabase
-      .from("recon_transactions")
-      .select("id")
-      .eq("account_id", account.id)
-      .gte("posted_at", "2026-09-14")
-      .lte("posted_at", "2026-09-15")
-      .eq("state", "confirmed");
+    // 5. Verify transaction counts for Sept 14-15 remain intact (if pre-seeded dataset exists)
+    if (hadExistingUpload) {
+      const { data: confirmed } = await supabase
+        .from("recon_transactions")
+        .select("id")
+        .eq("account_id", account.id)
+        .gte("posted_at", "2026-09-14")
+        .lte("posted_at", "2026-09-15")
+        .eq("state", "confirmed");
 
-    expect(confirmed?.length).toBe(67);
+      expect(confirmed?.length).toBe(67);
+    }
   });
 });
