@@ -12,7 +12,7 @@ import {
 
 const SAMPLES_DIR = "/home/carluis/Downloads/conciliacion-crediclaro-bg_v2.0/samples";
 
-describe("Direct verification of /samples directory", () => {
+describe.runIf(fs.existsSync(SAMPLES_DIR))("Direct verification of /samples directory", () => {
   it("processes all sample files directly and verifies confirmed metrics and alerts", () => {
     const filenames = fs.readdirSync(SAMPLES_DIR);
     console.log(`\nFound ${filenames.length} files in ${SAMPLES_DIR}`);
