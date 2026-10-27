@@ -582,95 +582,123 @@ export async function loadBoardDataset(
   const currentSnap = latestSnapshots[0];
   const asof = currentSnap.snapshot_date as string;
 
-  // 3. Load active CRO policy for asof (Fase 4.1)
-  const policy = await loadActivePolicy(supabase, asof);
+  // 3-8. Fetch all required datasets concurrently to avoid request waterfalls
+  const [
+    policy,
+    allSnapshotsRes,
+    loansData,
+    histLoans,
+    repayments,
+    batchRow,
+  ] = await Promise.all([
+    // Active CRO policy for asof (Fase 4.1)
+    loadActivePolicy(supabase, asof),
 
-  // 4. Fetch all historical completed snapshots for entity
-  const { data: allSnapshots } = await supabase
-    .from("portfolio_snapshots")
-    .select("id, snapshot_date")
-    .eq("entity_id", entityId)
-    .eq("status", "completed")
-    .lte("snapshot_date", asof)
-    .order("snapshot_date", { ascending: true });
-
-  const snapshotDates = (allSnapshots || []).map(
-    (s) => s.snapshot_date as string,
-  );
-
-  // 5. Fetch all loans for current snapshot (paginated — Fase 1.1)
-  const loansData = await fetchAll<BoardLoanInput>((from, to) =>
+    // All historical completed snapshots for entity
     supabase
-      .from("portfolio_loans")
-      .select("*")
-      .eq("snapshot_id", currentSnap.id)
-      .order("id", { ascending: true })
-      .range(from, to),
-  );
-
-  // 6. Fetch all historical snapshot open loans up to asof (paginated — Fase 1.1)
-  const histLoans = await fetchAll<BoardHistLoanInput>((from, to) =>
-    supabase
-      .from("portfolio_loans")
-      .select("snapshot_date, source_loan_id, segment, bucket_idx, balance, dpd")
+      .from("portfolio_snapshots")
+      .select("id, snapshot_date")
       .eq("entity_id", entityId)
-      .eq("is_open", true)
+      .eq("status", "completed")
       .lte("snapshot_date", asof)
-      .order("id", { ascending: true })
-      .range(from, to),
-  );
+      .order("snapshot_date", { ascending: true }),
 
-  // 7. Fetch real repayments for current snapshot (paginated — Fase 1.1)
-  const repayments = await fetchAll<BoardRepaymentInput>((from, to) =>
+    // All loans for current snapshot (paginated with concurrent chunks & specific columns)
+    fetchAll<BoardLoanInput>(
+      (from, to) =>
+        supabase
+          .from("portfolio_loans")
+          .select(
+            "source_loan_id, loan_number, full_name, product, segment, segment_idx, balance, dpd, bucket_idx, released_date, is_open, pending_due, total_due_amount, installments_count, cycle_type, tg, tc, gc, mr",
+            { count: "exact" },
+          )
+          .eq("snapshot_id", currentSnap.id)
+          .order("id", { ascending: true })
+          .range(from, to),
+      1000,
+      6,
+    ),
+
+    // All historical snapshot open loans up to asof (paginated with concurrent chunks)
+    fetchAll<BoardHistLoanInput>(
+      (from, to) =>
+        supabase
+          .from("portfolio_loans")
+          .select(
+            "snapshot_date, source_loan_id, segment, bucket_idx, balance, dpd",
+            { count: "exact" },
+          )
+          .eq("entity_id", entityId)
+          .eq("is_open", true)
+          .lte("snapshot_date", asof)
+          .order("id", { ascending: true })
+          .range(from, to),
+      1000,
+      6,
+    ),
+
+    // Real repayments for current snapshot (paginated with concurrent chunks)
+    fetchAll<BoardRepaymentInput>(
+      (from, to) =>
+        supabase
+          .from("portfolio_loan_repayments")
+          .select(
+            "source_loan_id, collection_date, principal_amount, ingresos_amount, is_real",
+            { count: "exact" },
+          )
+          .eq("snapshot_id", currentSnap.id)
+          .eq("is_real", true)
+          .order("id", { ascending: true })
+          .range(from, to),
+      1000,
+      6,
+    ),
+
+    // Latest ingest batch for quality warnings (Fase 4.3)
     supabase
-      .from("portfolio_loan_repayments")
-      .select("source_loan_id, collection_date, principal_amount, ingresos_amount, is_real")
-      .eq("snapshot_id", currentSnap.id)
-      .eq("is_real", true)
-      .order("id", { ascending: true })
-      .range(from, to),
-  );
-
-  // 8. Load latest ingest batch for quality warnings (Fase 4.3)
-  let batch: PortfolioIngestBatch | null = null;
-  try {
-    const { data: batchRow } = await supabase
       .from("portfolio_ingest_batches")
       .select("*")
       .eq("snapshot_id", currentSnap.id)
       .order("created_at", { ascending: false })
       .limit(1)
-      .maybeSingle();
+      .maybeSingle()
+      .then(
+        (res) => res.data,
+        () => null,
+      ),
+  ]);
 
-    if (batchRow) {
-      batch = {
-        id: batchRow.id,
-        snapshotId: batchRow.snapshot_id,
-        sha256Loans: batchRow.sha256_loans,
-        sha256Repayments: batchRow.sha256_repayments,
-        rowsLoans: Number(batchRow.rows_loans || 0),
-        rowsRepayments: Number(batchRow.rows_repayments || 0),
-        sumBalanceSource: Number(batchRow.sum_balance_source || 0),
-        sumBalanceIngested: Number(batchRow.sum_balance_ingested || 0),
-        futurePaymentsExcluded: Number(batchRow.future_payments_excluded || 0),
-        cashAheadCount: Number(batchRow.cash_ahead_count || 0),
-        adminExcludedCount: Number(batchRow.admin_excluded_count || 0),
-        adminExcludedAmount: Number(batchRow.admin_excluded_amount || 0),
-        unknownMethods: Array.isArray(batchRow.unknown_methods)
-          ? batchRow.unknown_methods
-          : [],
-        missingCustomFields: Array.isArray(batchRow.missing_custom_fields)
-          ? batchRow.missing_custom_fields
-          : [],
-        missingReleasedDateCount: Number(
-          batchRow.missing_released_date_count || 0,
-        ),
-        uploadedBy: batchRow.uploaded_by,
-        createdAt: batchRow.created_at,
-      };
-    }
-  } catch {
-    // Non-fatal if table is not yet migrated in mock environment
+  const snapshotDates = (allSnapshotsRes?.data || []).map(
+    (s) => s.snapshot_date as string,
+  );
+
+  let batch: PortfolioIngestBatch | null = null;
+  if (batchRow) {
+    batch = {
+      id: batchRow.id,
+      snapshotId: batchRow.snapshot_id,
+      sha256Loans: batchRow.sha256_loans,
+      sha256Repayments: batchRow.sha256_repayments,
+      rowsLoans: Number(batchRow.rows_loans || 0),
+      rowsRepayments: Number(batchRow.rows_repayments || 0),
+      sumBalanceSource: Number(batchRow.sum_balance_source || 0),
+      sumBalanceIngested: Number(batchRow.sum_balance_ingested || 0),
+      futurePaymentsExcluded: Number(batchRow.future_payments_excluded || 0),
+      cashAheadCount: Number(batchRow.cash_ahead_count || 0),
+      adminExcludedCount: Number(batchRow.admin_excluded_count || 0),
+      adminExcludedAmount: Number(batchRow.admin_excluded_amount || 0),
+      unknownMethods: Array.isArray(batchRow.unknown_methods)
+        ? batchRow.unknown_methods
+        : [],
+      missingCustomFields: Array.isArray(batchRow.missing_custom_fields)
+        ? batchRow.missing_custom_fields
+        : [],
+      missingReleasedDateCount: Number(
+        batchRow.missing_released_date_count || 0,
+      ),
+      uploadedBy: batchRow.uploaded_by,
+      createdAt: batchRow.created_at,
+    };
   }
 
   const warnings = formatQualityWarnings(batch, {

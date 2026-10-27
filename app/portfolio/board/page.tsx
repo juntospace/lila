@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import { Layers, UploadCloud } from "lucide-react";
 
 import { OperatorShell } from "@/components/patterns/OperatorShell";
@@ -7,6 +8,7 @@ import { loadBoardDataset } from "@/lib/portfolio/board";
 import { getPortfolioClient } from "@/lib/portfolio/client";
 
 import { BoardReportView } from "./board-view";
+import { BoardReportSkeleton } from "./components/BoardSkeleton";
 
 export const dynamic = "force-dynamic";
 
@@ -14,19 +16,18 @@ interface BoardPageProps {
   searchParams: Promise<{ entity?: string; date?: string }>;
 }
 
-export default async function PortfolioBoardPage({
-  searchParams,
-}: BoardPageProps) {
-  const session = await requireOperator();
-  const params = await searchParams;
-  const entityCode = params.entity || "crediclaro";
-  const targetDate = params.date;
-
+async function BoardReportContent({
+  entityCode,
+  targetDate,
+}: {
+  entityCode: string;
+  targetDate?: string;
+}) {
   const supabase = await getPortfolioClient();
   const dataset = await loadBoardDataset(supabase, entityCode, targetDate);
 
   return (
-    <OperatorShell session={session}>
+    <>
       <header className="mb-6 flex flex-wrap items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2.5">
@@ -88,6 +89,23 @@ export default async function PortfolioBoardPage({
           </div>
         </div>
       )}
+    </>
+  );
+}
+
+export default async function PortfolioBoardPage({
+  searchParams,
+}: BoardPageProps) {
+  const session = await requireOperator();
+  const params = await searchParams;
+  const entityCode = params.entity || "crediclaro";
+  const targetDate = params.date;
+
+  return (
+    <OperatorShell session={session}>
+      <Suspense fallback={<BoardReportSkeleton entityCode={entityCode} />}>
+        <BoardReportContent entityCode={entityCode} targetDate={targetDate} />
+      </Suspense>
     </OperatorShell>
   );
 }
