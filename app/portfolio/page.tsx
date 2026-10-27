@@ -35,9 +35,17 @@ export default async function PortfolioIndexPage() {
     .order("snapshot_date", { ascending: false });
 
   if (snapshotsError) {
-    console.error("Failed to fetch snapshots:", snapshotsError);
-    throw new Error(
-      `Error al consultar instantáneas de cartera: ${snapshotsError.message}`,
+    return (
+      <OperatorShell session={session}>
+        <div className="mx-auto my-12 max-w-3xl rounded-2xl border border-rose-500/30 bg-bg-surface p-8 text-left shadow-e2">
+          <h3 className="text-base font-semibold text-rose-400">
+            Error al consultar instantáneas de cartera
+          </h3>
+          <pre className="mt-4 max-h-96 overflow-auto rounded-lg bg-bg-raised p-4 font-mono text-xs text-rose-300 whitespace-pre-wrap break-all">
+            {JSON.stringify(snapshotsError, null, 2)}
+          </pre>
+        </div>
+      </OperatorShell>
     );
   }
 

@@ -28,12 +28,29 @@ async function CollectionsContent({
 }) {
   const supabase = await getPortfolioClient();
   let loaded = null;
+  let loadError: string | null = null;
   try {
     loaded = await loadCollectionsPlan(supabase, entityCode, targetDate);
   } catch (err) {
-    console.error("Failed to load Collections plan:", err);
-    throw new Error(
-      `Error al cargar el Plan de Cobranzas: ${err instanceof Error ? err.message : String(err)}`,
+    loadError =
+      err instanceof Error
+        ? `${err.name}: ${err.message}\n${err.stack ?? ""}`
+        : String(err);
+  }
+
+  if (loadError) {
+    return (
+      <div className="mx-auto my-12 max-w-3xl rounded-2xl border border-rose-500/30 bg-bg-surface p-8 text-left shadow-e2">
+        <h3 className="text-base font-semibold text-rose-400">
+          Error en el servidor al cargar Plan de Cobranzas
+        </h3>
+        <p className="mt-1 text-xs text-fg-muted">
+          Detalle técnico para diagnóstico:
+        </p>
+        <pre className="mt-4 max-h-96 overflow-auto rounded-lg bg-bg-raised p-4 font-mono text-xs text-rose-300 whitespace-pre-wrap break-all">
+          {loadError}
+        </pre>
+      </div>
     );
   }
 
