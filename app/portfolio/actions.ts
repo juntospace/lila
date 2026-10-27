@@ -6,7 +6,11 @@ import { revalidatePath } from "next/cache";
 import { requirePortfolioWriter } from "@/lib/auth/guard";
 import { getPortfolioClient } from "@/lib/portfolio/client";
 import { ingestSnapshot } from "@/lib/portfolio/ingest";
-import { extractDateFromName, parseCsv } from "@/lib/portfolio/parser";
+import {
+  extractDateFromName,
+  parseCsv,
+  parsePortfolioZip,
+} from "@/lib/portfolio/parser";
 
 function sha256Hex(text: string): string {
   return createHash("sha256").update(text).digest("hex");
@@ -38,38 +42,80 @@ export async function uploadPortfolioBackupAction(formData: FormData) {
   const entityCode = (formData.get("entityCode") as string) || "crediclaro";
   let snapshotDate = formData.get("snapshotDate") as string | null;
 
-  const loansFile = formData.get("loansFile") as File | null;
-  const repaymentsFile = formData.get("repaymentsFile") as File | null;
+  // Accept primary ZIP file ("file" or "zipFile"), or fallback to legacy separate CSVs ("loansFile")
+  const file = (formData.get("file") || formData.get("zipFile")) as File | null;
+  const legacyLoansFile = formData.get("loansFile") as File | null;
+  const legacyRepaymentsFile = formData.get("repaymentsFile") as File | null;
 
-  if (!loansFile || loansFile.size === 0) {
-    throw new Error("El archivo de préstamos (*loans*.csv) es requerido.");
+  const targetFile = file || legacyLoansFile;
+
+  if (!targetFile || targetFile.size === 0) {
+    throw new Error("Debes seleccionar un archivo ZIP de respaldo.");
   }
 
-  // Attempt to deduce date from filename if not explicitly provided
-  if (!snapshotDate) {
-    snapshotDate =
-      extractDateFromName(loansFile.name) ||
-      (repaymentsFile ? extractDateFromName(repaymentsFile.name) : null);
+  const isZip =
+    targetFile.name.toLowerCase().endsWith(".zip") ||
+    targetFile.type === "application/zip" ||
+    targetFile.type === "application/x-zip-compressed";
+
+  let loansRaw: Record<string, string>[];
+  let repaymentsRaw: Record<string, string>[] = [];
+  let hasRepaymentsFile = false;
+  let loansSha256: string;
+  let repaymentsSha256: string | null = null;
+  let sourceFiles: Record<string, unknown>;
+
+  if (isZip) {
+    const arrayBuffer = await targetFile.arrayBuffer();
+    const parsedZip = await parsePortfolioZip(arrayBuffer, targetFile.name);
+
+    if (!snapshotDate) {
+      snapshotDate = parsedZip.snapshotDate;
+    }
+
+    loansRaw = parsedZip.loansRaw;
+    repaymentsRaw = parsedZip.repaymentsRaw;
+    hasRepaymentsFile = parsedZip.hasRepaymentsFile;
+    loansSha256 = parsedZip.loansSha256;
+    repaymentsSha256 = parsedZip.repaymentsSha256;
+
+    sourceFiles = {
+      zipFile: targetFile.name,
+      loansFile: parsedZip.loansFileName,
+      repaymentsFile: parsedZip.repaymentsFileName,
+      borrowersFile: parsedZip.borrowersFileName,
+      hasRepaymentsFile: parsedZip.hasRepaymentsFile,
+    };
+  } else {
+    // Legacy separate CSV file handling
+    if (!snapshotDate) {
+      snapshotDate =
+        extractDateFromName(targetFile.name) ||
+        (legacyRepaymentsFile ? extractDateFromName(legacyRepaymentsFile.name) : null);
+    }
+
+    const loansText = await targetFile.text();
+    loansSha256 = sha256Hex(loansText);
+    loansRaw = parseCsv(loansText);
+
+    hasRepaymentsFile = Boolean(legacyRepaymentsFile && legacyRepaymentsFile.size > 0);
+    if (hasRepaymentsFile && legacyRepaymentsFile) {
+      const repaymentsText = await legacyRepaymentsFile.text();
+      repaymentsSha256 = sha256Hex(repaymentsText);
+      repaymentsRaw = parseCsv(repaymentsText);
+    }
+
+    sourceFiles = {
+      loansFile: targetFile.name,
+      repaymentsFile: hasRepaymentsFile ? legacyRepaymentsFile?.name : undefined,
+      hasRepaymentsFile,
+    };
   }
 
   if (!snapshotDate) {
     throw new Error(
-      "No se pudo detectar la fecha del lote (AAAA-MM-DD). Por favor especifícala manualmente.",
+      "No se pudo detectar la fecha del corte (AAAA-MM-DD). Por favor indícala en el campo Fecha de corte.",
     );
-  }
-
-  const loansText = await loansFile.text();
-  const loansSha256 = sha256Hex(loansText);
-  const loansRaw = parseCsv(loansText);
-
-  const hasRepaymentsFile = Boolean(repaymentsFile && repaymentsFile.size > 0);
-  let repaymentsRaw: Record<string, string>[] = [];
-  let repaymentsSha256: string | null = null;
-
-  if (hasRepaymentsFile && repaymentsFile) {
-    const repaymentsText = await repaymentsFile.text();
-    repaymentsSha256 = sha256Hex(repaymentsText);
-    repaymentsRaw = parseCsv(repaymentsText);
   }
 
   const result = await ingestSnapshot(supabase, {
@@ -82,11 +128,7 @@ export async function uploadPortfolioBackupAction(formData: FormData) {
     repaymentsSha256,
     rejectDuplicateSha: true,
     uploadedBy: session.userId,
-    sourceFiles: {
-      loansFile: loansFile.name,
-      repaymentsFile: hasRepaymentsFile ? repaymentsFile?.name : undefined,
-      hasRepaymentsFile,
-    },
+    sourceFiles,
   });
 
   revalidatePath("/portfolio");
