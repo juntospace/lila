@@ -27,7 +27,15 @@ async function CollectionsContent({
   targetDate?: string;
 }) {
   const supabase = await getPortfolioClient();
-  const loaded = await loadCollectionsPlan(supabase, entityCode, targetDate);
+  let loaded = null;
+  try {
+    loaded = await loadCollectionsPlan(supabase, entityCode, targetDate);
+  } catch (err) {
+    console.error("Failed to load Collections plan:", err);
+    throw new Error(
+      `Error al cargar el Plan de Cobranzas: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   if (!loaded) {
     return (
@@ -107,7 +115,7 @@ export default async function PortfolioCollectionsPage({
   searchParams,
 }: CollectionsPageProps) {
   const session = await requireOperator();
-  const params = await searchParams;
+  const params = (await searchParams) ?? {};
   const entityCode = params.entity || "crediclaro";
   const targetDate = params.date;
 

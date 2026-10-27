@@ -25,7 +25,15 @@ async function BoardReportContent({
   targetDate?: string;
 }) {
   const supabase = await getPortfolioClient();
-  const dataset = await loadBoardDataset(supabase, entityCode, targetDate);
+  let dataset = null;
+  try {
+    dataset = await loadBoardDataset(supabase, entityCode, targetDate);
+  } catch (err) {
+    console.error("Failed to load Board dataset:", err);
+    throw new Error(
+      `Error al cargar el Reporte de Junta: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   return (
     <>
@@ -98,7 +106,7 @@ export default async function PortfolioBoardPage({
   searchParams,
 }: BoardPageProps) {
   const session = await requireOperator();
-  const params = await searchParams;
+  const params = (await searchParams) ?? {};
   const entityCode = params.entity || "crediclaro";
   const targetDate = params.date;
 

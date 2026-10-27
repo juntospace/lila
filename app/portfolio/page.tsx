@@ -22,7 +22,7 @@ export default async function PortfolioIndexPage() {
   const session = await requireOperator();
   const supabase = await getPortfolioClient();
 
-  const { data: snapshotsData } = await supabase
+  const { data: snapshotsData, error: snapshotsError } = await supabase
     .from("portfolio_snapshots")
     .select(
       `
@@ -33,6 +33,13 @@ export default async function PortfolioIndexPage() {
     `,
     )
     .order("snapshot_date", { ascending: false });
+
+  if (snapshotsError) {
+    console.error("Failed to fetch snapshots:", snapshotsError);
+    throw new Error(
+      `Error al consultar instantáneas de cartera: ${snapshotsError.message}`,
+    );
+  }
 
   const snapshots = snapshotsData || [];
 
