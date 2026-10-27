@@ -16,6 +16,7 @@ import { deleteSnapshotAction } from "./actions";
 import { PortfolioUploadPanel } from "./upload-panel";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 export default async function PortfolioIndexPage() {
   const session = await requireOperator();

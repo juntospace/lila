@@ -58,33 +58,76 @@ export async function loadCollectionsPlan(
   const currentSnap = snapshots[0];
   const asOfDate = currentSnap.snapshot_date as string;
 
-  // 3. Load active CRO policy for asOfDate
-  const policy = await loadActivePolicy(supabase, asOfDate);
+  // 3-6. Concurrently fetch policy, prior snapshot, loans, last payment map, and audit batch
+  const [
+    policy,
+    priorSnapshotsRes,
+    dbLoans,
+    lastPaymentMapRes,
+    batchRow,
+  ] = await Promise.all([
+    loadActivePolicy(supabase, asOfDate),
+    supabase
+      .from("portfolio_snapshots")
+      .select("id, snapshot_date")
+      .eq("entity_id", entity.id)
+      .eq("status", "completed")
+      .lt("snapshot_date", asOfDate)
+      .order("snapshot_date", { ascending: false })
+      .limit(1),
+    fetchAll<Record<string, unknown>>(
+      (from, to) =>
+        supabase
+          .from("portfolio_loans")
+          .select(
+            "source_loan_id, loan_number, full_name, borrower_mobile, product, balance, dpd_loandisk, past_due, pending_due, status_raw, pg, tg, tc, gc, mr, last_payment_date, last_payment_amount",
+            { count: "exact" },
+          )
+          .eq("snapshot_id", currentSnap.id)
+          .order("id", { ascending: true })
+          .range(from, to),
+      1000,
+      6,
+    ),
+    // Fast RPC for last real payment date per loan (falls back to null if RPC not present)
+    supabase
+      .rpc("get_portfolio_last_payment_map", {
+        p_snapshot_id: currentSnap.id,
+      })
+      .then(
+        (res) => (res.data as Record<string, string> | null) ?? null,
+        () => null,
+      ),
+    supabase
+      .from("portfolio_ingest_batches")
+      .select("*")
+      .eq("snapshot_id", currentSnap.id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+      .then(
+        (res) => res.data,
+        () => null,
+      ),
+  ]);
 
-  // 4. Resolve previous snapshot (for "rolled a bucket" signal)
-  const { data: priorSnapshots } = await supabase
-    .from("portfolio_snapshots")
-    .select("id, snapshot_date")
-    .eq("entity_id", entity.id)
-    .eq("status", "completed")
-    .lt("snapshot_date", asOfDate)
-    .order("snapshot_date", { ascending: false })
-    .limit(1);
-
-  const prevSnap = priorSnapshots?.[0];
+  const prevSnap = priorSnapshotsRes.data?.[0];
   let prevBucketMap: Record<string, number> | null = null;
   if (prevSnap) {
     const prevLoans = await fetchAll<{
       source_loan_id: string;
       bucket_idx: number;
-    }>((from, to) =>
-      supabase
-        .from("portfolio_loans")
-        .select("source_loan_id, bucket_idx")
-        .eq("snapshot_id", prevSnap.id)
-        .eq("is_open", true)
-        .order("id", { ascending: true })
-        .range(from, to),
+    }>(
+      (from, to) =>
+        supabase
+          .from("portfolio_loans")
+          .select("source_loan_id, bucket_idx", { count: "exact" })
+          .eq("snapshot_id", prevSnap.id)
+          .eq("is_open", true)
+          .order("id", { ascending: true })
+          .range(from, to),
+      1000,
+      6,
     );
 
     prevBucketMap = {};
@@ -93,25 +136,9 @@ export async function loadCollectionsPlan(
     }
   }
 
-  // 5. Load all loans for current snapshot (paginated)
-  const dbLoans = await fetchAll<Record<string, unknown>>((from, to) =>
-    supabase
-      .from("portfolio_loans")
-      .select("*")
-      .eq("snapshot_id", currentSnap.id)
-      .order("id", { ascending: true })
-      .range(from, to),
-  );
-
   const enrichedLoans = dbLoans.map((l) => {
-    const rawObj =
-      typeof l.raw === "object" && l.raw !== null
-        ? (l.raw as Record<string, string>)
-        : {};
-
     return enrichLoan(
       {
-        ...rawObj,
         "Loan Id": String(l.source_loan_id ?? ""),
         "Loan #": String(l.loan_number ?? ""),
         "Full Name": String(l.full_name ?? ""),
@@ -134,20 +161,6 @@ export async function loadCollectionsPlan(
     );
   });
 
-  // 6. Load all real repayments for current snapshot (paginated)
-  const realReps = await fetchAll<{
-    source_loan_id: string;
-    collection_date: string;
-  }>((from, to) =>
-    supabase
-      .from("portfolio_loan_repayments")
-      .select("source_loan_id, collection_date")
-      .eq("snapshot_id", currentSnap.id)
-      .eq("is_real", true)
-      .order("id", { ascending: true })
-      .range(from, to),
-  );
-
   const sourceFiles =
     typeof currentSnap.source_files === "object" &&
     currentSnap.source_files !== null
@@ -161,10 +174,26 @@ export async function loadCollectionsPlan(
       ? true
       : typeof sourceFiles.hasRepaymentsFile === "boolean"
         ? sourceFiles.hasRepaymentsFile
-        : Boolean(sourceFiles.repaymentsFile) || realReps.length > 0;
+        : Boolean(sourceFiles.repaymentsFile) || Boolean(lastPaymentMapRes);
 
-  let lastRealPaymentMap: Record<string, string> | null = null;
-  if (hasRepaymentsFile) {
+  let lastRealPaymentMap: Record<string, string> | null = lastPaymentMapRes;
+  if (hasRepaymentsFile && !lastRealPaymentMap) {
+    // Fallback to table scan if RPC returned null
+    const realReps = await fetchAll<{
+      source_loan_id: string;
+      collection_date: string;
+    }>(
+      (from, to) =>
+        supabase
+          .from("portfolio_loan_repayments")
+          .select("source_loan_id, collection_date", { count: "exact" })
+          .eq("snapshot_id", currentSnap.id)
+          .eq("is_real", true)
+          .order("id", { ascending: true })
+          .range(from, to),
+      1000,
+      6,
+    );
     lastRealPaymentMap = {};
     for (const rep of realReps) {
       const cur = lastRealPaymentMap[rep.source_loan_id];
@@ -174,18 +203,9 @@ export async function loadCollectionsPlan(
     }
   }
 
-  // 7. Load latest ingest batch for quality warnings (Fase 4.3)
+  // 7. Quality warnings batch
   let batch: PortfolioIngestBatch | null = null;
-  try {
-    const { data: batchRow } = await supabase
-      .from("portfolio_ingest_batches")
-      .select("*")
-      .eq("snapshot_id", currentSnap.id)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (batchRow) {
+  if (batchRow) {
       batch = {
         id: batchRow.id,
         snapshotId: batchRow.snapshot_id,
@@ -212,9 +232,6 @@ export async function loadCollectionsPlan(
         createdAt: batchRow.created_at,
       };
     }
-  } catch {
-    // Non-fatal if table is not yet migrated in mock environment
-  }
 
   // 8. Compute plan
   const { plan, resumen } = buildCollectionsPlan({

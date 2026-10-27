@@ -11,6 +11,7 @@ import { BoardReportView } from "./board-view";
 import { BoardReportSkeleton } from "./components/BoardSkeleton";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 interface BoardPageProps {
   searchParams: Promise<{ entity?: string; date?: string }>;

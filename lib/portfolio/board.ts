@@ -616,7 +616,7 @@ export async function loadBoardDataset(
           .order("id", { ascending: true })
           .range(from, to),
       1000,
-      6,
+      10,
     ),
 
     // All historical snapshot open loans up to asof (paginated with concurrent chunks)
@@ -634,7 +634,7 @@ export async function loadBoardDataset(
           .order("id", { ascending: true })
           .range(from, to),
       1000,
-      6,
+      10,
     ),
 
     // Real repayments for current snapshot (paginated with concurrent chunks)
@@ -651,7 +651,7 @@ export async function loadBoardDataset(
           .order("id", { ascending: true })
           .range(from, to),
       1000,
-      6,
+      10,
     ),
 
     // Latest ingest batch for quality warnings (Fase 4.3)

@@ -12,6 +12,31 @@ export type Database = {
   __InternalSupabase: {
     PostgrestVersion: "14.17"
   }
+  graphql_public: {
+    Tables: {
+      [_ in never]: never
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      graphql: {
+        Args: {
+          extensions?: Json
+          operationName?: string
+          query?: string
+          variables?: Json
+        }
+        Returns: Json
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
+  }
   public: {
     Tables: {
       audit_events: {
@@ -168,6 +193,74 @@ export type Database = {
           updated_at?: string
         }
         Relationships: []
+      }
+      portfolio_ingest_batches: {
+        Row: {
+          admin_excluded_amount: number
+          admin_excluded_count: number
+          cash_ahead_count: number
+          created_at: string
+          future_payments_excluded: number
+          id: string
+          missing_custom_fields: string[]
+          missing_released_date_count: number
+          rows_loans: number
+          rows_repayments: number
+          sha256_loans: string
+          sha256_repayments: string | null
+          snapshot_id: string
+          sum_balance_ingested: number
+          sum_balance_source: number
+          unknown_methods: string[]
+          uploaded_by: string | null
+        }
+        Insert: {
+          admin_excluded_amount?: number
+          admin_excluded_count?: number
+          cash_ahead_count?: number
+          created_at?: string
+          future_payments_excluded?: number
+          id?: string
+          missing_custom_fields?: string[]
+          missing_released_date_count?: number
+          rows_loans?: number
+          rows_repayments?: number
+          sha256_loans: string
+          sha256_repayments?: string | null
+          snapshot_id: string
+          sum_balance_ingested?: number
+          sum_balance_source?: number
+          unknown_methods?: string[]
+          uploaded_by?: string | null
+        }
+        Update: {
+          admin_excluded_amount?: number
+          admin_excluded_count?: number
+          cash_ahead_count?: number
+          created_at?: string
+          future_payments_excluded?: number
+          id?: string
+          missing_custom_fields?: string[]
+          missing_released_date_count?: number
+          rows_loans?: number
+          rows_repayments?: number
+          sha256_loans?: string
+          sha256_repayments?: string | null
+          snapshot_id?: string
+          sum_balance_ingested?: number
+          sum_balance_source?: number
+          unknown_methods?: string[]
+          uploaded_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "portfolio_ingest_batches_snapshot_id_fkey"
+            columns: ["snapshot_id"]
+            isOneToOne: false
+            referencedRelation: "portfolio_snapshots"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       portfolio_loan_repayments: {
         Row: {
@@ -444,74 +537,6 @@ export type Database = {
           version?: string
         }
         Relationships: []
-      }
-      portfolio_ingest_batches: {
-        Row: {
-          admin_excluded_amount: number
-          admin_excluded_count: number
-          cash_ahead_count: number
-          created_at: string
-          future_payments_excluded: number
-          id: string
-          missing_custom_fields: string[]
-          missing_released_date_count: number
-          rows_loans: number
-          rows_repayments: number
-          sha256_loans: string
-          sha256_repayments: string | null
-          snapshot_id: string
-          sum_balance_ingested: number
-          sum_balance_source: number
-          unknown_methods: string[]
-          uploaded_by: string | null
-        }
-        Insert: {
-          admin_excluded_amount?: number
-          admin_excluded_count?: number
-          cash_ahead_count?: number
-          created_at?: string
-          future_payments_excluded?: number
-          id?: string
-          missing_custom_fields?: string[]
-          missing_released_date_count?: number
-          rows_loans?: number
-          rows_repayments?: number
-          sha256_loans: string
-          sha256_repayments?: string | null
-          snapshot_id: string
-          sum_balance_ingested?: number
-          sum_balance_source?: number
-          unknown_methods?: string[]
-          uploaded_by?: string | null
-        }
-        Update: {
-          admin_excluded_amount?: number
-          admin_excluded_count?: number
-          cash_ahead_count?: number
-          created_at?: string
-          future_payments_excluded?: number
-          id?: string
-          missing_custom_fields?: string[]
-          missing_released_date_count?: number
-          rows_loans?: number
-          rows_repayments?: number
-          sha256_loans?: string
-          sha256_repayments?: string | null
-          snapshot_id?: string
-          sum_balance_ingested?: number
-          sum_balance_source?: number
-          unknown_methods?: string[]
-          uploaded_by?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "portfolio_ingest_batches_snapshot_id_fkey"
-            columns: ["snapshot_id"]
-            isOneToOne: false
-            referencedRelation: "portfolio_snapshots"
-            referencedColumns: ["id"]
-          },
-        ]
       }
       portfolio_snapshots: {
         Row: {
@@ -1309,13 +1334,16 @@ export type Database = {
           integrity_ok: boolean | null
           method: Database["public"]["Enums"]["recon_uploads_method_enum"]
           original_filename: string | null
-          parsed_payload: unknown | null
+          parsed_payload: Json | null
           parser_version: number | null
           rows_duplicate: number
           rows_new: number
           rows_total: number
+          saldo_diferido_minor: number | null
+          saldo_disponible_minor: number | null
           saldo_final_minor: number | null
           saldo_inicial_minor: number | null
+          statement_downloaded_at: string | null
           status: Database["public"]["Enums"]["recon_uploads_status_enum"]
           storage_path: string | null
           updated_at: string
@@ -1333,13 +1361,16 @@ export type Database = {
           integrity_ok?: boolean | null
           method: Database["public"]["Enums"]["recon_uploads_method_enum"]
           original_filename?: string | null
-          parsed_payload?: unknown | null
+          parsed_payload?: Json | null
           parser_version?: number | null
           rows_duplicate?: number
           rows_new?: number
           rows_total?: number
+          saldo_diferido_minor?: number | null
+          saldo_disponible_minor?: number | null
           saldo_final_minor?: number | null
           saldo_inicial_minor?: number | null
+          statement_downloaded_at?: string | null
           status?: Database["public"]["Enums"]["recon_uploads_status_enum"]
           storage_path?: string | null
           updated_at?: string
@@ -1357,13 +1388,16 @@ export type Database = {
           integrity_ok?: boolean | null
           method?: Database["public"]["Enums"]["recon_uploads_method_enum"]
           original_filename?: string | null
-          parsed_payload?: unknown | null
+          parsed_payload?: Json | null
           parser_version?: number | null
           rows_duplicate?: number
           rows_new?: number
           rows_total?: number
+          saldo_diferido_minor?: number | null
+          saldo_disponible_minor?: number | null
           saldo_final_minor?: number | null
           saldo_inicial_minor?: number | null
+          statement_downloaded_at?: string | null
           status?: Database["public"]["Enums"]["recon_uploads_status_enum"]
           storage_path?: string | null
           updated_at?: string
@@ -1424,21 +1458,45 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      get_portfolio_last_payment_dates: {
+        Args: { p_snapshot_id: string }
+        Returns: {
+          last_collection_date: string
+          source_loan_id: string
+        }[]
+      }
+      get_portfolio_last_payment_map: {
+        Args: { p_snapshot_id: string }
+        Returns: Json
+      }
       is_active_operator: { Args: never; Returns: boolean }
       is_portfolio_admin: { Args: never; Returns: boolean }
       is_portfolio_writer: { Args: never; Returns: boolean }
       is_recon_writer: { Args: never; Returns: boolean }
       portfolio_replace_snapshot: {
         Args: {
+          p_batch?: Json
           p_entity_id: string
-          p_snapshot_date: string
-          p_snapshot: Json
           p_loans: Json
           p_repayments: Json
-          p_batch?: Json
+          p_snapshot: Json
+          p_snapshot_date: string
         }
         Returns: string
       }
+      recon_bulk_update_states: {
+        Args: {
+          p_state: Database["public"]["Enums"]["recon_transactions_state_enum"]
+          p_txn_ids: string[]
+        }
+        Returns: number
+      }
+      recon_wipe_auto_links:
+        | { Args: { p_account_id: string }; Returns: number }
+        | {
+            Args: { p_account_id: string; p_since_date?: string }
+            Returns: number
+          }
     }
     Enums: {
       bank_accounts_rail_enum: "bac" | "bg"
@@ -1613,6 +1671,9 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
+  graphql_public: {
+    Enums: {},
+  },
   public: {
     Enums: {
       bank_accounts_rail_enum: ["bac", "bg"],

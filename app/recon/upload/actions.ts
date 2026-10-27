@@ -349,7 +349,7 @@ export async function uploadStatement(
           date_range_start: startDate,
           date_range_end: endDate,
           status: "committed",
-          parsed_payload: serializeBgParsedFile(parsed),
+          parsed_payload: serializeBgParsedFile(parsed) as never,
           parser_version: BG_PARSER_VERSION,
         });
       }
