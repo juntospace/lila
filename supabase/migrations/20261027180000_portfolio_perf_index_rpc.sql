@@ -21,3 +21,4 @@ AS $$
     GROUP BY source_loan_id
   ) agg;
 $$;
+

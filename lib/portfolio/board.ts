@@ -582,13 +582,54 @@ export async function loadBoardDataset(
   const currentSnap = latestSnapshots[0];
   const asof = currentSnap.snapshot_date as string;
 
-  // 3-8. Fetch all required datasets concurrently to avoid request waterfalls
+  // Fast path: if snapshot has precomputed dataset cached, return it directly (< 50ms)
+  if (
+    currentSnap.cached_dataset &&
+    typeof currentSnap.cached_dataset === "object" &&
+    Array.isArray(
+      (currentSnap.cached_dataset as unknown as BoardDataset).loanIds,
+    )
+  ) {
+    return currentSnap.cached_dataset as unknown as BoardDataset;
+  }
+
+  const asofDateObj = new Date(asof + "T00:00:00Z");
+  const dailyStartDateObj = new Date(asofDateObj);
+  dailyStartDateObj.setUTCDate(dailyStartDateObj.getUTCDate() - 400);
+  const dailyStart = dailyStartDateObj.toISOString().slice(0, 10);
+
+  // Try RPC summary first to avoid 37,000+ row transfer and statement timeout on Supabase Nano
+  let summaryData: {
+    monthly: [string, string, number, number][];
+    daily: [string, string, number, number][];
+  } | null = null;
+
+  try {
+    const { data: rpcRes, error: rpcErr } = await supabase.rpc(
+      "get_board_repayments_summary",
+      {
+        p_snapshot_id: currentSnap.id,
+        p_asof: asof,
+        p_daily_start: dailyStart,
+      },
+    );
+    if (!rpcErr && rpcRes && Array.isArray((rpcRes as { monthly?: unknown }).monthly)) {
+      summaryData = rpcRes as {
+        monthly: [string, string, number, number][];
+        daily: [string, string, number, number][];
+      };
+    }
+  } catch {
+    summaryData = null;
+  }
+
+  // Fetch all required datasets with bounded concurrency to avoid exhausting pool
   const [
     policy,
     allSnapshotsRes,
     loansData,
     histLoans,
-    repayments,
+    fallbackRepayments,
     batchRow,
   ] = await Promise.all([
     // Active CRO policy for asof (Fase 4.1)
@@ -603,7 +644,7 @@ export async function loadBoardDataset(
       .lte("snapshot_date", asof)
       .order("snapshot_date", { ascending: true }),
 
-    // All loans for current snapshot (paginated with concurrent chunks & specific columns)
+    // All loans for current snapshot (bounded concurrency 2 for Supabase Nano)
     fetchAll<BoardLoanInput>(
       (from, to) =>
         supabase
@@ -616,10 +657,10 @@ export async function loadBoardDataset(
           .order("id", { ascending: true })
           .range(from, to),
       1000,
-      10,
+      2,
     ),
 
-    // All historical snapshot open loans up to asof (paginated with concurrent chunks)
+    // All historical snapshot open loans up to asof (bounded concurrency 2)
     fetchAll<BoardHistLoanInput>(
       (from, to) =>
         supabase
@@ -634,25 +675,27 @@ export async function loadBoardDataset(
           .order("id", { ascending: true })
           .range(from, to),
       1000,
-      10,
+      2,
     ),
 
-    // Real repayments for current snapshot (paginated with concurrent chunks)
-    fetchAll<BoardRepaymentInput>(
-      (from, to) =>
-        supabase
-          .from("portfolio_loan_repayments")
-          .select(
-            "source_loan_id, collection_date, principal_amount, ingresos_amount, is_real",
-            { count: "exact" },
-          )
-          .eq("snapshot_id", currentSnap.id)
-          .eq("is_real", true)
-          .order("id", { ascending: true })
-          .range(from, to),
-      1000,
-      10,
-    ),
+    // Fallback real repayments (only if summary RPC was not available)
+    summaryData
+      ? Promise.resolve([] as BoardRepaymentInput[])
+      : fetchAll<BoardRepaymentInput>(
+          (from, to) =>
+            supabase
+              .from("portfolio_loan_repayments")
+              .select(
+                "source_loan_id, collection_date, principal_amount, ingresos_amount, is_real",
+                { count: "exact" },
+              )
+              .eq("snapshot_id", currentSnap.id)
+              .eq("is_real", true)
+              .order("id", { ascending: true })
+              .range(from, to),
+          1000,
+          2,
+        ),
 
     // Latest ingest batch for quality warnings (Fase 4.3)
     supabase
@@ -708,14 +751,73 @@ export async function loadBoardDataset(
     cashAheadCount: Number(currentSnap.cash_ahead_count || 0),
   });
 
-  return assembleBoardDataset({
+  const repaymentsInput: BoardRepaymentInput[] = [];
+  if (summaryData?.monthly) {
+    for (const [loanId, month, prin, inc] of summaryData.monthly) {
+      repaymentsInput.push({
+        source_loan_id: loanId,
+        collection_date: `${month}-01`,
+        principal_amount: prin,
+        ingresos_amount: inc,
+        is_real: true,
+      });
+    }
+  } else {
+    repaymentsInput.push(...fallbackRepayments);
+  }
+
+  const dataset = assembleBoardDataset({
     asof,
     snapshotDates,
     loansData,
     histLoans,
-    repayments,
+    repayments: repaymentsInput,
     policy,
     batch,
     warnings,
   });
+
+  if (summaryData?.daily) {
+    const loanPos = new Map<string, number>();
+    dataset.loanIds.forEach((id, idx) => loanPos.set(id, idx));
+
+    const dailyGroup = new Map<
+      string,
+      Map<number, { prin: number; inc: number }>
+    >();
+    for (const [loanId, cdate, prin, inc] of summaryData.daily) {
+      const pos = loanPos.get(loanId);
+      if (pos === undefined) continue;
+      if (!dailyGroup.has(cdate)) dailyGroup.set(cdate, new Map());
+      const dLoans = dailyGroup.get(cdate)!;
+      const cur = dLoans.get(pos) || { prin: 0, inc: 0 };
+      dLoans.set(pos, { prin: cur.prin + prin, inc: cur.inc + inc });
+    }
+
+    const payD: Record<string, [number, number, number][]> = {};
+    for (const [day, lmap] of Array.from(dailyGroup.entries()).sort((a, b) =>
+      a[0].localeCompare(b[0]),
+    )) {
+      payD[day] = Array.from(lmap.entries())
+        .sort((a, b) => a[0] - b[0])
+        .map(([pos, v]) => [
+          pos,
+          Math.round(v.prin * 100) / 100,
+          Math.round(v.inc * 100) / 100,
+        ]);
+    }
+    dataset.payD = payD;
+  }
+
+  // Persist computed dataset to cache for subsequent instant loads (< 50ms)
+  supabase
+    .from("portfolio_snapshots")
+    .update({ cached_dataset: dataset })
+    .eq("id", currentSnap.id)
+    .then(
+      () => {},
+      (err) => console.error("Failed to persist cached_dataset:", err),
+    );
+
+  return dataset;
 }

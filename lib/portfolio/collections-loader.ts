@@ -87,7 +87,7 @@ export async function loadCollectionsPlan(
           .order("id", { ascending: true })
           .range(from, to),
       1000,
-      6,
+      3,
     ),
     // Fast RPC for last real payment date per loan (falls back to null if RPC not present)
     supabase
@@ -127,7 +127,7 @@ export async function loadCollectionsPlan(
           .order("id", { ascending: true })
           .range(from, to),
       1000,
-      6,
+      3,
     );
 
     prevBucketMap = {};
