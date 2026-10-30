@@ -46,3 +46,4 @@ SELECT jsonb_build_object(
   'daily', COALESCE((SELECT jsonb_agg(jsonb_build_array(source_loan_id, cdate, prin, inc)) FROM daily), '[]'::jsonb)
 );
 $$;
+

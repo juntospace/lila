@@ -38,10 +38,12 @@ export async function loadCollectionsPlan(
     return null;
   }
 
-  // 2. Resolve target snapshot (completed only)
+  // 2. Resolve target snapshot (completed only, excluding heavy cached_dataset)
   let snapQuery = supabase
     .from("portfolio_snapshots")
-    .select("*")
+    .select(
+      "id, entity_id, snapshot_date, as_of_date, policy_id, total_open_balance, total_open_loans, cer30_balance, cer30_percentage, cer90_balance, cer90_percentage, total_collected_handover, cash_ahead_count, future_payments_excluded_count, has_repayments, source_files, status, created_at, updated_at",
+    )
     .eq("entity_id", entity.id)
     .eq("status", "completed")
     .order("snapshot_date", { ascending: false });
@@ -57,6 +59,19 @@ export async function loadCollectionsPlan(
 
   const currentSnap = snapshots[0];
   const asOfDate = currentSnap.snapshot_date as string;
+
+  const sourceFiles =
+    typeof currentSnap.source_files === "object" &&
+    currentSnap.source_files !== null
+      ? (currentSnap.source_files as Record<string, unknown>)
+      : {};
+
+  const precomputedPaymentMap =
+    sourceFiles.lastRealPaymentMap &&
+    typeof sourceFiles.lastRealPaymentMap === "object" &&
+    !Array.isArray(sourceFiles.lastRealPaymentMap)
+      ? (sourceFiles.lastRealPaymentMap as Record<string, string>)
+      : null;
 
   // 3-6. Concurrently fetch policy, prior snapshot, loans, last payment map, and audit batch
   const [
@@ -81,7 +96,7 @@ export async function loadCollectionsPlan(
           .from("portfolio_loans")
           .select(
             "source_loan_id, loan_number, full_name, borrower_mobile, product, balance, dpd_loandisk, past_due, pending_due, status_raw, pg, tg, tc, gc, mr, last_payment_date, last_payment_amount",
-            { count: "exact" },
+            { count: from === 0 ? "exact" : undefined },
           )
           .eq("snapshot_id", currentSnap.id)
           .order("id", { ascending: true })
@@ -89,15 +104,17 @@ export async function loadCollectionsPlan(
       1000,
       3,
     ),
-    // Fast RPC for last real payment date per loan (falls back to null if RPC not present)
-    supabase
-      .rpc("get_portfolio_last_payment_map", {
-        p_snapshot_id: currentSnap.id,
-      })
-      .then(
-        (res) => (res.data as Record<string, string> | null) ?? null,
-        () => null,
-      ),
+    // Fast precomputed map or RPC for last real payment date per loan
+    precomputedPaymentMap
+      ? Promise.resolve(precomputedPaymentMap)
+      : supabase
+          .rpc("get_portfolio_last_payment_map", {
+            p_snapshot_id: currentSnap.id,
+          })
+          .then(
+            (res) => (res.data as Record<string, string> | null) ?? null,
+            () => null,
+          ),
     supabase
       .from("portfolio_ingest_batches")
       .select("*")
@@ -121,7 +138,9 @@ export async function loadCollectionsPlan(
       (from, to) =>
         supabase
           .from("portfolio_loans")
-          .select("source_loan_id, bucket_idx", { count: "exact" })
+          .select("source_loan_id, bucket_idx", {
+            count: from === 0 ? "exact" : undefined,
+          })
           .eq("snapshot_id", prevSnap.id)
           .eq("is_open", true)
           .order("id", { ascending: true })
@@ -160,12 +179,6 @@ export async function loadCollectionsPlan(
       policy,
     );
   });
-
-  const sourceFiles =
-    typeof currentSnap.source_files === "object" &&
-    currentSnap.source_files !== null
-      ? (currentSnap.source_files as Record<string, unknown>)
-      : {};
 
   // Explicit hasRepaymentsFile detection (Fase 2.1)
   const hasRepaymentsFile =

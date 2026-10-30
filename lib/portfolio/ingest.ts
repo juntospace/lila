@@ -27,6 +27,8 @@ export interface IngestOptions {
   uploadedBy?: string | null;
   policy?: PortfolioPolicy;
   sourceFiles?: Record<string, unknown>;
+  includeRawJson?: boolean;
+  skipRepaymentsInsert?: boolean;
 }
 
 export interface IngestResult {
@@ -67,6 +69,8 @@ export async function ingestSnapshot(
     sourceFiles = {},
     rejectDuplicateSha = false,
     uploadedBy = null,
+    includeRawJson = true,
+    skipRepaymentsInsert = false,
   } = options;
 
   const hasRepaymentsFile =
@@ -217,6 +221,7 @@ export async function ingestSnapshot(
   let adminExcludedCount = 0;
   let adminExcludedAmount = 0;
   const unknownMethodsSet = new Set<string>();
+  const lastRealPaymentMap: Record<string, string> = {};
 
   for (const rep of enrichedRepayments) {
     if (rep.isAdmin) {
@@ -225,6 +230,12 @@ export async function ingestSnapshot(
     }
     if (rep.isUnknownMethod && rep.methodRaw) {
       unknownMethodsSet.add(rep.methodRaw);
+    }
+    if (rep.isReal && rep.loanId && rep.collectionDate) {
+      const prevLast = lastRealPaymentMap[rep.loanId];
+      if (!prevLast || rep.collectionDate > prevLast) {
+        lastRealPaymentMap[rep.loanId] = rep.collectionDate;
+      }
     }
     if (
       rep.isReal &&
@@ -243,6 +254,7 @@ export async function ingestSnapshot(
   const enrichedSourceFiles = {
     ...sourceFiles,
     hasRepaymentsFile,
+    ...(hasRepaymentsFile ? { lastRealPaymentMap } : {}),
   };
 
   const batchMeta: PortfolioIngestBatch = {
@@ -295,25 +307,27 @@ export async function ingestSnapshot(
     gc: l.gc,
     mr: l.mr,
     combo_key: l.comboKey,
-    raw: l.raw,
+    raw: includeRawJson ? l.raw : {},
   }));
 
-  const repaymentsPayload = enrichedRepayments.map((r) => ({
-    source_repayment_id: r.repaymentId,
-    source_loan_id: r.loanId,
-    collection_date: r.collectionDate,
-    principal_amount: r.principalAmount,
-    interest_amount: r.interestAmount,
-    penalty_amount: r.penaltyAmount,
-    fees_amount: r.feesAmount,
-    total_amount: r.totalAmount,
-    ingresos_amount: r.ingresosAmount,
-    method_raw: r.methodRaw,
-    is_real: r.isReal,
-    is_admin: r.isAdmin,
-    is_unknown_method: r.isUnknownMethod,
-    raw: r.raw,
-  }));
+  const repaymentsPayload = skipRepaymentsInsert
+    ? []
+    : enrichedRepayments.map((r) => ({
+        source_repayment_id: r.repaymentId,
+        source_loan_id: r.loanId,
+        collection_date: r.collectionDate,
+        principal_amount: r.principalAmount,
+        interest_amount: r.interestAmount,
+        penalty_amount: r.penaltyAmount,
+        fees_amount: r.feesAmount,
+        total_amount: r.totalAmount,
+        ingresos_amount: r.ingresosAmount,
+        method_raw: r.methodRaw,
+        is_real: r.isReal,
+        is_admin: r.isAdmin,
+        is_unknown_method: r.isUnknownMethod,
+        raw: includeRawJson ? r.raw : {},
+      }));
 
   const snapshotPayload = {
     as_of_date: snapshotDate,
@@ -400,6 +414,7 @@ export async function ingestSnapshot(
           total_collected_handover: totalCollectedHandover,
           cash_ahead_count: cashAheadCount,
           future_payments_excluded_count: futureExcludedCount,
+          has_repayments: hasRepaymentsFile,
           source_files: enrichedSourceFiles,
           status: "loading",
           updated_at: new Date().toISOString(),

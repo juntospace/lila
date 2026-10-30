@@ -26,7 +26,24 @@ export default async function PortfolioIndexPage() {
     .from("portfolio_snapshots")
     .select(
       `
-      *,
+      id,
+      entity_id,
+      snapshot_date,
+      as_of_date,
+      policy_id,
+      total_open_balance,
+      total_open_loans,
+      cer30_balance,
+      cer30_percentage,
+      cer90_balance,
+      cer90_percentage,
+      total_collected_handover,
+      cash_ahead_count,
+      future_payments_excluded_count,
+      has_repayments,
+      status,
+      created_at,
+      updated_at,
       portfolio_entities (code, display_name),
       portfolio_policy (version),
       portfolio_ingest_batches (*)

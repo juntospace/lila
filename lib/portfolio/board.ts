@@ -598,30 +598,71 @@ export async function loadBoardDataset(
   dailyStartDateObj.setUTCDate(dailyStartDateObj.getUTCDate() - 400);
   const dailyStart = dailyStartDateObj.toISOString().slice(0, 10);
 
-  // Try RPC summary first to avoid 37,000+ row transfer and statement timeout on Supabase Nano
-  let summaryData: {
+  // Try RPC summaries first to avoid 37,000+ repayments & 96,000+ historical loans pagination on Supabase Nano
+  type RepaymentsSummaryRpc = {
     monthly: [string, string, number, number][];
     daily: [string, string, number, number][];
-  } | null = null;
+  };
 
-  try {
-    const { data: rpcRes, error: rpcErr } = await supabase.rpc(
-      "get_board_repayments_summary",
-      {
-        p_snapshot_id: currentSnap.id,
-        p_asof: asof,
-        p_daily_start: dailyStart,
-      },
-    );
-    if (!rpcErr && rpcRes && Array.isArray((rpcRes as { monthly?: unknown }).monthly)) {
-      summaryData = rpcRes as {
-        monthly: [string, string, number, number][];
-        daily: [string, string, number, number][];
-      };
-    }
-  } catch {
-    summaryData = null;
-  }
+  const [summaryData, rpcHistLoans] = await Promise.all([
+    (async (): Promise<RepaymentsSummaryRpc | null> => {
+      try {
+        const { data: rpcRes, error: rpcErr } = await supabase.rpc(
+          "get_board_repayments_summary",
+          {
+            p_snapshot_id: currentSnap.id,
+            p_asof: asof,
+            p_daily_start: dailyStart,
+          },
+        );
+        if (
+          !rpcErr &&
+          rpcRes &&
+          Array.isArray((rpcRes as { monthly?: unknown }).monthly)
+        ) {
+          return rpcRes as RepaymentsSummaryRpc;
+        }
+      } catch {
+        // ignore and fallback
+      }
+      return null;
+    })(),
+    (async (): Promise<BoardHistLoanInput[] | null> => {
+      try {
+        const { data: histRes, error: histErr } = await supabase.rpc(
+          "get_board_historical_loans",
+          {
+            p_entity_id: entityId,
+            p_asof: asof,
+          },
+        );
+        if (!histErr && Array.isArray(histRes)) {
+          return (
+            histRes as [string, string, number, number, number, number][]
+          ).map(
+            ([
+              snapshot_date,
+              source_loan_id,
+              segIdx,
+              bucket_idx,
+              balance,
+              dpd,
+            ]) => ({
+              snapshot_date,
+              source_loan_id,
+              segment: SEGMENTS[segIdx] ?? "Personal sin Garantía",
+              bucket_idx: Number(bucket_idx || 0),
+              balance: Number(balance || 0),
+              dpd: Number(dpd || 0),
+            }),
+          );
+        }
+      } catch {
+        // ignore and fallback
+      }
+      return null;
+    })(),
+  ]);
 
   // Fetch all required datasets with bounded concurrency to avoid exhausting pool
   const [
@@ -651,7 +692,7 @@ export async function loadBoardDataset(
           .from("portfolio_loans")
           .select(
             "source_loan_id, loan_number, full_name, product, segment, segment_idx, balance, dpd, bucket_idx, released_date, is_open, pending_due, total_due_amount, installments_count, cycle_type, tg, tc, gc, mr",
-            { count: "exact" },
+            { count: from === 0 ? "exact" : undefined },
           )
           .eq("snapshot_id", currentSnap.id)
           .order("id", { ascending: true })
@@ -660,23 +701,26 @@ export async function loadBoardDataset(
       2,
     ),
 
-    // All historical snapshot open loans up to asof (bounded concurrency 2)
-    fetchAll<BoardHistLoanInput>(
-      (from, to) =>
-        supabase
-          .from("portfolio_loans")
-          .select(
-            "snapshot_date, source_loan_id, segment, bucket_idx, balance, dpd",
-            { count: "exact" },
-          )
-          .eq("entity_id", entityId)
-          .eq("is_open", true)
-          .lte("snapshot_date", asof)
-          .order("id", { ascending: true })
-          .range(from, to),
-      1000,
-      2,
-    ),
+    // All historical snapshot open loans up to asof (via single RPC or fallback fetchAll)
+    rpcHistLoans
+      ? Promise.resolve(rpcHistLoans)
+      : fetchAll<BoardHistLoanInput>(
+          (from, to) =>
+            supabase
+              .from("portfolio_loans")
+              .select(
+                "snapshot_date, source_loan_id, segment, bucket_idx, balance, dpd",
+                { count: from === 0 ? "exact" : undefined },
+              )
+              .eq("entity_id", entityId)
+              .eq("is_open", true)
+              .lte("snapshot_date", asof)
+              .order("snapshot_date", { ascending: true })
+              .order("source_loan_id", { ascending: true })
+              .range(from, to),
+          1000,
+          2,
+        ),
 
     // Fallback real repayments (only if summary RPC was not available)
     summaryData
@@ -687,7 +731,7 @@ export async function loadBoardDataset(
               .from("portfolio_loan_repayments")
               .select(
                 "source_loan_id, collection_date, principal_amount, ingresos_amount, is_real",
-                { count: "exact" },
+                { count: from === 0 ? "exact" : undefined },
               )
               .eq("snapshot_id", currentSnap.id)
               .eq("is_real", true)
