@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { revalidatePath } from "next/cache";
 
 import { requirePortfolioWriter } from "@/lib/auth/guard";
+import { loadBoardDataset } from "@/lib/portfolio/board";
 import { getPortfolioClient } from "@/lib/portfolio/client";
 import { ingestSnapshot } from "@/lib/portfolio/ingest";
 import {
@@ -129,7 +130,15 @@ export async function uploadPortfolioBackupAction(formData: FormData) {
     rejectDuplicateSha: true,
     uploadedBy: session.userId,
     sourceFiles,
+    includeRawJson: false,
   });
+
+  // Pre-warm Board Report cached_dataset
+  try {
+    await loadBoardDataset(supabase, entityCode, snapshotDate);
+  } catch (cacheErr) {
+    console.warn("No se pudo pre-calcular la caché del reporte:", cacheErr);
+  }
 
   revalidatePath("/portfolio");
   revalidatePath("/portfolio/board");

@@ -64,6 +64,9 @@ export interface BoardDataset {
   };
   payM: Record<string, [number, number, number][]>; // month -> [[loanPos, prin, inc], ...]
   payD: Record<string, [number, number, number][]>; // day -> [[loanPos, prin, inc], ...]
+  provM?: Record<string, [number, number][]>; // month -> [[loanPos, amount], ...]
+  provD?: Record<string, [number, number][]>; // day -> [[loanPos, amount], ...]
+  totalProvisionHandover?: number;
   delinq: { date: string; ci: number; d30: number; d90: number; tot: number }[];
   loanIds: string[];
   products: string[];
@@ -110,6 +113,7 @@ export interface BoardRepaymentInput {
   principal_amount: number;
   ingresos_amount: number;
   is_real: boolean;
+  is_provision?: boolean;
 }
 
 export function formatQualityWarnings(
@@ -123,6 +127,8 @@ export function formatQualityWarnings(
   const futureExcl =
     batch?.futurePaymentsExcluded ?? fallback?.futurePaymentsExcludedCount ?? 0;
   const cashAhead = batch?.cashAheadCount ?? fallback?.cashAheadCount ?? 0;
+  const provCount = batch?.provisionCount ?? 0;
+  const provAmt = batch?.provisionAmount ?? 0;
   const adminCount = batch?.adminExcludedCount ?? 0;
   const adminAmt = batch?.adminExcludedAmount ?? 0;
   const unknownMethods = batch?.unknownMethods ?? [];
@@ -135,6 +141,11 @@ export function formatQualityWarnings(
   if (cashAhead > 0) {
     warnings.push(
       `${cashAhead} préstamo(s) reclasificado(s) a "Al día" por ajuste de caja (sin monto vencido en LoanDisk).`,
+    );
+  }
+  if (provCount > 0) {
+    warnings.push(
+      `${provCount} traspaso(s) a provisión por $${Math.round(provAmt).toLocaleString("en-US")} se separaron del libro y se miden en «Enviado a provisión».`,
     );
   }
   if (adminCount > 0) {
@@ -354,6 +365,8 @@ export function assembleBoardDataset(params: {
   // Fase 2.2: Filter repayments so only loans present in the current snapshot (loansMap) are included
   const payM: Record<string, [number, number, number][]> = {};
   const payD: Record<string, [number, number, number][]> = {};
+  const provM: Record<string, [number, number][]> = {};
+  const provD: Record<string, [number, number][]> = {};
 
   const monthlyGroup = new Map<
     string,
@@ -364,8 +377,10 @@ export function assembleBoardDataset(params: {
     Map<number, { prin: number; inc: number }>
   >();
 
+  const monthlyProvGroup = new Map<string, Map<number, number>>();
+  const dailyProvGroup = new Map<string, Map<number, number>>();
+
   for (const rep of repayments) {
-    if (!rep.is_real) continue;
     if (!loansMap.has(rep.source_loan_id)) continue;
     const pos = loanPos.get(rep.source_loan_id);
     if (pos === undefined) continue;
@@ -373,6 +388,24 @@ export function assembleBoardDataset(params: {
     const cdate = rep.collection_date;
     if (!cdate || cdate > asof) continue;
     const month = cdate.slice(0, 7);
+
+    if (rep.is_provision) {
+      const amt = Number(rep.principal_amount) + Number(rep.ingresos_amount);
+      if (amt > 0) {
+        if (!monthlyProvGroup.has(month)) monthlyProvGroup.set(month, new Map());
+        const mLoans = monthlyProvGroup.get(month)!;
+        mLoans.set(pos, (mLoans.get(pos) || 0) + amt);
+
+        if (cdate >= dailyStart) {
+          if (!dailyProvGroup.has(cdate)) dailyProvGroup.set(cdate, new Map());
+          const dLoans = dailyProvGroup.get(cdate)!;
+          dLoans.set(pos, (dLoans.get(pos) || 0) + amt);
+        }
+      }
+      continue;
+    }
+
+    if (!rep.is_real) continue;
     const prin = Number(rep.principal_amount);
     const inc = Number(rep.ingresos_amount);
 
@@ -413,6 +446,22 @@ export function assembleBoardDataset(params: {
         Math.round(v.prin * 100) / 100,
         Math.round(v.inc * 100) / 100,
       ]);
+  }
+
+  for (const [month, lmap] of Array.from(monthlyProvGroup.entries()).sort((a, b) =>
+    a[0].localeCompare(b[0]),
+  )) {
+    provM[month] = Array.from(lmap.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([pos, v]) => [pos, Math.round(v * 100) / 100]);
+  }
+
+  for (const [day, lmap] of Array.from(dailyProvGroup.entries()).sort((a, b) =>
+    a[0].localeCompare(b[0]),
+  )) {
+    provD[day] = Array.from(lmap.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([pos, v]) => [pos, Math.round(v * 100) / 100]);
   }
 
   const allMonths = Object.keys(payM).sort();
@@ -468,6 +517,8 @@ export function assembleBoardDataset(params: {
     filtVals,
     payM,
     payD,
+    provM,
+    provD,
     delinq,
     loanIds,
     products,
@@ -536,6 +587,7 @@ export function buildBoardDatasetFromEnriched(params: {
     principal_amount: r.principalAmount,
     ingresos_amount: r.ingresosAmount,
     is_real: r.isReal,
+    is_provision: r.isProvision,
   }));
 
   return assembleBoardDataset({
@@ -582,13 +634,14 @@ export async function loadBoardDataset(
   const currentSnap = latestSnapshots[0];
   const asof = currentSnap.snapshot_date as string;
 
-  // Fast path: if snapshot has precomputed dataset cached, return it directly (< 50ms)
+  // Fast path: if snapshot has precomputed dataset cached (with v6 provM structure), return it directly (< 50ms)
   if (
     currentSnap.cached_dataset &&
     typeof currentSnap.cached_dataset === "object" &&
     Array.isArray(
       (currentSnap.cached_dataset as unknown as BoardDataset).loanIds,
-    )
+    ) &&
+    (currentSnap.cached_dataset as unknown as BoardDataset).provM !== undefined
   ) {
     return currentSnap.cached_dataset as unknown as BoardDataset;
   }
@@ -602,6 +655,8 @@ export async function loadBoardDataset(
   type RepaymentsSummaryRpc = {
     monthly: [string, string, number, number][];
     daily: [string, string, number, number][];
+    prov_monthly?: [string, string, number][];
+    prov_daily?: [string, string, number][];
   };
 
   const [summaryData, rpcHistLoans] = await Promise.all([
@@ -730,13 +785,30 @@ export async function loadBoardDataset(
             supabase
               .from("portfolio_loan_repayments")
               .select(
-                "source_loan_id, collection_date, principal_amount, ingresos_amount, is_real",
+                "source_loan_id, collection_date, principal_amount, ingresos_amount, is_real, is_admin, method_raw",
                 { count: from === 0 ? "exact" : undefined },
               )
               .eq("snapshot_id", currentSnap.id)
-              .eq("is_real", true)
               .order("id", { ascending: true })
-              .range(from, to),
+              .range(from, to)
+              .then((res) => {
+                if (!res.data) return res;
+                return {
+                  ...res,
+                  data: res.data.map((r: any) => {
+                    const norm = (r.method_raw || "").trim().toLowerCase();
+                    const isProv = norm === "provision" || norm === "traspaso a provision";
+                    return {
+                      source_loan_id: r.source_loan_id,
+                      collection_date: r.collection_date,
+                      principal_amount: r.principal_amount,
+                      ingresos_amount: r.ingresos_amount,
+                      is_real: isProv ? false : r.is_real,
+                      is_provision: isProv,
+                    };
+                  }),
+                };
+              }),
           1000,
           2,
         ),
@@ -772,6 +844,8 @@ export async function loadBoardDataset(
       sumBalanceIngested: Number(batchRow.sum_balance_ingested || 0),
       futurePaymentsExcluded: Number(batchRow.future_payments_excluded || 0),
       cashAheadCount: Number(batchRow.cash_ahead_count || 0),
+      provisionCount: Number(batchRow.provision_count || 0),
+      provisionAmount: Number(batchRow.provision_amount || 0),
       adminExcludedCount: Number(batchRow.admin_excluded_count || 0),
       adminExcludedAmount: Number(batchRow.admin_excluded_amount || 0),
       unknownMethods: Array.isArray(batchRow.unknown_methods)
@@ -805,6 +879,18 @@ export async function loadBoardDataset(
         ingresos_amount: inc,
         is_real: true,
       });
+    }
+    if (Array.isArray(summaryData.prov_monthly)) {
+      for (const [loanId, month, amt] of summaryData.prov_monthly) {
+        repaymentsInput.push({
+          source_loan_id: loanId,
+          collection_date: `${month}-01`,
+          principal_amount: amt,
+          ingresos_amount: 0,
+          is_real: false,
+          is_provision: true,
+        });
+      }
     }
   } else {
     repaymentsInput.push(...fallbackRepayments);
@@ -851,10 +937,31 @@ export async function loadBoardDataset(
         ]);
     }
     dataset.payD = payD;
+
+    if (Array.isArray(summaryData.prov_daily)) {
+      const provDailyGroup = new Map<string, Map<number, number>>();
+      for (const [loanId, cdate, amt] of summaryData.prov_daily) {
+        const pos = loanPos.get(loanId);
+        if (pos === undefined) continue;
+        if (!provDailyGroup.has(cdate)) provDailyGroup.set(cdate, new Map());
+        const dLoans = provDailyGroup.get(cdate)!;
+        dLoans.set(pos, (dLoans.get(pos) || 0) + amt);
+      }
+
+      const provD: Record<string, [number, number][]> = {};
+      for (const [day, lmap] of Array.from(provDailyGroup.entries()).sort(
+        (a, b) => a[0].localeCompare(b[0]),
+      )) {
+        provD[day] = Array.from(lmap.entries())
+          .sort((a, b) => a[0] - b[0])
+          .map(([pos, amt]) => [pos, Math.round(amt * 100) / 100]);
+      }
+      dataset.provD = provD;
+    }
   }
 
   // Persist computed dataset to cache for subsequent instant loads (< 50ms)
-  supabase
+  await supabase
     .from("portfolio_snapshots")
     .update({ cached_dataset: dataset })
     .eq("id", currentSnap.id)

@@ -204,6 +204,8 @@ export type Database = {
           id: string
           missing_custom_fields: string[]
           missing_released_date_count: number
+          provision_amount: number
+          provision_count: number
           rows_loans: number
           rows_repayments: number
           sha256_loans: string
@@ -223,6 +225,8 @@ export type Database = {
           id?: string
           missing_custom_fields?: string[]
           missing_released_date_count?: number
+          provision_amount?: number
+          provision_count?: number
           rows_loans?: number
           rows_repayments?: number
           sha256_loans: string
@@ -242,6 +246,8 @@ export type Database = {
           id?: string
           missing_custom_fields?: string[]
           missing_released_date_count?: number
+          provision_amount?: number
+          provision_count?: number
           rows_loans?: number
           rows_repayments?: number
           sha256_loans?: string
@@ -272,6 +278,7 @@ export type Database = {
           ingresos_amount: number
           interest_amount: number
           is_admin: boolean
+          is_provision: boolean
           is_real: boolean
           is_unknown_method: boolean
           method_raw: string | null
@@ -294,6 +301,7 @@ export type Database = {
           ingresos_amount?: number
           interest_amount?: number
           is_admin?: boolean
+          is_provision?: boolean
           is_real?: boolean
           is_unknown_method?: boolean
           method_raw?: string | null
@@ -316,6 +324,7 @@ export type Database = {
           ingresos_amount?: number
           interest_amount?: number
           is_admin?: boolean
+          is_provision?: boolean
           is_real?: boolean
           is_unknown_method?: boolean
           method_raw?: string | null

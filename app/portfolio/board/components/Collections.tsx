@@ -28,7 +28,7 @@ export function Collections({
   const fmtMoney = (x: number) =>
     "$" + Math.round(x || 0).toLocaleString("en-US");
 
-  const { buckets, totalCollected, totalScheduled, efficiencyPct } = series;
+  const { buckets, totalCollected, totalScheduled, totalProvision = 0, efficiencyPct } = series;
 
   const effClass =
     efficiencyPct === null
@@ -87,8 +87,8 @@ export function Collections({
       </div>
 
       <div className="rounded-xl border border-border-subtle bg-bg-surface p-5 shadow-xs space-y-5">
-        {/* 3 KPI Summary Cards */}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        {/* 4 KPI Summary Cards */}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div className="rounded-lg border border-border-subtle bg-bg-raised/40 p-4">
             <span className="text-[10px] font-bold uppercase tracking-wider text-fg-subtle">
               Cobrado en el periodo
@@ -116,7 +116,7 @@ export function Collections({
           <div className="rounded-lg border border-border-subtle bg-bg-raised/40 p-4">
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-bold uppercase tracking-wider text-fg-subtle">
-                Eficiencia
+                Eficiencia de cobro
               </span>
               <span
                 className={`rounded border px-1.5 py-0.5 text-xs font-bold ${effClass}`}
@@ -125,10 +125,22 @@ export function Collections({
               </span>
             </div>
             <div className="mt-1 text-xl font-bold text-fg">
-              {efficiencyPct !== null ? `${efficiencyPct.toFixed(1)}%` : "—"}
+              {efficiencyPct !== null ? `${Math.round(efficiencyPct)}%` : "—"}
             </div>
             <div className="text-xs text-fg-muted">
-              Meta ≥ 85% verde · ≥ 60% ámbar
+              cobrado ÷ programado
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-border-subtle bg-bg-raised/40 p-4">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-fg-subtle">
+              Enviado a provisión
+            </span>
+            <div className="mt-1 text-xl font-bold text-fg">
+              {fmtMoney(totalProvision)}
+            </div>
+            <div className="text-xs text-fg-muted">
+              traspasos a provisión
             </div>
           </div>
         </div>
@@ -230,7 +242,7 @@ export function Collections({
               {schedPoints.length > 1 && (
                 <polyline
                   fill="none"
-                  stroke="#1E1622"
+                  stroke="#8E85A2"
                   strokeWidth={2}
                   strokeDasharray="5 4"
                   points={polylinePoints}
@@ -246,9 +258,9 @@ export function Collections({
                     cy={cy}
                     r={4.5}
                     fill="#FFFFFF"
-                    stroke="#1E1622"
+                    stroke="#8E85A2"
                     strokeWidth={2}
-                    className="cursor-pointer transition-transform hover:scale-125"
+                    className="cursor-pointer hover:stroke-[3px] hover:stroke-white transition-colors"
                     onClick={() =>
                       onTriggerModal(
                         `Programado · ${b.key}`,

@@ -120,12 +120,24 @@ export function BoardReportView({ data: D }: BoardViewProps) {
       }
     }
 
+    let sentToProvision = 0;
+    if (D.provM) {
+      for (const m in D.provM) {
+        for (const entry of D.provM[m]) {
+          if (loanVis[entry[0]]) {
+            sentToProvision += entry[1];
+          }
+        }
+      }
+    }
+
     return {
       totalBal,
       totalCount,
       cer30Pct,
       cer90Pct,
       recoveredJun25,
+      sentToProvision,
       bucketAgg,
     };
   }, [D, visibleOpenLoans, loanVis]);
@@ -350,6 +362,7 @@ export function BoardReportView({ data: D }: BoardViewProps) {
         cer30Pct={kpis.cer30Pct}
         cer90Pct={kpis.cer90Pct}
         recoveredJun25={kpis.recoveredJun25}
+        sentToProvision={kpis.sentToProvision}
         deltaCer30={delinqData.deltaCer30}
         deltaLabel={delinqData.deltaLabel}
       />

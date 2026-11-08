@@ -16,7 +16,7 @@ import { deleteSnapshotAction } from "./actions";
 import { PortfolioUploadPanel } from "./upload-panel";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 export default async function PortfolioIndexPage() {
   const session = await requireOperator();
@@ -268,6 +268,8 @@ export default async function PortfolioIndexPage() {
                   s.future_payments_excluded_count ??
                   0;
                 const cashAhead = b?.cash_ahead_count ?? s.cash_ahead_count ?? 0;
+                const provCount = b?.provision_count ?? 0;
+                const provAmount = Number(b?.provision_amount ?? 0);
                 const adminCount = b?.admin_excluded_count ?? 0;
                 const adminAmount = Number(b?.admin_excluded_amount ?? 0);
                 const unknownMethods: string[] = Array.isArray(
@@ -314,6 +316,12 @@ export default async function PortfolioIndexPage() {
                       <div>
                         Ajuste de caja (cash_ahead):{" "}
                         <b className="text-fg">{cashAhead}</b>
+                      </div>
+                      <div>
+                        Traspasos a provisión:{" "}
+                        <b className="text-fg">
+                          {provCount} ({fmtMoney(provAmount)})
+                        </b>
                       </div>
                       <div>
                         Mov. administrativos excl.:{" "}

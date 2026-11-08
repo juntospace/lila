@@ -230,6 +230,8 @@ export async function loadCollectionsPlan(
         sumBalanceIngested: Number(batchRow.sum_balance_ingested || 0),
         futurePaymentsExcluded: Number(batchRow.future_payments_excluded || 0),
         cashAheadCount: Number(batchRow.cash_ahead_count || 0),
+        provisionCount: Number(batchRow.provision_count || 0),
+        provisionAmount: Number(batchRow.provision_amount || 0),
         adminExcludedCount: Number(batchRow.admin_excluded_count || 0),
         adminExcludedAmount: Number(batchRow.admin_excluded_amount || 0),
         unknownMethods: Array.isArray(batchRow.unknown_methods)

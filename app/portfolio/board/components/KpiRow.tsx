@@ -10,6 +10,7 @@ interface KpiRowProps {
   cer30Pct: number;
   cer90Pct: number;
   recoveredJun25: number;
+  sentToProvision?: number;
   deltaCer30: number | null;
   deltaLabel: string;
 }
@@ -22,6 +23,7 @@ export function KpiRow({
   cer30Pct,
   cer90Pct,
   recoveredJun25,
+  sentToProvision = 0,
   deltaCer30,
   deltaLabel,
 }: KpiRowProps) {
@@ -51,7 +53,7 @@ export function KpiRow({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         {/* Card 1: Saldo abierto */}
         <div className="relative overflow-hidden rounded-xl border border-border-subtle bg-bg-surface p-5 shadow-xs">
           <div className="absolute top-0 left-0 h-1 w-full bg-[#620494]" />
@@ -159,6 +161,20 @@ export function KpiRow({
           </div>
           <div className="mt-1 text-xs text-fg-muted">
             Cobros reales (principal + ingresos)
+          </div>
+        </div>
+
+        {/* Card 5: Enviado a provisión */}
+        <div className="relative overflow-hidden rounded-xl border border-border-subtle bg-bg-surface p-5 shadow-xs">
+          <div className="absolute top-0 left-0 h-1 w-full bg-[#620494]" />
+          <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
+            Enviado a provisión
+          </div>
+          <div className="mt-2 text-2xl font-bold text-fg">
+            {fmtMoney(sentToProvision)}
+          </div>
+          <div className="mt-1 text-xs text-fg-muted">
+            Traspasos a provisión · histórico
           </div>
         </div>
       </div>

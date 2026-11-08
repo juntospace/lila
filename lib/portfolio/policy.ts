@@ -34,6 +34,7 @@ export const DEFAULT_POLICY: PortfolioPolicy = {
     "descuento por pronto pago",
     "finiquito otorgado",
     "traspaso a provision",
+    "provision",
     "traspaso de saldo",
     "ajuste",
   ],

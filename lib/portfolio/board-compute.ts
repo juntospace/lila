@@ -318,6 +318,7 @@ export interface CollectSeriesResult {
   buckets: CollectBucketPoint[];
   totalCollected: number;
   totalScheduled: number;
+  totalProvision?: number;
   efficiencyPct: number | null;
 }
 
@@ -360,6 +361,7 @@ export function collectSeries(
   }
 
   // 1. Collected (Real payments)
+  let totalProvision = 0;
   if (g === "Q" || g === "M") {
     const startM = a.slice(0, 7);
     const endM = b.slice(0, 7);
@@ -378,6 +380,15 @@ export function collectSeries(
         });
       }
     }
+    if (D.provM) {
+      for (const m of Object.keys(D.provM)) {
+        if (m < startM || m > endM) continue;
+        for (const [pos, amt] of D.provM[m]) {
+          if (!loanVis[pos]) continue;
+          totalProvision += amt;
+        }
+      }
+    }
   } else {
     for (const day of Object.keys(D.payD)) {
       if (day < a || day > b) continue;
@@ -392,6 +403,15 @@ export function collectSeries(
           prin: cur.prin + prin,
           inc: cur.inc + inc,
         });
+      }
+    }
+    if (D.provD) {
+      for (const day of Object.keys(D.provD)) {
+        if (day < a || day > b) continue;
+        for (const [pos, amt] of D.provD[day]) {
+          if (!loanVis[pos]) continue;
+          totalProvision += amt;
+        }
       }
     }
   }
@@ -496,6 +516,7 @@ export function collectSeries(
 
   totalCollected = Math.round(totalCollected * 100) / 100;
   totalScheduled = Math.round(totalScheduled * 100) / 100;
+  totalProvision = Math.round(totalProvision * 100) / 100;
   const efficiencyPct =
     totalScheduled > 0
       ? Math.round((totalCollected / totalScheduled) * 1000) / 10
@@ -505,6 +526,7 @@ export function collectSeries(
     buckets,
     totalCollected,
     totalScheduled,
+    totalProvision,
     efficiencyPct,
   };
 }

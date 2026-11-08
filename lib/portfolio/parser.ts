@@ -42,65 +42,78 @@ export const DATE_REGEX = /(\d{4}-\d{2}-\d{2})/;
 export function parseCsv(content: string, delimiter = ","): Record<string, string>[] {
   // Strip BOM if present
   const text = content.startsWith("\uFEFF") ? content.slice(1) : content;
+  const len = text.length;
+  if (len === 0) return [];
 
   // Auto-detect delimiter if not specified or comma doesn't appear in first line
-  const firstLine = text.split(/\r\n|\n/, 1)[0] || "";
+  const firstEol = text.indexOf("\n");
+  const firstLine = firstEol === -1 ? text : text.slice(0, firstEol);
   if (delimiter === "," && !firstLine.includes(",") && firstLine.includes(";")) {
     delimiter = ";";
   }
 
   const rows: string[][] = [];
   let currentRow: string[] = [];
-  let currentVal = "";
   let insideQuotes = false;
-  let i = 0;
-  const len = text.length;
+  let fieldStart = 0;
+  let fieldHasQuotes = false;
 
-  while (i < len) {
-    const char = text[i];
-    const nextChar = text[i + 1];
+  for (let i = 0; i < len; i++) {
+    const code = text.charCodeAt(i);
 
-    if (char === '"') {
-      if (insideQuotes && nextChar === '"') {
-        currentVal += '"';
-        i += 2;
-        continue;
-      }
-      insideQuotes = !insideQuotes;
-      i++;
-      continue;
-    }
-
-    if (!insideQuotes && char === delimiter) {
-      currentRow.push(currentVal.trim());
-      currentVal = "";
-      i++;
-      continue;
-    }
-
-    if (!insideQuotes && (char === "\r" || char === "\n")) {
-      if (char === "\r" && nextChar === "\n") {
+    if (code === 34 /* " */) {
+      if (insideQuotes && i + 1 < len && text.charCodeAt(i + 1) === 34) {
+        // Escaped quote ("") inside quoted string: skip second quote and remain inside quotes
         i++;
+      } else {
+        insideQuotes = !insideQuotes;
       }
-      currentRow.push(currentVal.trim());
-      currentVal = "";
-      // Only push non-empty rows
-      if (currentRow.some((val) => val.length > 0)) {
-        rows.push(currentRow);
+      fieldHasQuotes = true;
+    } else if (!insideQuotes) {
+      if (text[i] === delimiter) {
+        let val = text.slice(fieldStart, i).trim();
+        if (fieldHasQuotes) {
+          if (val.startsWith('"') && val.endsWith('"')) {
+            val = val.slice(1, -1);
+          }
+          val = val.replace(/""/g, '"');
+        }
+        currentRow.push(val);
+        fieldStart = i + 1;
+        fieldHasQuotes = false;
+      } else if (code === 10 /* \n */ || code === 13 /* \r */) {
+        let val = text.slice(fieldStart, i).trim();
+        if (fieldHasQuotes) {
+          if (val.startsWith('"') && val.endsWith('"')) {
+            val = val.slice(1, -1);
+          }
+          val = val.replace(/""/g, '"');
+        }
+        currentRow.push(val);
+        if (currentRow.some((v) => v.length > 0)) {
+          rows.push(currentRow);
+        }
+        currentRow = [];
+        if (code === 13 && i + 1 < len && text.charCodeAt(i + 1) === 10) {
+          i++;
+        }
+        fieldStart = i + 1;
+        fieldHasQuotes = false;
       }
-      currentRow = [];
-      i++;
-      continue;
     }
-
-    currentVal += char;
-    i++;
   }
 
   // Push final field/row if any
-  if (currentVal.length > 0 || currentRow.length > 0) {
-    currentRow.push(currentVal.trim());
-    if (currentRow.some((val) => val.length > 0)) {
+  if (fieldStart < len || currentRow.length > 0) {
+    let val = text.slice(fieldStart).trim();
+    if (fieldHasQuotes) {
+      if (val.startsWith('"') && val.endsWith('"')) {
+        val = val.slice(1, -1);
+      }
+      val = val.replace(/""/g, '"');
+    }
+    currentRow.push(val);
+    if (currentRow.some((v) => v.length > 0)) {
       rows.push(currentRow);
     }
   }
@@ -108,7 +121,7 @@ export function parseCsv(content: string, delimiter = ","): Record<string, strin
   if (rows.length === 0) return [];
 
   const headers = rows[0].map((h) => h.replace(/^"|"$/g, "").trim());
-  const dataRows: Record<string, string>[] = [];
+  const dataRows: Record<string, string>[] = new Array(rows.length - 1);
 
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r];
@@ -117,7 +130,7 @@ export function parseCsv(content: string, delimiter = ","): Record<string, strin
       const header = headers[c];
       obj[header] = row[c] ?? "";
     }
-    dataRows.push(obj);
+    dataRows[r - 1] = obj;
   }
 
   return dataRows;

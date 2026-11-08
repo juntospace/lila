@@ -465,6 +465,36 @@ describe("lib/portfolio/parity · Mathematical Parity against Python Engine", ()
     expect(fetchedReps[5419].source_repayment_id).toBe("REP-5419");
   });
 
+  it("correctly identifies 'Provision' as provision method and excludes from real repayments", () => {
+    const rawReps = [
+      {
+        "Loan Id": "1001",
+        "Collection Date": "20/06/2025",
+        "Principal Paid Amount": "200.00",
+        "Interest Paid Amount": "50.00",
+        "Payment Method": "Provision",
+      },
+      {
+        "Loan Id": "1002",
+        "Collection Date": "20/06/2025",
+        "Principal Paid Amount": "300.00",
+        "Interest Paid Amount": "0.00",
+        "Payment Method": "Traspaso a Provisión",
+      },
+    ];
+
+    const { repayments } = enrichRepayments(rawReps, "2025-06-30");
+    expect(repayments).toHaveLength(2);
+    expect(repayments[0].isReal).toBe(false);
+    expect(repayments[0].isAdmin).toBe(true);
+    expect(repayments[0].isProvision).toBe(true);
+    expect(repayments[0].isUnknownMethod).toBe(false);
+
+    expect(repayments[1].isReal).toBe(false);
+    expect(repayments[1].isAdmin).toBe(true);
+    expect(repayments[1].isProvision).toBe(true);
+  });
+
   it("[4.1 & 4.2] applies custom CRO policy parameters and formats quality warnings", () => {
     const customPolicy = {
       ...DEFAULT_POLICY,

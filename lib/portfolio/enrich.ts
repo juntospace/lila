@@ -40,6 +40,8 @@ export const REAL_METHODS = new Set(DEFAULT_POLICY.realMethods);
 
 export const ADMIN_METHODS = new Set(DEFAULT_POLICY.adminMethods);
 
+export const PROVISION_METHODS = new Set(["traspaso a provision", "provision"]);
+
 export const CLOSED_STATUSES = new Set(["fully paid", "restructured"]);
 
 export const SIN_DATO = "(sin dato)";
@@ -402,10 +404,15 @@ export function enrichRepayment(
 
   let isReal = true;
   let isAdmin = false;
+  let isProvision = false;
   let isUnknownMethod = false;
 
   if (methodCol && methodNorm) {
-    if (adminSet.has(methodNorm)) {
+    if (PROVISION_METHODS.has(methodNorm)) {
+      isAdmin = true;
+      isProvision = true;
+      isReal = false;
+    } else if (adminSet.has(methodNorm)) {
       isAdmin = true;
       isReal = false;
     } else if (realSet.has(methodNorm)) {
@@ -432,6 +439,7 @@ export function enrichRepayment(
     methodRaw,
     isReal,
     isAdmin,
+    isProvision,
     isUnknownMethod,
     raw,
   };

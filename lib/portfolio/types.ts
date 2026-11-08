@@ -50,6 +50,8 @@ export interface PortfolioIngestBatch {
   sumBalanceIngested: number;
   futurePaymentsExcluded: number;
   cashAheadCount: number;
+  provisionCount?: number;
+  provisionAmount?: number;
   adminExcludedCount: number;
   adminExcludedAmount: number;
   unknownMethods: string[];
@@ -108,6 +110,7 @@ export interface EnrichedRepayment {
   methodRaw: string;
   isReal: boolean;
   isAdmin: boolean;
+  isProvision?: boolean;
   isUnknownMethod: boolean;
   raw: Record<string, string>;
 }

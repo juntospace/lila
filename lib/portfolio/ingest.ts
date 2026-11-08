@@ -218,13 +218,18 @@ export async function ingestSnapshot(
 
   // Fase 2.2: Recaudación solo de préstamos actuales (currentLoanIds.has(rep.loanId))
   let totalCollectedHandover = 0;
+  let provisionCount = 0;
+  let provisionAmount = 0;
   let adminExcludedCount = 0;
   let adminExcludedAmount = 0;
   const unknownMethodsSet = new Set<string>();
   const lastRealPaymentMap: Record<string, string> = {};
 
   for (const rep of enrichedRepayments) {
-    if (rep.isAdmin) {
+    if (rep.isProvision) {
+      provisionCount++;
+      provisionAmount += rep.totalAmount;
+    } else if (rep.isAdmin) {
       adminExcludedCount++;
       adminExcludedAmount += rep.totalAmount;
     }
@@ -246,6 +251,7 @@ export async function ingestSnapshot(
     }
   }
   totalCollectedHandover = Math.round(totalCollectedHandover * 100) / 100;
+  provisionAmount = Math.round(provisionAmount * 100) / 100;
   adminExcludedAmount = Math.round(adminExcludedAmount * 100) / 100;
 
   const unknownMethods = Array.from(unknownMethodsSet).sort();
@@ -266,6 +272,8 @@ export async function ingestSnapshot(
     sumBalanceIngested,
     futurePaymentsExcluded: futureExcludedCount,
     cashAheadCount,
+    provisionCount,
+    provisionAmount,
     adminExcludedCount,
     adminExcludedAmount,
     unknownMethods,
@@ -325,6 +333,7 @@ export async function ingestSnapshot(
         method_raw: r.methodRaw,
         is_real: r.isReal,
         is_admin: r.isAdmin,
+        is_provision: r.isProvision ?? false,
         is_unknown_method: r.isUnknownMethod,
         raw: includeRawJson ? r.raw : {},
       }));
@@ -355,6 +364,8 @@ export async function ingestSnapshot(
     sum_balance_ingested: batchMeta.sumBalanceIngested,
     future_payments_excluded: batchMeta.futurePaymentsExcluded,
     cash_ahead_count: batchMeta.cashAheadCount,
+    provision_count: batchMeta.provisionCount ?? 0,
+    provision_amount: batchMeta.provisionAmount ?? 0,
     admin_excluded_count: batchMeta.adminExcludedCount,
     admin_excluded_amount: batchMeta.adminExcludedAmount,
     unknown_methods: batchMeta.unknownMethods,
