@@ -1,6 +1,5 @@
 import Link from "next/link";
 
-import { EmailSignInForm } from "@/app/login/email-form";
 import { GoogleSignInButton } from "@/app/login/google-button";
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -38,7 +37,7 @@ export default async function LoginPage({
             Iniciar sesión de operador
           </h1>
           <p className="mt-1 text-sm text-fg-muted">
-            Inicia sesión con correo electrónico o cuenta de Google.
+            Usa tu cuenta de Google de Junto.
           </p>
 
           {message ? (
@@ -50,16 +49,7 @@ export default async function LoginPage({
             </div>
           ) : null}
 
-          <div className="mt-6 space-y-6">
-            <EmailSignInForm next={next} />
-
-            <div className="relative flex items-center justify-center">
-              <div className="w-full border-t border-border-subtle" />
-              <span className="absolute bg-bg-surface px-2 text-xs uppercase tracking-wider text-fg-subtle">
-                O
-              </span>
-            </div>
-
+          <div className="mt-6">
             <GoogleSignInButton next={next} />
           </div>
 
