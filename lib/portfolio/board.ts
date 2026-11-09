@@ -795,14 +795,23 @@ export async function loadBoardDataset(
                 if (!res.data) return res;
                 return {
                   ...res,
-                  data: res.data.map((r: any) => {
+                  data: (
+                    res.data as Array<{
+                      source_loan_id: string;
+                      collection_date: string;
+                      principal_amount: number | string;
+                      ingresos_amount: number | string;
+                      is_real: boolean;
+                      method_raw?: string | null;
+                    }>
+                  ).map((r): BoardRepaymentInput => {
                     const norm = (r.method_raw || "").trim().toLowerCase();
                     const isProv = norm === "provision" || norm === "traspaso a provision";
                     return {
                       source_loan_id: r.source_loan_id,
                       collection_date: r.collection_date,
-                      principal_amount: r.principal_amount,
-                      ingresos_amount: r.ingresos_amount,
+                      principal_amount: Number(r.principal_amount || 0),
+                      ingresos_amount: Number(r.ingresos_amount || 0),
                       is_real: isProv ? false : r.is_real,
                       is_provision: isProv,
                     };
