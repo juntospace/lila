@@ -1,12 +1,13 @@
 import Link from "next/link";
 
+import { EmailSignInForm } from "@/app/login/email-form";
 import { GoogleSignInButton } from "@/app/login/google-button";
 
 const ERROR_MESSAGES: Record<string, string> = {
   not_allowlisted:
-    "Your Google account isn't on the operator allowlist. Ask an admin to invite you.",
-  disabled: "This operator account has been disabled. Contact an admin.",
-  oauth_failed: "Sign-in failed. Please try again.",
+    "Tu cuenta de Google no está en la lista de operadores autorizados. Solicita acceso a un administrador.",
+  disabled: "Esta cuenta de operador ha sido desactivada. Contacta a un administrador.",
+  oauth_failed: "Error al iniciar sesión. Por favor, intenta de nuevo.",
 };
 
 export default async function LoginPage({
@@ -34,10 +35,10 @@ export default async function LoginPage({
 
         <div className="rounded-xl border border-border-subtle bg-bg-surface p-8 shadow-e2">
           <h1 className="font-display text-xl font-semibold text-fg">
-            Operator sign-in
+            Iniciar sesión de operador
           </h1>
           <p className="mt-1 text-sm text-fg-muted">
-            Use your Junto Google account.
+            Inicia sesión con correo electrónico o cuenta de Google.
           </p>
 
           {message ? (
@@ -49,18 +50,26 @@ export default async function LoginPage({
             </div>
           ) : null}
 
-          <div className="mt-6">
+          <div className="mt-6 space-y-6">
+            <EmailSignInForm next={next} />
+
+            <div className="relative flex items-center justify-center">
+              <div className="w-full border-t border-border-subtle" />
+              <span className="absolute bg-bg-surface px-2 text-xs uppercase tracking-wider text-fg-subtle">
+                O
+              </span>
+            </div>
+
             <GoogleSignInButton next={next} />
           </div>
 
           <p className="mt-6 text-xs text-fg-subtle">
-            Access is restricted to invited Junto personnel. Borrower sign-in is
-            available separately.
+            El acceso está restringido al personal autorizado de Junto.
           </p>
         </div>
 
         <p className="mt-6 text-center text-xs text-fg-subtle">
-          © {new Date().getFullYear()} Junto · Panama
+          © {new Date().getFullYear()} Junto · Panamá
         </p>
       </div>
     </main>
