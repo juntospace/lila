@@ -9,6 +9,7 @@ import {
   computeVisibility,
   delinqAgg,
   fbtnLabel,
+  getLoanBalanceByBase,
 } from "@/lib/portfolio/board-compute";
 import { enrichLoans, enrichRepayments } from "@/lib/portfolio/enrich";
 import { fetchAll } from "@/lib/portfolio/fetch-all";
@@ -252,5 +253,54 @@ describe("lib/portfolio/board-compute · Pure Board Report Computations", () => 
     expect(fetchedReps.length).toBe(5000);
     expect(fetchedReps[4999].id).toBe(5000);
   });
-});
 
+  it("computes loan balance accurately across Base del Saldo (total, capital, capital_int)", () => {
+    // Mock loan detail row: d[3] is total balance ($4,988.77), d[14] is principal ($2,916.68), d[15] is interest ($1,750.00)
+    const mockDetail = [
+      "Cliente Test", // 0
+      0, // 1
+      0, // 2
+      4988.77, // 3: total balance
+      15, // 4: dpd
+      1, // 5: bucket_idx
+      "2024-09-03", // 6
+      1, // 7: is_open
+      "LN-1001", // 8
+      0, // 9
+      0, // 10
+      0, // 11
+      0, // 12
+      0, // 13
+      2916.68, // 14: principal
+      1750.0, // 15: interest
+    ];
+
+    // Base Saldo Total
+    expect(getLoanBalanceByBase(mockDetail, "total")).toBe(4988.77);
+
+    // Base Capital
+    expect(getLoanBalanceByBase(mockDetail, "capital")).toBe(2916.68);
+
+    // Base Capital + int.
+    expect(getLoanBalanceByBase(mockDetail, "capital_int")).toBe(4666.68);
+
+    // Also supports separate balance maps
+    const mapDetail = mockDetail.slice(0, 14); // without indices 14 and 15
+    const prinMap = { "1001": 2916.68 };
+    const intMap = { "1001": 1750.0 };
+
+    expect(
+      getLoanBalanceByBase(mapDetail, "total", "1001", prinMap, intMap),
+    ).toBe(4988.77);
+    expect(
+      getLoanBalanceByBase(mapDetail, "capital", "1001", prinMap, intMap),
+    ).toBe(2916.68);
+    expect(
+      getLoanBalanceByBase(mapDetail, "capital_int", "1001", prinMap, intMap),
+    ).toBe(4666.68);
+
+    // Graceful fallback when maps or indices are missing
+    expect(getLoanBalanceByBase(mapDetail, "capital")).toBe(4988.77);
+    expect(getLoanBalanceByBase(mapDetail, "capital_int")).toBe(4988.77);
+  });
+});

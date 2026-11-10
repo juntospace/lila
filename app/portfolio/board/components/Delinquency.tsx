@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 
 import type { DelinqPoint } from "@/lib/portfolio/board-compute";
 
@@ -9,6 +9,8 @@ interface DelinquencyProps {
 }
 
 export function Delinquency({ points }: DelinquencyProps) {
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+
   const fmtMoney = (x: number) =>
     "$" + Math.round(x || 0).toLocaleString("en-US");
 
@@ -137,21 +139,40 @@ export function Delinquency({ points }: DelinquencyProps) {
                   const cx = xPos(i);
                   const showLabel =
                     n <= 12 || i % Math.ceil(n / 10) === 0 || i === n - 1;
+                  const isHovered = hoveredIdx === i;
+                  const fullTooltip = `${p.date}\nMora: ${fmtMoney(p.d30)}\n% mora: ${p.pct30.toFixed(1)}%`;
+
                   return (
-                    <g key={p.key}>
+                    <g key={p.key} className="pointer-events-none">
                       <circle
                         cx={cx}
                         cy={yDollar(p.d30)}
-                        r={4}
+                        r={isHovered ? 6 : 4}
                         fill="#620494"
+                        stroke={isHovered ? "#FFFFFF" : undefined}
+                        strokeWidth={isHovered ? 2 : undefined}
                       >
-                        <title>{`${p.date} · Saldo 30+: ${fmtMoney(p.d30)}`}</title>
+                        <title>{fullTooltip}</title>
                       </circle>
-                      <circle cx={cx} cy={yPct(p.pct30)} r={4} fill="#D9743B">
-                        <title>{`${p.date} · CeR 30+: ${p.pct30.toFixed(1)}%`}</title>
+                      <circle
+                        cx={cx}
+                        cy={yPct(p.pct30)}
+                        r={isHovered ? 6 : 4}
+                        fill="#D9743B"
+                        stroke={isHovered ? "#FFFFFF" : undefined}
+                        strokeWidth={isHovered ? 2 : undefined}
+                      >
+                        <title>{fullTooltip}</title>
                       </circle>
-                      <circle cx={cx} cy={yPct(p.pct90)} r={3.5} fill="#973A4A">
-                        <title>{`${p.date} · CeR 90+: ${p.pct90.toFixed(1)}%`}</title>
+                      <circle
+                        cx={cx}
+                        cy={yPct(p.pct90)}
+                        r={isHovered ? 5.5 : 3.5}
+                        fill="#973A4A"
+                        stroke={isHovered ? "#FFFFFF" : undefined}
+                        strokeWidth={isHovered ? 1.5 : undefined}
+                      >
+                        <title>{`${p.date}\nCeR 90+: ${p.pct90.toFixed(1)}%`}</title>
                       </circle>
 
                       {showLabel && (
@@ -167,6 +188,106 @@ export function Delinquency({ points }: DelinquencyProps) {
                     </g>
                   );
                 })}
+
+                {/* Invisible hover columns across the plot area */}
+                {points.map((p, i) => {
+                  const cx = xPos(i);
+                  const colW = n <= 1 ? plotW : plotW / (n - 1);
+                  const xStart = n <= 1 ? padL : Math.max(padL, cx - colW / 2);
+                  const xEnd =
+                    n <= 1 ? padL + plotW : Math.min(width - padR, cx + colW / 2);
+                  const actualW = Math.max(12, xEnd - xStart);
+                  const fullTooltip = `${p.date}\nMora: ${fmtMoney(p.d30)}\n% mora: ${p.pct30.toFixed(1)}%`;
+
+                  return (
+                    <rect
+                      key={`hover-col-${p.key}`}
+                      x={cx - actualW / 2}
+                      y={padT}
+                      width={actualW}
+                      height={plotH}
+                      fill="transparent"
+                      className="cursor-pointer"
+                      onMouseEnter={() => setHoveredIdx(i)}
+                      onMouseLeave={() => setHoveredIdx(null)}
+                    >
+                      <title>{fullTooltip}</title>
+                    </rect>
+                  );
+                })}
+
+                {/* Interactive Tooltip matching reference report */}
+                {hoveredIdx !== null && points[hoveredIdx] && (
+                  (() => {
+                    const p = points[hoveredIdx];
+                    const cx = xPos(hoveredIdx);
+                    const tooltipW = 140;
+                    const tooltipH = 58;
+                    const tooltipX =
+                      cx + 12 + tooltipW > width - padR
+                        ? cx - tooltipW - 12
+                        : cx + 12;
+                    const tooltipY = Math.max(
+                      padT + 4,
+                      Math.min(yPct(p.pct30) - 10, height - padB - tooltipH),
+                    );
+
+                    return (
+                      <g className="pointer-events-none transition-all duration-75">
+                        {/* Guideline */}
+                        <line
+                          x1={cx}
+                          y1={padT}
+                          x2={cx}
+                          y2={padT + plotH}
+                          stroke="#71717A"
+                          strokeDasharray="3 3"
+                          strokeWidth={1}
+                          opacity={0.7}
+                        />
+
+                        {/* Tooltip Card */}
+                        <rect
+                          x={tooltipX}
+                          y={tooltipY}
+                          width={tooltipW}
+                          height={tooltipH}
+                          rx={8}
+                          fill="#18181B"
+                          stroke="#3F3F46"
+                          strokeWidth={1}
+                          filter="drop-shadow(0 4px 6px rgba(0, 0, 0, 0.4))"
+                        />
+                        <text
+                          x={tooltipX + 10}
+                          y={tooltipY + 18}
+                          fill="#FFFFFF"
+                          fontSize="11"
+                          fontWeight="700"
+                          fontFamily="monospace"
+                        >
+                          {p.date}
+                        </text>
+                        <text
+                          x={tooltipX + 10}
+                          y={tooltipY + 34}
+                          fill="#E4E4E7"
+                          fontSize="11"
+                        >
+                          Mora: <tspan fontWeight="bold" fill="#C084FC">{fmtMoney(p.d30)}</tspan>
+                        </text>
+                        <text
+                          x={tooltipX + 10}
+                          y={tooltipY + 49}
+                          fill="#E4E4E7"
+                          fontSize="11"
+                        >
+                          % mora: <tspan fontWeight="bold" fill="#FB923C">{p.pct30.toFixed(1)}%</tspan>
+                        </text>
+                      </g>
+                    );
+                  })()
+                )}
               </svg>
             </div>
           </>

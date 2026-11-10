@@ -5,6 +5,46 @@ import type { BoardDataset } from "./board";
 
 export type Granularity = "Q" | "M" | "W" | "D";
 export type PeriodPreset = "todo" | "anio" | "mes" | "semana" | "rango";
+export type BaseSaldo = "total" | "capital" | "capital_int";
+
+export const BASE_SALDO_LABELS: Record<BaseSaldo, string> = {
+  total: "Saldo total",
+  capital: "Capital",
+  capital_int: "Capital + int.",
+};
+
+/**
+ * Returns the loan balance based on the selected Base del Saldo.
+ * - total: Full balance (index 3)
+ * - capital: Total Principal Balance (index 14, fallback to total)
+ * - capital_int: Total Principal + Total Interest Balance (index 14 + index 15)
+ */
+export function getLoanBalanceByBase(
+  d: (string | number)[],
+  base: BaseSaldo = "total",
+  id?: string,
+  prinMap?: Record<string, number>,
+  intMap?: Record<string, number>,
+): number {
+  const total = Number(d[3] || 0);
+  if (base === "total") return total;
+  const mapPrin = id && prinMap ? prinMap[id] : undefined;
+  const prin =
+    mapPrin !== undefined && mapPrin > 0
+      ? mapPrin
+      : d[14] !== undefined && Number(d[14]) > 0
+        ? Number(d[14])
+        : total;
+  if (base === "capital") return prin;
+  const mapInt = id && intMap ? intMap[id] : undefined;
+  const inte =
+    mapInt !== undefined
+      ? mapInt
+      : d[15] !== undefined
+        ? Number(d[15])
+        : 0;
+  return Math.min(total, Math.round((prin + inte) * 100) / 100);
+}
 
 export const SEG_COLORS = ["#620494", "#3E2A7E", "#FF9A52"];
 

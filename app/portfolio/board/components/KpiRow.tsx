@@ -2,9 +2,15 @@
 
 import React from "react";
 
+import {
+  BASE_SALDO_LABELS,
+  type BaseSaldo,
+} from "@/lib/portfolio/board-compute";
+
 interface KpiRowProps {
   asof: string;
   policyVersion?: string;
+  baseSaldo?: BaseSaldo;
   totalBal: number;
   totalCount: number;
   cer30Pct: number;
@@ -18,6 +24,7 @@ interface KpiRowProps {
 export function KpiRow({
   asof,
   policyVersion = "v1.0",
+  baseSaldo = "total",
   totalBal,
   totalCount,
   cer30Pct,
@@ -27,6 +34,7 @@ export function KpiRow({
   deltaCer30,
   deltaLabel,
 }: KpiRowProps) {
+  const baseLabel = BASE_SALDO_LABELS[baseSaldo];
   const fmtMoney = (x: number) =>
     "$" + Math.round(x || 0).toLocaleString("en-US");
   const fmtPct = (x: number, d = 1) => (x || 0).toFixed(d) + "%";
@@ -49,7 +57,7 @@ export function KpiRow({
           <span className="rounded-full bg-[#F1E6F8] px-2.5 py-0.5 text-[11px] font-semibold text-[#4C0374]">
             Política {policyVersion}
           </span>
-          <span>Valores según segmentos y periodo seleccionados al {asof}</span>
+          <span>Valores según el segmento, el periodo y la base del saldo seleccionados al {asof}</span>
         </div>
       </div>
 
@@ -64,7 +72,7 @@ export function KpiRow({
             {fmtMoney(totalBal)}
           </div>
           <div className="mt-1 text-xs text-fg-muted">
-            {totalCount.toLocaleString("en-US")} préstamos vigentes
+            {totalCount.toLocaleString("en-US")} préstamos · {baseLabel}
           </div>
         </div>
 
@@ -146,7 +154,7 @@ export function KpiRow({
             {fmtPct(cer90Pct)}
           </div>
           <div className="mt-1 text-xs text-fg-muted">
-            Deterioro severo &gt; 90d (umbral &gt; 8%)
+            deterioro &gt; 90d · {baseLabel}
           </div>
         </div>
 

@@ -33,6 +33,8 @@ export interface BoardLoanDetail {
   productIdx: number;
   segmentIdx: number;
   balance: number;
+  principal_balance?: number | null;
+  interest_balance?: number | null;
   dpd: number;
   bucketIdx: number;
   released: string; // YYYY-MM-DD
@@ -71,6 +73,8 @@ export interface BoardDataset {
   loanIds: string[];
   products: string[];
   details: Record<string, (string | number)[]>;
+  principalBalances?: Record<string, number>;
+  interestBalances?: Record<string, number>;
   snapshots: Record<string, string>; // date -> string of bucket digits per loan pos
   warnings?: string[];
   batch?: PortfolioIngestBatch | null;
@@ -84,6 +88,8 @@ export interface BoardLoanInput {
   segment: PortfolioSegment | string;
   segment_idx: number;
   balance: number;
+  principal_balance?: number | null;
+  interest_balance?: number | null;
   dpd: number;
   bucket_idx: number;
   released_date: string | null;
@@ -104,6 +110,8 @@ export interface BoardHistLoanInput {
   segment: string;
   bucket_idx: number;
   balance: number;
+  principal_balance?: number | null;
+  interest_balance?: number | null;
   dpd: number;
 }
 
@@ -332,6 +340,25 @@ export function assembleBoardDataset(params: {
     }
   }
 
+  // Optional balance base maps
+  let principalBalances: Record<string, number> | undefined;
+  let interestBalances: Record<string, number> | undefined;
+  for (const lid of loanIds) {
+    const l = loansMap.get(lid);
+    if (l) {
+      const rawPrin = Number(l.principal_balance || 0);
+      const rawInt = Number(l.interest_balance || 0);
+      if (rawPrin > 0) {
+        if (!principalBalances) principalBalances = {};
+        principalBalances[lid] = rawPrin;
+      }
+      if (rawInt > 0) {
+        if (!interestBalances) interestBalances = {};
+        interestBalances[lid] = rawInt;
+      }
+    }
+  }
+
   // Snapshots string matrix
   const snapshots: Record<string, string> = {};
   const histByDate = new Map<string, BoardHistLoanInput[]>();
@@ -523,6 +550,8 @@ export function assembleBoardDataset(params: {
     loanIds,
     products,
     details,
+    ...(principalBalances ? { principalBalances } : {}),
+    ...(interestBalances ? { interestBalances } : {}),
     snapshots,
     warnings,
     batch,
@@ -551,6 +580,8 @@ export function buildBoardDatasetFromEnriched(params: {
     segment: l.segment,
     segment_idx: l.segmentIdx,
     balance: l.balance,
+    principal_balance: l.principalBalance,
+    interest_balance: l.interestBalance,
     dpd: l.dpd,
     bucket_idx: l.bucketIdx,
     released_date: l.releasedDate,

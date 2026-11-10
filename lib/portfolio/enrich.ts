@@ -199,6 +199,10 @@ export function enrichLoan(
   };
 
   const balance = num(getCol("Balance Amount"));
+  const rawPrin = num(getCol("Total Principal Balance"));
+  const principalBalance = rawPrin > 0 ? rawPrin : balance;
+  const rawInt = num(getCol("Total Interest Balance"));
+  const interestBalance = rawInt > 0 ? rawInt : 0;
   const rawDpd = parseDpd(getCol("Days Past Due"));
   const releasedDate = pdate(getCol("Released Date"));
   const statusRaw = getCol("Loan Status Name").trim();
@@ -292,6 +296,8 @@ export function enrichLoan(
     segmentIdx: segIdx,
     secured,
     balance: Math.round(balance * 100) / 100,
+    principalBalance: Math.round(principalBalance * 100) / 100,
+    interestBalance: Math.round(interestBalance * 100) / 100,
     dpd: Math.round(dpd),
     dpdLoandisk: Math.round(rawDpd),
     bucket,

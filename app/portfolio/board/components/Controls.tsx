@@ -5,6 +5,7 @@ import { ChevronDown } from "lucide-react";
 
 import type { BoardDataset } from "@/lib/portfolio/board";
 import {
+  type BaseSaldo,
   fbtnLabel,
   type PeriodPreset,
   SEG_COLORS,
@@ -14,6 +15,8 @@ interface ControlsProps {
   data: BoardDataset;
   selectedSegs: Set<string>;
   onChangeSegs: (next: Set<string>) => void;
+  baseSaldo: BaseSaldo;
+  onChangeBaseSaldo: (base: BaseSaldo) => void;
   period: PeriodPreset;
   onChangePeriod: (p: PeriodPreset) => void;
   rangeStart: string;
@@ -143,6 +146,8 @@ export function Controls({
   data: D,
   selectedSegs,
   onChangeSegs,
+  baseSaldo,
+  onChangeBaseSaldo,
   period,
   onChangePeriod,
   rangeStart,
@@ -196,6 +201,35 @@ export function Controls({
                 </button>
               );
             })}
+          </div>
+        </div>
+
+        {/* Base del Saldo Switcher */}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">
+            Base del saldo
+          </span>
+          <div className="flex rounded-lg border border-border-subtle bg-bg-raised p-0.5 text-xs">
+            {(
+              [
+                { id: "total", label: "Saldo total" },
+                { id: "capital", label: "Capital" },
+                { id: "capital_int", label: "Capital + int." },
+              ] as const
+            ).map((b) => (
+              <button
+                key={b.id}
+                type="button"
+                onClick={() => onChangeBaseSaldo(b.id)}
+                className={`rounded-md px-2.5 py-1 font-medium transition-all ${
+                  baseSaldo === b.id
+                    ? "bg-[#620494] text-white shadow-xs font-semibold"
+                    : "text-fg-muted hover:text-fg"
+                }`}
+              >
+                {b.label}
+              </button>
+            ))}
           </div>
         </div>
 

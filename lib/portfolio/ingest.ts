@@ -292,6 +292,8 @@ export async function ingestSnapshot(
     segment_idx: l.segmentIdx,
     secured: l.secured,
     balance: l.balance,
+    principal_balance: l.principalBalance ?? l.balance,
+    interest_balance: l.interestBalance ?? 0,
     dpd: l.dpd,
     dpd_loandisk: l.dpdLoandisk,
     bucket: l.bucket,

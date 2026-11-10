@@ -1,15 +1,17 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 
 import type { BoardDataset } from "@/lib/portfolio/board";
 import {
+  type BaseSaldo,
   collectSeries,
   computeMigrationMatrix,
   computeRangeAndGranularity,
   computeVisibility,
   dAdd,
   delinqAgg,
+  getLoanBalanceByBase,
   LOAN_COLS,
   type PeriodPreset,
   SEG_COLORS,
@@ -34,6 +36,7 @@ export function BoardReportView({ data: D }: BoardViewProps) {
   const [selectedSegs, setSelectedSegs] = useState<Set<string>>(
     () => new Set(D.segments),
   );
+  const [baseSaldo, setBaseSaldo] = useState<BaseSaldo>("total");
   const [period, setPeriod] = useState<PeriodPreset>("todo");
   const [rangeStart, setRangeStart] = useState<string>(() =>
     dAdd(D.asof, -90),
@@ -86,6 +89,18 @@ export function BoardReportView({ data: D }: BoardViewProps) {
     [D, comboVis, effStart, effEnd, gran, period],
   );
 
+  const getLoanBal = useCallback(
+    (d: (string | number)[], id?: string) =>
+      getLoanBalanceByBase(
+        d,
+        baseSaldo,
+        id,
+        D.principalBalances,
+        D.interestBalances,
+      ),
+    [baseSaldo, D.principalBalances, D.interestBalances],
+  );
+
   // Section 01: KPI Computations
   const kpis = useMemo(() => {
     const bucketAgg = D.buckets.map(() => ({ bal: 0, count: 0 }));
@@ -94,7 +109,7 @@ export function BoardReportView({ data: D }: BoardViewProps) {
 
     for (const item of visibleOpenLoans) {
       const bIdx = item.d[5] as number;
-      const bal = item.d[3] as number;
+      const bal = getLoanBal(item.d, item.id);
       bucketAgg[bIdx].bal += bal;
       bucketAgg[bIdx].count++;
       totalBal += bal;
@@ -140,7 +155,7 @@ export function BoardReportView({ data: D }: BoardViewProps) {
       sentToProvision,
       bucketAgg,
     };
-  }, [D, visibleOpenLoans, loanVis]);
+  }, [D, visibleOpenLoans, loanVis, getLoanBal]);
 
   const getLoanRow = (id: string) => {
     const d = D.details[id];
@@ -149,7 +164,7 @@ export function BoardReportView({ data: D }: BoardViewProps) {
       d[0], // Full Name
       D.products[d[1] as number] || "(histórico)",
       d[6], // Released Date
-      d[3], // Balance
+      getLoanBal(d, id), // Balance
       d[4], // DPD
       d[9], // Pending Due
       D.buckets[d[5] as number], // Bucket
@@ -192,7 +207,7 @@ export function BoardReportView({ data: D }: BoardViewProps) {
       for (const item of visibleOpenLoans) {
         if (item.d[2] === si) {
           const bIdx = item.d[5] as number;
-          const bal = item.d[3] as number;
+          const bal = getLoanBal(item.d, item.id);
           per[bIdx].count++;
           per[bIdx].bal += bal;
           per[bIdx].ids.push(item.id);
@@ -220,7 +235,7 @@ export function BoardReportView({ data: D }: BoardViewProps) {
 
     for (const item of visibleOpenLoans) {
       const bIdx = item.d[5] as number;
-      const bal = item.d[3] as number;
+      const bal = getLoanBal(item.d, item.id);
       perTotal[bIdx].count++;
       perTotal[bIdx].bal += bal;
       perTotal[bIdx].ids.push(item.id);
@@ -243,7 +258,7 @@ export function BoardReportView({ data: D }: BoardViewProps) {
     }
 
     return { rows, prov, totalBal: tBal };
-  }, [D, visibleOpenLoans, selectedSegs]);
+  }, [D, visibleOpenLoans, selectedSegs, getLoanBal]);
 
   // Section 03: Transposed Migration Matrix 7x7
   const migrationMatrix = useMemo(
@@ -312,7 +327,7 @@ export function BoardReportView({ data: D }: BoardViewProps) {
       }
 
       const cObj = byCohort.get(k)!;
-      const bal = item.d[3] as number;
+      const bal = getLoanBal(item.d, item.id);
       const bIdx = item.d[5] as number;
 
       cObj.count++;
@@ -323,7 +338,7 @@ export function BoardReportView({ data: D }: BoardViewProps) {
     }
 
     return Array.from(byCohort.values()).sort((a, b) => a.order - b.order);
-  }, [D.handover, visibleOpenLoans]);
+  }, [D.handover, visibleOpenLoans, getLoanBal]);
 
   return (
     <div className="space-y-6 pb-16">
@@ -337,6 +352,8 @@ export function BoardReportView({ data: D }: BoardViewProps) {
         data={D}
         selectedSegs={selectedSegs}
         onChangeSegs={setSelectedSegs}
+        baseSaldo={baseSaldo}
+        onChangeBaseSaldo={setBaseSaldo}
         period={period}
         onChangePeriod={setPeriod}
         rangeStart={rangeStart}
@@ -357,6 +374,7 @@ export function BoardReportView({ data: D }: BoardViewProps) {
       <KpiRow
         asof={D.asof}
         policyVersion={D.policyVersion}
+        baseSaldo={baseSaldo}
         totalBal={kpis.totalBal}
         totalCount={kpis.totalCount}
         cer30Pct={kpis.cer30Pct}

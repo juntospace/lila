@@ -71,6 +71,8 @@ export interface EnrichedLoan {
   segmentIdx: number; // 0: Adelantos, 1: Personal con Garantía, 2: Personal sin Garantía
   secured: boolean;
   balance: number;
+  principalBalance?: number;
+  interestBalance?: number;
   dpd: number; // Adjusted (0 if cashAhead)
   dpdLoandisk: number; // Preserved original
   bucket: PortfolioBucket;
