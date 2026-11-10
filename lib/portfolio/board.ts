@@ -665,14 +665,15 @@ export async function loadBoardDataset(
   const currentSnap = latestSnapshots[0];
   const asof = currentSnap.snapshot_date as string;
 
-  // Fast path: if snapshot has precomputed dataset cached (with v6 provM structure), return it directly (< 50ms)
+  // Fast path: if snapshot has precomputed dataset cached (with v6 provM structure and principalBalances), return it directly (< 50ms)
   if (
     currentSnap.cached_dataset &&
     typeof currentSnap.cached_dataset === "object" &&
     Array.isArray(
       (currentSnap.cached_dataset as unknown as BoardDataset).loanIds,
     ) &&
-    (currentSnap.cached_dataset as unknown as BoardDataset).provM !== undefined
+    (currentSnap.cached_dataset as unknown as BoardDataset).provM !== undefined &&
+    (currentSnap.cached_dataset as unknown as BoardDataset).principalBalances !== undefined
   ) {
     return currentSnap.cached_dataset as unknown as BoardDataset;
   }
@@ -777,7 +778,7 @@ export async function loadBoardDataset(
         supabase
           .from("portfolio_loans")
           .select(
-            "source_loan_id, loan_number, full_name, product, segment, segment_idx, balance, dpd, bucket_idx, released_date, is_open, pending_due, total_due_amount, installments_count, cycle_type, tg, tc, gc, mr",
+            "source_loan_id, loan_number, full_name, product, segment, segment_idx, balance, principal_balance, interest_balance, dpd, bucket_idx, released_date, is_open, pending_due, total_due_amount, installments_count, cycle_type, tg, tc, gc, mr",
             { count: from === 0 ? "exact" : undefined },
           )
           .eq("snapshot_id", currentSnap.id)
@@ -785,6 +786,22 @@ export async function loadBoardDataset(
           .range(from, to),
       1000,
       2,
+    ).catch(async () =>
+      // Graceful fallback if principal_balance/interest_balance migration has not run yet
+      fetchAll<BoardLoanInput>(
+        (from, to) =>
+          supabase
+            .from("portfolio_loans")
+            .select(
+              "source_loan_id, loan_number, full_name, product, segment, segment_idx, balance, dpd, bucket_idx, released_date, is_open, pending_due, total_due_amount, installments_count, cycle_type, tg, tc, gc, mr",
+              { count: from === 0 ? "exact" : undefined },
+            )
+            .eq("snapshot_id", currentSnap.id)
+            .order("id", { ascending: true })
+            .range(from, to),
+        1000,
+        2,
+      ),
     ),
 
     // All historical snapshot open loans up to asof (via single RPC or fallback fetchAll)

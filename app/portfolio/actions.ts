@@ -127,7 +127,7 @@ export async function uploadPortfolioBackupAction(formData: FormData) {
     hasRepaymentsFile,
     loansSha256,
     repaymentsSha256,
-    rejectDuplicateSha: true,
+    rejectDuplicateSha: false,
     uploadedBy: session.userId,
     sourceFiles,
     includeRawJson: false,
