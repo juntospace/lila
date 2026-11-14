@@ -690,59 +690,12 @@ export async function deleteUpload(uploadId: string): Promise<DeleteUploadResult
     .eq("id", accountId)
     .single();
 
-  if (account?.rail === "bg") {
-    // 1. Delete upload row & storage file
-    const { error: upErr } = await supabase.from("recon_uploads").delete().eq("id", uploadId);
-    if (upErr) return { status: "error", message: upErr.message };
-
-    if (storagePath) {
-      const adminSupabase = createSupabaseServiceClient();
-      const { error: stErr } = await adminSupabase.storage
-        .from("recon-statements")
-        .remove([storagePath]);
-      if (stErr) {
-        console.warn(`Failed to remove "${storagePath}" from storage:`, stErr);
-      }
-    }
-
-    // 2. Full recompute for Banco General account from remaining active files
-    try {
-      const { data, error } = await supabase.functions.invoke("bg-recon-recompute", {
-        body: { account_id: accountId },
-      });
-      if (error || data?.error) {
-        console.warn(
-          "Edge Function bg-recon-recompute failed during deleteUpload, falling back to direct server recompute:",
-          error || data?.error,
-        );
-        await recomputeBgAccount(supabase, accountId);
-      }
-    } catch (err) {
-      console.warn(
-        "Edge Function bg-recon-recompute failed during deleteUpload, falling back to direct server recompute:",
-        err,
-      );
-      try {
-        await recomputeBgAccount(supabase, accountId);
-      } catch (fbErr) {
-        return {
-          status: "error",
-          message: `Deletion completed but BG recompute failed: ${
-            fbErr instanceof Error ? fbErr.message : String(fbErr)
-          }`,
-        };
-      }
-    }
-
-    revalidatePath("/recon/upload");
-    revalidatePath(`/recon/accounts/${accountId}`);
-    return { status: "ok" };
-  }
-
   const ID_CHUNK = 200;
   const PAGE = 1000;
 
-  // 1. Collect every transaction id from this upload (paginated).
+  // 1. Collect every transaction id referencing this upload (paginated).
+  //    Must run for both BAC and BG accounts because recon_transactions.upload_id
+  //    uses ON DELETE RESTRICT (BG snapshot sync previously stamped latestUpload.id).
   const txnIds: string[] = [];
   let cursor = 0;
   while (cursor < 200_000) {
@@ -775,16 +728,19 @@ export async function deleteUpload(uploadId: string): Promise<DeleteUploadResult
     }
   }
 
-  // 3. Delete the transactions themselves. recon_manual_actions.txn_id
-  //    cascades on delete (migration 20260503100000), so audit rows for
-  //    the deleted transactions disappear with them — no separate step
-  //    needed and no API-level DELETE policy required on the audit
-  //    table (it stays append-only through PostgREST).
+  // 3. Delete the transactions & any legacy ACH batch lines referencing this upload.
+  //    recon_manual_actions.txn_id cascades on delete (migration 20260503100000).
   const { error: txnErr } = await supabase
     .from("recon_transactions")
     .delete()
     .eq("upload_id", uploadId);
   if (txnErr) return { status: "error", message: txnErr.message };
+
+  const { error: achLinesErr } = await supabase
+    .from("recon_ach_batch_lines")
+    .delete()
+    .eq("upload_id", uploadId);
+  if (achLinesErr) return { status: "error", message: achLinesErr.message };
 
   // 4. Delete the upload row & storage file.
   const { error: upErr } = await supabase.from("recon_uploads").delete().eq("id", uploadId);
@@ -800,9 +756,37 @@ export async function deleteUpload(uploadId: string): Promise<DeleteUploadResult
     }
   }
 
-  // 5. Recompute the account so PRs whose linked DA just disappeared, or
-  //    whose batch was consumed by a now-deleted DA batch, settle back to
-  //    the correct state given the remaining data.
+  // 5. Recompute the account from remaining uploads.
+  if (account?.rail === "bg") {
+    try {
+      const { data, error } = await supabase.functions.invoke("bg-recon-recompute", {
+        body: { account_id: accountId },
+      });
+      if (error || data?.error) {
+        throw error || new Error(String(data?.error));
+      }
+    } catch (err) {
+      console.warn(
+        "Edge Function bg-recon-recompute failed during deleteUpload, falling back to direct server recompute:",
+        err,
+      );
+      try {
+        await recomputeBgAccount(supabase, accountId);
+      } catch (fbErr) {
+        return {
+          status: "error",
+          message: `Deletion completed but BG recompute failed: ${
+            fbErr instanceof Error ? fbErr.message : String(fbErr)
+          }`,
+        };
+      }
+    }
+
+    revalidatePath("/recon/upload");
+    revalidatePath(`/recon/accounts/${accountId}`);
+    return { status: "ok", rowsDeleted: txnIds.length, linksDeleted };
+  }
+
   try {
     const { data, error } = await supabase.functions.invoke("bac-recon-recompute", {
       body: { account_id: accountId },

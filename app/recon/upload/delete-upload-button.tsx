@@ -47,8 +47,11 @@ export function DeleteUploadButton({
         {pending ? "Deleting…" : result?.status === "ok" ? "Deleted" : "Delete"}
       </Button>
       {result?.status === "error" && (
-        <span className="text-xs text-danger" title={result.message}>
-          Error
+        <span
+          className="max-w-[220px] truncate text-xs text-danger"
+          title={result.message}
+        >
+          {result.message || "Error"}
         </span>
       )}
     </div>

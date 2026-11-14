@@ -193,18 +193,8 @@ export async function syncSnapshotToDatabase(
 
   // 7. Sync Voluntary Inflows (Regular statement transactions) into recon_transactions
   // Allows UI reporting, date filtering, KPI totals, and export for Banco General.
-  let fallbackUploadId: string | null = null;
-  const { data: latestUpload } = await supabase
-    .from("recon_uploads")
-    .select("id")
-    .eq("account_id", accountId)
-    .order("uploaded_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (latestUpload?.id) {
-    fallbackUploadId = latestUpload.id;
-  }
-
+  // upload_id is nullable (migration 20260908180000) so multi-file BG snapshots do
+  // not couple all account transactions to a single upload row.
   const incomingTxnInserts = snapshot.incoming.map((inc) => {
     const isNonLoan = inc.category === "non_loan" || inc.status === "non_loan";
     const kind = isNonLoan ? "non_loan" : "loan_inflow";
@@ -221,7 +211,6 @@ export async function syncSnapshotToDatabase(
       : inc.paymentReference || inc.transferReference || inc.loanRef || null;
 
     return {
-      ...(fallbackUploadId ? { upload_id: fallbackUploadId } : {}),
       account_id: accountId,
       posted_at: inc.date,
       code: mapChannelToCode(inc.channel),
@@ -252,7 +241,6 @@ export async function syncSnapshotToDatabase(
   // 8. Sync Consolidated Yappy Deposits from Statements into recon_transactions
   // Ensures DEPOSITO YAPPY sums into confirmed loan inflows with a canonical, deterministic row_hash.
   const yappyTxnInserts = snapshot.yappyBatches.map((yb) => ({
-    ...(fallbackUploadId ? { upload_id: fallbackUploadId } : {}),
     account_id: accountId,
     posted_at: yb.creditDate,
     code: "DEPOSITO_YAPPY",
@@ -305,7 +293,6 @@ export async function syncSnapshotToDatabase(
         : `LOTE ACH ${b.batchDateStr} (${count} exitosas)`;
 
       return {
-        ...(fallbackUploadId ? { upload_id: fallbackUploadId } : {}),
         account_id: accountId,
         posted_at: postedAt,
         code: "COBRO_ACH",
